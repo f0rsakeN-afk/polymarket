@@ -17,6 +17,9 @@
     "utils": "@workspace/ui/lib/utils",
     "ui": "@workspace/ui/components"
   },
+  "registries": {
+    "@bklit": "https://ui.bklit.com/r/{name}.json"
+  },
   "rtl": false,
   "menuColor": "default-translucent",
   "menuAccent": "subtle"
