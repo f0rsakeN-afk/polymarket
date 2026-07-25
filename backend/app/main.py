@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -47,8 +48,12 @@ logger = logging.getLogger("polymarket")
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables ready")
+        existing_tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        if not existing_tables:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+            logger.info("Database tables created")
+        else:
+            logger.info("Database tables already exist; skipping automatic schema creation")
 
     # Start Redis pub/sub listener
     try:
