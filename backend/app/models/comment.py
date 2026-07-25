@@ -16,5 +16,17 @@ class Comment(Base, UUIDMixin, TimestampMixin):
 
     market = relationship("Market", back_populates="comments")
     user = relationship("User", back_populates="comments")
-    parent = relationship("Comment", back_populates="replies", remote_side=[id])
-    replies = relationship("Comment", back_populates="parent", cascade="all, delete-orphan")
+
+
+Comment.parent = relationship(
+    Comment,
+    back_populates="replies",
+    remote_side=Comment.__table__.c.id,
+    foreign_keys=Comment.parent_id,
+)
+Comment.replies = relationship(
+    Comment,
+    back_populates="parent",
+    foreign_keys=Comment.parent_id,
+    cascade="all, delete-orphan",
+)
