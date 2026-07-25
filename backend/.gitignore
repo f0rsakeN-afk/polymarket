@@ -17,6 +17,8 @@ dist/
 venv/
 env/
 ENV/
+.claude
+
 
 # Environment variables
 .env
