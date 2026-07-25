@@ -1,15 +1,31 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Polymarket-style prediction market"
 readme = "README.md"
 requires-python = ">=3.13.0"
+
 dependencies = [
+    # Web
     "fastapi>=0.139.2",
-    "pydantic-settings>=2.14.2",
+    "pydantic[email]>=2.10.0",
+    "pydantic-settings>=2.7.0",
     "python-dotenv>=1.2.2",
     "uvicorn[standard]>=0.51.0",
+    # Database
     "asyncpg>=0.30.0",
     "sqlalchemy[asyncio]>=2.0.0",
+    "alembic>=1.14.0",
+    # Redis
     "redis>=5.0.0",
+    # Celery
+    "celery>=5.4.0",
+    # Auth
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    # Utilities
+    "python-multipart>=0.0.9",
+    "stripe>=10.0.0",
+    "httpx>=0.28.0",
+    "bcrypt>=5.0.0",
 ]
