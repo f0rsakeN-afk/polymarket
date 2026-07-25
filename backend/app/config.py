@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +45,15 @@ class Settings(BaseSettings):
 
     # Referral
     referral_reward_amount: float = 1.0
+
+    @field_validator("database_url", "database_replica_url", mode="before")
+    @classmethod
+    def normalize_async_database_url(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        if isinstance(value, str) and value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return value
 
 
 settings = Settings()
