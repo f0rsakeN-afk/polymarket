@@ -12,49 +12,51 @@ jobs:
       - name: Send Discord Notification
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          DISCORD_USERNAME: Code push
         run: |
           AUTHOR_NAME="${GITHUB_ACTOR}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
 
-          # Get commit message
           COMMIT_MSG=$(git log -1 --pretty=%s "${GITHUB_SHA}" 2>/dev/null || echo "N/A")
 
-          # Get files changed - handle new branches
           if [ -n "${GITHUB_EVENT_BEFORE}" ]; then
             FILES_CHANGED=$(git diff --name-only "${GITHUB_EVENT_BEFORE}" "${GITHUB_SHA}" 2>/dev/null | sed 's/^/  - /' || echo "N/A")
           else
             FILES_CHANGED=$(git show --name-only --pretty=format:"" "${GITHUB_SHA}" 2>/dev/null | sed 's/^/  - /' || echo "N/A")
           fi
 
-          # Truncate if too long for Discord
           if [ ${#FILES_CHANGED} -gt 500 ]; then
             FILES_CHANGED=$(echo "${FILES_CHANGED}" | head -c 500)...
           fi
 
-          # Create embed payload
-          PAYLOAD="{
-            \"embeds\": [{
-              \"title\": \"Code Pushed to ${BRANCH_NAME}\",
-              \"description\": \"**${COMMIT_MSG}**\",
-              \"color\": 16747520,
-              \"fields\": [
-                {\"name\": \"Author\", \"value\": \"${AUTHOR_NAME}\", \"inline\": true},
-                {\"name\": \"Branch\", \"value\": \"${BRANCH_NAME}\", \"inline\": true},
-                {\"name\": \"Files Changed\", \"value\": \"\\\`\\\`\\\`
-${FILES_CHANGED}
-\\\`\\\`\\\`\"}
-              ],
-              \"footer\": {\"text\": \"sha: ${GITHUB_SHA:0:7}\"},
-              \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
-            }]
-          }"
+          cat > payload.json << 'ENDJSON'
+{
+  "embeds": [{
+    "title": "Code Pushed to %%BRANCH%%",
+    "description": "**%%MSG%%**",
+    "color": 16747520,
+    "fields": [
+      {"name": "Author", "value": "%%AUTHOR%%", "inline": true},
+      {"name": "Branch", "value": "%%BRANCH%%", "inline": true},
+      {"name": "Files Changed", "value": "```diff\n%%FILES%%\n```"}
+    ],
+    "footer": {"text": "sha: %%SHA%%"},
+    "timestamp": "%%TIME%%"
+  }]
+}
+ENDJSON
+
+          sed -i "s/%%BRANCH%%/${BRANCH_NAME}/g" payload.json
+          sed -i "s/%%MSG%%/${COMMIT_MSG}/g" payload.json
+          sed -i "s/%%AUTHOR%%/${AUTHOR_NAME}/g" payload.json
+          sed -i "s/%%FILES%%/${FILES_CHANGED}/g" payload.json
+          sed -i "s/%%SHA%%/${GITHUB_SHA:0:7}/g" payload.json
+          sed -i "s|%%TIME%%|$(date -u +%Y-%m-%dT%H:%M:%SZ)|g" payload.json
 
           if [ -z "${DISCORD_WEBHOOK}" ]; then
-            echo "DISCORD_WEBHOOK not set, skipping notification"
+            echo "DISCORD_WEBHOOK not set"
             exit 0
           fi
 
           curl -X POST "${DISCORD_WEBHOOK}" \
             -H "Content-Type: application/json" \
-            -d "${PAYLOAD}"
+            -d @payload.json
