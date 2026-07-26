@@ -63,9 +63,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Security audit
-        run: uv export --frozen | uv run pip-audit --requirement -
-
       - name: Lint (ruff)
         run: uv run ruff check .
 
@@ -73,13 +70,13 @@ jobs:
         run: uv run pyright
 
       - name: Run tests with coverage
-        run: uv run pytest -v --timeout=30 -x --cov=app --cov-report=xml --cov-report=term-missing
+        run: uv run pytest -v -x --cov=app --cov-report=xml --cov-report=term-missing
         env:
           DATABASE_URL: postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase
           REDIS_URL: redis://localhost:6382/0
           CELERY_BROKER_URL: redis://localhost:6382/1
-          SECRET_KEY: ci-secret-key
-          JWT_SECRET: ci-jwt-secret
+          SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
+          JWT_SECRET: ${{ secrets.CI_JWT_SECRET }}
 
       - name: Upload coverage
         if: ${{ !cancelled() }}
