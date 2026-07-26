@@ -10,6 +10,7 @@
     "typecheck": "turbo typecheck"
   },
   "devDependencies": {
+    "@types/d3-array": "^3.2.2",
     "@workspace/eslint-config": "workspace:*",
     "@workspace/typescript-config": "workspace:*",
     "prettier": "^3.8.3",
@@ -24,5 +25,13 @@
   "workspaces": [
     "apps/*",
     "packages/*"
-  ]
+  ],
+  "dependencies": {
+    "@hookform/resolvers": "^5.4.3",
+    "@tanstack/react-query": "^5.101.4",
+    "react-hook-form": "^7.83.0",
+    "react-hot-toast": "^2.6.0",
+    "sileo": "^0.1.5",
+    "valibot": "^1.4.2"
+  }
 }
