@@ -1,16 +1,30 @@
-import logging
 import asyncio
-from datetime import datetime, timezone
+import logging
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.amm.engine import BinaryAMM
 from app.config import settings
-from app.models import Order, Market, Wallet, Transaction, Position, LiquidityPool, LPShare, Outcome, Trade, User, Alert, PriceHistory
-from app.workers.celery_app import celery_app
-from app.websocket.manager import redis_pubsub
+from app.models import (
+    Alert,
+    LiquidityPool,
+    LPShare,
+    Market,
+    Order,
+    Outcome,
+    Position,
+    PriceHistory,
+    Trade,
+    Transaction,
+    User,
+    Wallet,
+)
 from app.services.matching_engine import MatchingEngine
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
@@ -30,7 +44,7 @@ def expire_stale_orders(self):
 
     async def _run():
         async with async_session() as db:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             result = await db.execute(
                 select(Order).where(
                     Order.order_type.in_(["limit", "fill_or_kill"]),
@@ -41,12 +55,12 @@ def expire_stale_orders(self):
             orders = result.scalars().all()
 
             if not orders:
-                return f"No orders to expire"
+                return "No orders to expire"
 
             expired_ids = []
             for order in orders:
                 order.status = "expired"
-                order.executed_at = datetime.now(timezone.utc)
+                order.executed_at = datetime.now(UTC)
                 if order.side == "buy" and order.amount:
                     wallet_result = await db.execute(
                         select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
@@ -79,7 +93,7 @@ def check_limit_order_execution(self):
 
     async def _run():
         async with async_session() as db:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             result = await db.execute(
                 select(Order).where(
                     Order.order_type.in_(["limit", "fill_or_kill"]),
@@ -134,10 +148,10 @@ def check_limit_order_execution(self):
                 )
 
                 remaining = remaining_after_book
-                amm_shares = Decimal("0")
-                amm_price_val = Decimal("0")
-                amm_fee = Decimal("0")
-                sell_proceeds_amm = Decimal("0")
+                amm_shares = Decimal(0)
+                amm_price_val = Decimal(0)
+                amm_fee = Decimal(0)
+                sell_proceeds_amm = Decimal(0)
 
                 if remaining > 0:
                     amm = BinaryAMM(
@@ -194,7 +208,7 @@ def check_limit_order_execution(self):
                                 ) / total_shares_pos
                             pos.shares_held = total_shares_pos
                         else:
-                            avg_price = remaining / amm_shares if amm_shares > 0 else Decimal("0")
+                            avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
                             pos = Position(
                                 user_id=order.user_id,
                                 market_id=market.id,
@@ -248,7 +262,7 @@ def check_limit_order_execution(self):
 
                     order.shares_bought = amm_shares if order_side == "buy" else None
                     order.shares_sold = amm_shares if order_side == "sell" else None
-                    order.fees_paid = (order.fees_paid or Decimal("0")) + amm_fee
+                    order.fees_paid = (order.fees_paid or Decimal(0)) + amm_fee
 
                     trade = Trade(
                         user_id=order.user_id,
@@ -311,8 +325,8 @@ def sync_amm_prices(self):
     logger.info("Running sync_amm_prices")
 
     async def _run():
-        from app.redis import get_redis
         from app.models import LiquidityPool, Market
+        from app.redis import get_redis
 
         async with async_session() as db:
             result = await db.execute(
@@ -340,7 +354,7 @@ def sync_amm_prices(self):
                 pipe.hset(key, mapping={
                     "yes_price": str(yes_price),
                     "no_price": str(no_price),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 })
                 pipe.expire(key, 300)  # 5 min TTL
 
@@ -376,7 +390,7 @@ def snapshot_price_history(self):
             for o in outcomes:
                 outcomes_by_market.setdefault(o.market_id, []).append(o)
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             snapshots = []
             for market, pool in rows:
                 total = pool.yes_shares + pool.no_shares
@@ -400,7 +414,7 @@ def snapshot_price_history(self):
                         snapshot_at=now,
                     ))
                 else:
-                    uniform_price = Decimal("1") / Decimal(str(len(market_outcomes))) if market_outcomes else Decimal("0.5")
+                    uniform_price = Decimal(1) / Decimal(str(len(market_outcomes))) if market_outcomes else Decimal("0.5")
                     for o in market_outcomes:
                         snapshots.append(PriceHistory(
                             market_id=market.id,
@@ -424,7 +438,7 @@ def check_market_resolution(self):
 
     async def _run():
         async with async_session() as db:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             result = await db.execute(
                 select(Market).where(
                     Market.status == "active",
@@ -521,7 +535,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
 
             # Get or create system treasury user
             treasury_result = await db.execute(
-                select(User).where(User.is_system == True).limit(1)
+                select(User).where(User.is_system).limit(1)
             )
             treasury_user = treasury_result.scalar_one_or_none()
             if not treasury_user:
@@ -536,8 +550,8 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 await db.flush()
                 treasury_wallet = Wallet(
                     user_id=treasury_user.id,
-                    balance=Decimal("0"),
-                    locked_balance=Decimal("0"),
+                    balance=Decimal(0),
+                    locked_balance=Decimal(0),
                     currency="USDC",
                 )
                 db.add(treasury_wallet)
@@ -565,7 +579,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
 
                 is_winner = str(pos.outcome_id) == winning_outcome_id
                 # Use Decimal throughout to avoid float rounding — convert to float only at DB write
-                payout: Decimal = pos.shares_held if is_winner else Decimal("0")
+                payout: Decimal = pos.shares_held if is_winner else Decimal(0)
 
                 if payout > 0:
                     wallet.balance += payout
@@ -606,7 +620,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 if treasury_wallet:
                     treasury_amount = pool.protocol_fees
                     treasury_wallet.balance += treasury_amount
-                    pool.protocol_fees = Decimal("0")
+                    pool.protocol_fees = Decimal(0)
                     treasury_tx = Transaction(
                         user_id=treasury_user.id,
                         wallet_id=treasury_wallet.id,
@@ -668,7 +682,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
             result = await db.execute(
                 select(Alert).where(
                     Alert.market_id == market_id,
-                    Alert.triggered == False,
+                    not Alert.triggered,
                 )
             )
             alerts = result.scalars().all()
@@ -684,7 +698,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                 )
                 if is_triggered:
                     alert.triggered = True
-                    alert.triggered_at = datetime.now(timezone.utc).isoformat()
+                    alert.triggered_at = datetime.now(UTC).isoformat()
                     triggered_count += 1
                     try:
                         await redis_pubsub.publish_market_event(

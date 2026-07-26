@@ -36,3 +36,15 @@ dependencies = [
     "pytest-cov>=6.0.0",
     "pip-audit>=2.7.0",
 ]
+
+[tool.ruff]
+exclude = ["migrations/", ".venv/"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "S", "BLE", "FURB"]
+ignore = ["E501", "S110", "BLE001", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["S311", "S608", "S106"]
+"migrations/*" = ["ALL"]
+"app/config.py" = ["S105", "S106"]
