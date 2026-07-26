@@ -13,6 +13,11 @@ export const PlaceOrderSchema = object({
   amount: pipe(number(), minValue(0.01)),
   price: optional(pipe(number(), minValue(0.001), maxValue(0.999))),
   post_only: optional(boolean(), false),
+  expires_at: optional(string()),
+  client_order_id: optional(string()),
+  max_slippage: optional(pipe(number(), minValue(0), maxValue(1))),
+  min_shares_out: optional(pipe(number(), minValue(0))),
+  quote_id: optional(string()),
 })
 
 export const DepositSchema = object({
@@ -31,4 +36,9 @@ export type PlaceOrderInput = {
   amount: number
   price?: number
   post_only: boolean
+  expires_at?: string
+  client_order_id?: string
+  max_slippage?: number
+  min_shares_out?: number
+  quote_id?: string
 }

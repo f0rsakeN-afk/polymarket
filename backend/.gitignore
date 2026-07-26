@@ -28,8 +28,7 @@ ENV/
 # Python version
 .python-version
 
-# uv
-uv.lock
+# uv note: lockfile is intentionally committed for reproducible CI
 
 # IDEs
 .vscode/

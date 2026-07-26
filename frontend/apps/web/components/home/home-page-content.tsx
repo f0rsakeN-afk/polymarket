@@ -1,20 +1,33 @@
 "use client"
 
-import { useCallback } from "react"
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
 import CategoryTabs from "@/components/home/category-tabs"
 import { MarketList } from "@/components/markets/market-list"
-import { TradeFeed } from "@/components/trades/trade-feed"
 import { useMarkets, useGlobalTrades } from "@/hooks/use-markets"
-import { Spinner } from "@workspace/ui/components/spinner"
+import { SkeletonTrendingCarousel, SkeletonMarketGrid, SkeletonTradeFeed } from "@/components/shared/skeletons"
+import { SearchIcon } from "lucide-react"
+
+const LazyTradeFeed = lazy(() =>
+  import("@/components/trades/trade-feed").then((m) => ({ default: m.TradeFeed }))
+)
 
 export default function HomePageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const tag = searchParams.get("tag") ?? "All"
+  const [search, setSearch] = useState("")
+  const [query, setQuery] = useState("")
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets()
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => { setQuery(search) }, 300)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [search])
+
+  const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined })
   const { data: tradesData } = useGlobalTrades()
 
   const handleLoadMore = useCallback(() => {
@@ -37,15 +50,23 @@ export default function HomePageContent() {
           <h2 className="text-lg font-semibold">Trending Markets</h2>
         </div>
         {marketsLoading && trending.length === 0 ? (
-          <div className="flex h-40 items-center justify-center">
-            <Spinner className="size-5" />
-          </div>
+          <SkeletonTrendingCarousel />
         ) : (
           <TrendingCarousel markets={trending} />
         )}
       </section>
 
       <section>
+        <div className="relative mb-4">
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search markets..."
+            className="w-full h-9 pl-9 pr-4 rounded-lg border border-border bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
         <CategoryTabs tag={tag} onTagChange={handleTagChange} />
         <div className="mt-6">
           <MarketList
@@ -59,7 +80,9 @@ export default function HomePageContent() {
 
       {tag.toLowerCase() === "all" && (
         <section className="lg:hidden">
-          <TradeFeed title="Global Activity" trades={tradesData?.trades.slice(0, 15) ?? []} />
+          <Suspense fallback={<SkeletonTradeFeed />}>
+            <LazyTradeFeed title="Global Activity" trades={tradesData?.trades.slice(0, 15) ?? []} />
+          </Suspense>
         </section>
       )}
     </div>

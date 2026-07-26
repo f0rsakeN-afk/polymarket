@@ -4,10 +4,15 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { listOrders, placeOrder, cancelOrder } from "@/lib/api/orders"
 import type { Order } from "@/lib/types/api"
 
-export function useOrders() {
+export function useOrders(filters?: {
+  status?: string
+  side?: string
+  order_type?: string
+  market_id?: string
+}) {
   return useInfiniteQuery({
-    queryKey: ["orders"] as const,
-    queryFn: ({ pageParam }) => listOrders({ page: pageParam, page_size: 20 }),
+    queryKey: ["orders", filters] as const,
+    queryFn: ({ pageParam }) => listOrders({ page: pageParam, page_size: 20, ...filters }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
       lastPage.has_more ? lastPageParam + 1 : undefined,
@@ -22,7 +27,11 @@ export function usePlaceOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: placeOrder,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] })
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
+    },
   })
 }
 
@@ -30,6 +39,10 @@ export function useCancelOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: cancelOrder,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] })
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
+    },
   })
 }

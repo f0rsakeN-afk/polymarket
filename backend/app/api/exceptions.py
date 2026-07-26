@@ -53,3 +53,17 @@ class MarketClosedError(AppException):
 class IdempotencyError(AppException):
     def __init__(self, message: str = "Request already processed", details: dict | None = None):
         super().__init__(409, message, "IDEMPOTENCY_CONFLICT", details)
+
+
+class SlippageExceededError(AppException):
+    def __init__(self, expected_price: float, actual_price: float, max_slippage: float, details: dict | None = None):
+        message = (
+            f"Price moved beyond slippage tolerance. "
+            f"Expected: ${expected_price:.4f}, Actual: ${actual_price:.4f}, "
+            f"Max slippage: {max_slippage * 100:.2f}%"
+        )
+        super().__init__(400, message, "SLIPPAGE_EXCEEDED", details or {
+            "expected_price": expected_price,
+            "actual_price": actual_price,
+            "max_slippage": max_slippage,
+        })

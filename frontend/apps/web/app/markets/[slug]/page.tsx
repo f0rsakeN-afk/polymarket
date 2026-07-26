@@ -14,10 +14,22 @@ export default function MarketPage() {
 
   const handleTrade = useCallback(async (order: PlaceOrderInput) => {
     try {
-      await placeOrder(order)
-      sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}` })
+      const result = await placeOrder(order) as { success?: boolean; data?: { status?: string; shares?: number; price?: number; duplicate?: boolean } }
+      const status = result?.data?.status
+      if (status === "duplicate" || result?.data?.duplicate) {
+        sileo.info({ title: "Order already placed", description: `View in orders (${result?.data?.shares?.toFixed(2) ?? 0} shares at $${result?.data?.price?.toFixed(4) ?? 0})` })
+      } else {
+        sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`, description: `${result?.data?.shares?.toFixed(2) ?? 0} shares at $${result?.data?.price?.toFixed(4) ?? 0}` })
+      }
     } catch (e) {
-      sileo.error({ title: "Trade failed", description: e instanceof Error ? e.message : "Unknown error" })
+      const msg = e instanceof Error ? e.message : "Unknown error"
+      if (msg.includes("slippage")) {
+        sileo.error({ title: "Price moved", description: "The price changed more than expected. Please review and try again." })
+      } else if (msg.includes("duplicate") || msg.includes("already placed")) {
+        sileo.info({ title: "Order already placed" })
+      } else {
+        sileo.error({ title: "Trade failed", description: msg })
+      }
     }
   }, [placeOrder])
 

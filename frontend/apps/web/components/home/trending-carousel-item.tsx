@@ -52,6 +52,8 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
   return (
     <Link
       href={`/markets/${market.slug}`}
+      role="listitem"
+      aria-label={`${market.question} — YES ${prob}%, NO ${100 - prob}%`}
       className="flex-shrink-0 w-[320px] rounded-xl border border-border bg-card p-4 hover:border-primary/30 transition-colors"
     >
       <div className="flex items-center gap-2 mb-2">
@@ -61,10 +63,10 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
             {market.category}
           </span>
         )}
-        <span className={cn("ml-auto size-1.5 rounded-full shrink-0", statusColor)} />
+        <span className={cn("ml-auto size-1.5 rounded-full shrink-0", statusColor)} role="status" aria-label={`WebSocket ${status}`} />
       </div>
       <h3 className="text-xs font-medium leading-snug line-clamp-2 mb-3">{market.question}</h3>
-      <div className="h-28 mb-3 overflow-hidden rounded-md">
+      <div className="h-28 mb-3 overflow-hidden rounded-md" aria-hidden="true">
         <LiveLineChart
           data={priceHistory}
           value={priceHistory.at(-1)?.value ?? market.yes_price}

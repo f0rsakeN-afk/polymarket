@@ -75,6 +75,7 @@ const NavLink = memo(function NavLink({
   return (
     <Link
       href={href}
+      aria-current={isActive ? "page" : undefined}
       className={cn(
         "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
         isActive

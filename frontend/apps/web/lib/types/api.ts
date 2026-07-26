@@ -12,6 +12,7 @@ export interface MarketResponse {
   closes_at: string
   winning_outcome_id?: string
   winning_outcome_name?: string
+  outcomes?: Outcome[]
 }
 
 export interface MarketListResponse {
@@ -35,6 +36,12 @@ export interface FAQ {
   display_order: number
 }
 
+export interface PriceHistoryPoint {
+  timestamp: string
+  outcomes: { id: string; name: string; price: number }[]
+  total_volume: number
+}
+
 export interface MarketDetailResponse extends Omit<MarketResponse, "id"> {
   id: string
   outcomes: Outcome[]
@@ -47,12 +54,13 @@ export interface Trade {
   id: string
   market_slug: string
   market_question: string
-  outcome: "yes" | "no"
+  outcome: string
   side: "buy" | "sell"
   price: number
   amount: number
-  timestamp: string
+  executed_at: string
   username: string
+  total?: number
 }
 
 export interface TradesResponse {
@@ -66,7 +74,7 @@ export interface TradesResponse {
 
 export interface MarketTrade {
   id: string
-  outcome: "yes" | "no"
+  outcome: string
   side: "buy" | "sell"
   price: number
   amount: number
@@ -110,6 +118,19 @@ export interface CommentActivity {
   created_at: string
 }
 
+export interface QuoteResponse {
+  quote_id: string
+  market_id: string
+  outcome: string
+  side: string
+  amount: number
+  price: number
+  slippage: number
+  yes_price: number
+  no_price: number
+  expires_at: number
+}
+
 export interface Order {
   id: string
   market_id: string
@@ -120,7 +141,10 @@ export interface Order {
   order_type: "market" | "limit" | "fill_or_kill"
   price: number
   amount: number
-  status: "pending" | "filled" | "cancelled"
+  remaining_amount?: number
+  status: "pending" | "partial" | "filled" | "cancelled" | "expired"
+  expires_at?: string
+  fees_paid?: number
   created_at: string
 }
 
@@ -181,6 +205,9 @@ export interface Comment {
   username: string
   content: string
   depth: number
+  parent_id: string | null
+  reply_count: number
+  is_deleted: boolean
   created_at: string
 }
 

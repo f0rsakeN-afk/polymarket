@@ -1,7 +1,7 @@
 "use client"
 
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, getMarketFAQs, getRelatedMarkets } from "@/lib/api/markets"
+import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, updateComment, deleteComment, getMarketFAQs, getRelatedMarkets, getPriceHistory, resolveMarket } from "@/lib/api/markets"
 import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade, Comment } from "@/lib/types/api"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
@@ -92,6 +92,24 @@ export function usePostComment(slug: string) {
   })
 }
 
+export function useEditComment(slug: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId, content }: { commentId: string; content: string }) =>
+      updateComment(slug, commentId, content),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", slug] }),
+  })
+}
+
+export function useDeleteComment(slug: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId }: { commentId: string }) =>
+      deleteComment(slug, commentId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", slug] }),
+  })
+}
+
 export function useFAQs(slug: string) {
   return useQuery({
     queryKey: ["faqs", slug] as const,
@@ -105,5 +123,28 @@ export function useRelatedMarkets(slug: string) {
     queryKey: ["related-markets", slug] as const,
     queryFn: () => getRelatedMarkets(slug).then((r) => r.data),
     enabled: !!slug,
+  })
+}
+
+export function useResolveMarket() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ slug, winning_outcome_id }: { slug: string; winning_outcome_id: string }) =>
+      resolveMarket(slug, winning_outcome_id),
+    onSuccess: (_, { slug }) => {
+      qc.invalidateQueries({ queryKey: ["market", slug] })
+      qc.invalidateQueries({ queryKey: ["market-activity", slug] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
+      qc.invalidateQueries({ queryKey: ["markets"] })
+    },
+  })
+}
+
+export function usePriceHistory(slug: string, interval = "5m") {
+  return useQuery({
+    queryKey: ["price-history", slug, interval] as const,
+    queryFn: () => getPriceHistory(slug, { interval }).then((r) => r.data),
+    enabled: !!slug,
+    refetchInterval: 300_000,
   })
 }

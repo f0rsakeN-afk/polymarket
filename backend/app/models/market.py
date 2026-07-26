@@ -29,7 +29,13 @@ class Market(Base, UUIDMixin, TimestampMixin):
     # status: active, closed, resolved, cancelled
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     resolution_criteria = Column(String(2000))
+    resolution_source = Column(String(1000))  # URL or data feed for resolution
     winning_outcome_id = Column(UUID(as_uuid=True), nullable=True)
+
+    # Dispute window
+    proposed_outcome_id = Column(UUID(as_uuid=True), nullable=True)
+    dispute_deadline = Column(DateTime(timezone=True), nullable=True)
+    resolution_proposed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timing
     opens_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -48,6 +54,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
     comments = relationship("Comment", back_populates="market", cascade="all, delete-orphan")
     trades = relationship("Trade", back_populates="market", cascade="all, delete-orphan")
     faqs = relationship("MarketFAQ", back_populates="market", cascade="all, delete-orphan")
+    disputes = relationship("Dispute", back_populates="market", cascade="all, delete-orphan")
 
 
 class Outcome(Base, UUIDMixin, TimestampMixin):

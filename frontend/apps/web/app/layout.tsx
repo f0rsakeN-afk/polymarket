@@ -31,9 +31,12 @@ export default function RootLayout({
         <ThemeProvider>
           <Providers>
             <Toaster />
+            <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-ring">
+              Skip to main content
+            </a>
             <div className="flex flex-col min-h-screen">
               <Header />
-              <main className="flex-1">{children}</main>
+              <main id="main-content" className="flex-1 outline-none" tabIndex={-1}>{children}</main>
               <Footer />
             </div>
           </Providers>

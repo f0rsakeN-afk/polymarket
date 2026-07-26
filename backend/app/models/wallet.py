@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Numeric, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, String, Numeric, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -21,13 +21,18 @@ class Wallet(Base, UUIDMixin, TimestampMixin):
 
 class Transaction(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "transactions"
+    __table_args__ = (
+        Index("ix_transactions_user_id", "user_id"),
+        Index("ix_transactions_user_created", "user_id", "created_at"),
+        Index("ix_transactions_wallet_id", "wallet_id"),
+    )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     wallet_id = Column(UUID(as_uuid=True), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False)
 
     type = Column(
         String(30), nullable=False
-    )  # deposit, withdrawal, trade_buy, trade_sell, fee, liquidity_add, liquidity_remove, settlement_win, settlement_loss, refund
+    )  # deposit, withdrawal, trade_buy, trade_sell, fee, liquidity_add, liquidity_remove, settlement_win, settlement_loss, refund, split, merge
     amount = Column(Numeric(20, 8), nullable=False)  # positive = credit, negative = debit
     balance_after = Column(Numeric(20, 8), nullable=False)
 

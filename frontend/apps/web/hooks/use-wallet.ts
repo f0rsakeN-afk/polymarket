@@ -30,7 +30,10 @@ export function useDeposit() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deposit,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["wallet"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["transactions"] })
+    },
   })
 }
 
@@ -38,6 +41,9 @@ export function useWithdraw() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: withdraw,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["wallet"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["transactions"] })
+    },
   })
 }

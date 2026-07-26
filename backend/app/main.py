@@ -31,9 +31,13 @@ from app.api.comments import router as comments_router
 from app.api.trades import router as trades_router
 from app.api.referrals import router as referrals_router
 from app.api.market_activity import router as market_activity_router
+from app.api.split_merge import router as split_merge_router
+from app.api.disputes import router as disputes_router
+from app.api.notifications import router as notifications_router
+from app.api.treasury import router as treasury_router
 from app.websocket.routes import router as ws_router
 from app.websocket.manager import redis_pubsub
-from app.api.middleware import RequestLoggingMiddleware
+from app.api.middleware import RequestLoggingMiddleware, RateLimitMiddleware
 from app.api.responses import error_response
 
 # Structured logging
@@ -91,6 +95,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, enabled=settings.rate_limit_enabled)
 
 # Exception handlers
 app.add_exception_handler(HTTPException, http_exception_handler)
@@ -112,6 +117,10 @@ app.include_router(comments_router, prefix="/api/v1")
 app.include_router(trades_router, prefix="/api/v1")
 app.include_router(referrals_router, prefix="/api/v1")
 app.include_router(market_activity_router, prefix="/api/v1")
+app.include_router(split_merge_router, prefix="/api/v1")
+app.include_router(disputes_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(treasury_router, prefix="/api/v1")
 app.include_router(ws_router)
 
 
