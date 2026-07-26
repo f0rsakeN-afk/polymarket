@@ -16,10 +16,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
-
 defaults:
   run:
     working-directory: frontend
@@ -49,10 +45,13 @@ jobs:
         continue-on-error: true
 
       - name: Type check
-        run: bun x turbo typecheck --filter=web
+        working-directory: frontend/apps/web
+        run: bun run typecheck
 
       - name: Lint
-        run: bun x turbo lint --filter=web
+        working-directory: frontend/apps/web
+        run: bun run lint
 
       - name: Build
-        run: bun x turbo build --filter=web
+        working-directory: frontend/apps/web
+        run: bun run build
