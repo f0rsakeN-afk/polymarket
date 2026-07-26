@@ -4,9 +4,9 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.wallet import Wallet, Transaction
+from app.api.exceptions import InsufficientBalanceError, NotFoundError, ValidationError
 from app.models.user import User
-from app.api.exceptions import NotFoundError, ValidationError, InsufficientBalanceError
+from app.models.wallet import Transaction, Wallet
 
 logger = logging.getLogger("polymarket")
 

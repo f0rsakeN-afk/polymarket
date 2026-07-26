@@ -1,10 +1,11 @@
-import time
 import logging
-import json
-from typing import Callable
-from fastapi import Request, Response, HTTPException
+import time
+from collections.abc import Callable
+
+from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
+
 from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
@@ -79,7 +80,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             bucket = "auth"
         elif path.startswith("/api/v1/orders") and method != "GET":
             bucket = "orders"
-        elif path.startswith(("/api/v1/markets/")) and method in ("POST", "PATCH", "DELETE", "PUT"):
+        elif path.startswith("/api/v1/markets/") and method in ("POST", "PATCH", "DELETE", "PUT"):
             bucket = "markets_write"
 
         limit, window = RATE_LIMIT_DEFAULTS.get(bucket, RATE_LIMIT_DEFAULTS["global"])

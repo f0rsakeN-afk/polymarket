@@ -1,7 +1,8 @@
-from app.models.base import Base, UUIDMixin, TimestampMixin
-from sqlalchemy import Column, String, Numeric, ForeignKey, CheckConstraint
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
+
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Treasury(Base, UUIDMixin, TimestampMixin):

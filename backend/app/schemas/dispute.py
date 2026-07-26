@@ -1,4 +1,5 @@
 from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -12,6 +13,11 @@ class ProposeResolutionRequest(BaseModel):
     market_id: str
     outcome_id: str
     resolution_source: str
+
+
+class AdjudicateDisputeRequest(BaseModel):
+    ruling: str
+    admin_note: str | None = None
 
 
 class DisputeResponse(BaseModel):

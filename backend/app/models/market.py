@@ -1,10 +1,18 @@
-import uuid
-from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Integer, Numeric, ForeignKey, CheckConstraint
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from datetime import UTC, datetime
+
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Market(Base, UUIDMixin, TimestampMixin):
@@ -38,7 +46,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
     resolution_proposed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timing
-    opens_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    opens_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     closes_at = Column(DateTime(timezone=True), nullable=False)
 
     # Stats
@@ -55,6 +63,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
     trades = relationship("Trade", back_populates="market", cascade="all, delete-orphan")
     faqs = relationship("MarketFAQ", back_populates="market", cascade="all, delete-orphan")
     disputes = relationship("Dispute", back_populates="market", cascade="all, delete-orphan")
+    flags = relationship("MarketFlag", back_populates="market", cascade="all, delete-orphan")
 
 
 class Outcome(Base, UUIDMixin, TimestampMixin):

@@ -1,14 +1,14 @@
-from typing import AsyncGenerator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import bcrypt
-from jose import jwt, JWTError
-from fastapi import Request, HTTPException, Depends, Response
+from fastapi import Depends, HTTPException, Request, Response
+from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.api.exceptions import ForbiddenError, UnauthorizedError
 from app.config import settings
+from app.database import get_db
 from app.models.user import User
-from app.api.exceptions import UnauthorizedError, ForbiddenError
 
 ALGORITHM = "HS256"
 
@@ -22,7 +22,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: str, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(seconds=settings.jwt_access_expire))
+    expire = datetime.now(UTC) + (expires_delta or timedelta(seconds=settings.jwt_access_expire))
     to_encode = {"sub": user_id, "exp": expire, "type": "access"}
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=ALGORITHM)
 

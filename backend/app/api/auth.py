@@ -1,18 +1,26 @@
-import uuid
 import logging
-from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Response, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import uuid
+from datetime import UTC, datetime, timedelta
 
+from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.exceptions import ConflictError, UnauthorizedError, ValidationError
+from app.api.responses import success_response
+from app.config import settings
 from app.database import get_db
-from app.deps import hash_password, verify_password, create_access_token, get_current_user, set_auth_cookies, clear_auth_cookies
+from app.deps import (
+    clear_auth_cookies,
+    create_access_token,
+    get_current_user,
+    hash_password,
+    set_auth_cookies,
+    verify_password,
+)
 from app.models.user import User
 from app.models.wallet import Wallet
-from app.schemas.auth import RegisterRequest, LoginRequest, UserResponse
-from app.api.responses import success_response
-from app.api.exceptions import ConflictError, UnauthorizedError, ValidationError
-from app.config import settings
+from app.schemas.auth import LoginRequest, RegisterRequest
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -92,7 +100,7 @@ async def login(data: LoginRequest, response: Response, db: AsyncSession = Depen
         id=refresh_token,
         user_id=user.id,
         token_hash=refresh_token,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.jwt_refresh_expire),
+        expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
     )
     db.add(token_record)
     await db.commit()
@@ -114,7 +122,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
         if token_record:
             token_record.revoked = True
             await db.commit()
-            logger.info(f"User logged out, token revoked")
+            logger.info("User logged out, token revoked")
 
     clear_auth_cookies(response)
     return success_response({"status": "logged_out"})
@@ -130,8 +138,8 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     result = await db.execute(
         select(RefreshToken).where(
             RefreshToken.token_hash == refresh_token,
-            RefreshToken.revoked == False,
-            RefreshToken.expires_at > datetime.now(timezone.utc),
+            not RefreshToken.revoked,
+            RefreshToken.expires_at > datetime.now(UTC),
         )
     )
     token_record = result.scalar_one_or_none()
@@ -149,7 +157,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         id=new_refresh,
         user_id=token_record.user_id,
         token_hash=new_refresh,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.jwt_refresh_expire),
+        expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
     )
     db.add(new_record)
 

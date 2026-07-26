@@ -1,15 +1,15 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError
+from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.treasury import Treasury, TreasuryLog
-from app.schemas.treasury import TreasuryResponse, TreasuryLogResponse
-from app.api.responses import success_response, PaginatedResponse
-from app.api.exceptions import ForbiddenError
+from app.schemas.treasury import TreasuryLogResponse, TreasuryResponse
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/treasury", tags=["treasury"])
@@ -65,14 +65,14 @@ async def get_treasury_logs(
     return PaginatedResponse(
         data=[
             TreasuryLogResponse(
-                id=str(l.id),
-                event=l.event,
-                amount=float(l.amount),
-                reference_type=l.reference_type,
-                reference_id=l.reference_id,
-                created_at=l.created_at,
+                id=str(log_entry.id),
+                event=log_entry.event,
+                amount=float(log_entry.amount),
+                reference_type=log_entry.reference_type,
+                reference_id=log_entry.reference_id,
+                created_at=log_entry.created_at,
             )
-            for l in logs
+            for log_entry in logs
         ],
         total=total,
         page=page,

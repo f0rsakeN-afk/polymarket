@@ -1,9 +1,8 @@
-import uuid
-from sqlalchemy import Column, String, Numeric, ForeignKey, UniqueConstraint, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Wallet(Base, UUIDMixin, TimestampMixin):

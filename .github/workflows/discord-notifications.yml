@@ -1,0 +1,57 @@
+name: Discord Notifications
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  discord:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+      DISCORD_USERNAME: Code push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send Discord Notification
+        run: |
+          AUTHOR_NAME="${GITHUB_ACTOR}"
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+
+          # Get commit diff info
+          FILES_CHANGED=$(git diff --name-only "${GITHUB_EVENT_BEFORE}" "${GITHUB_SHA}" 2>/dev/null | sed 's/^/  - /' || echo "N/A")
+
+          # Format the commit message
+          COMMIT_MSG=$(git log -1 --pretty=%s "${GITHUB_SHA}" 2>/dev/null || echo "N/A")
+
+          # Create embed payload
+          PAYLOAD=$(cat <<EOF
+{
+  "embeds": [
+    {
+      "title": "Code Pushed to ${BRANCH_NAME}",
+      "description": "**${COMMIT_MSG}**",
+      "color": 16747520,
+      "fields": [
+        {"name": "Author", "value": "${AUTHOR_NAME}", "inline": true},
+        {"name": "Branch", "value": "${BRANCH_NAME}", "inline": true},
+        {"name": "Files Changed", "value": "\`\`\`diff\n${FILES_CHANGED}\n\`\`\`"}
+      ],
+      "footer": {"text": "sha: ${GITHUB_SHA:0:7}"},
+      "timestamp": "$(date -Iseconds)"
+    }
+  ]
+}
+EOF
+)
+
+          if [ -z "${DISCORD_WEBHOOK}" ]; then
+            echo "DISCORD_WEBHOOK not set, skipping notification"
+            exit 0
+          fi
+
+          curl -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"

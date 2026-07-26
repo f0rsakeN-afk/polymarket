@@ -1,34 +1,30 @@
-import asyncio
 import logging
-import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.market import Market, Outcome
-from app.models.liquidity import LiquidityPool
 from app.models.faq import MarketFAQ
+from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
-from app.schemas.market import (
-    MarketResponse,
-    MarketDetailResponse,
-    MarketListResponse,
-    CreateMarketRequest,
-    OutcomeResponse,
-)
+from app.models.wallet import Transaction, Wallet
 from app.schemas.faq import FAQResponse
-from app.schemas.market import ResolveMarketRequest
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
-from app.amm.engine import BinaryAMM
-from app.workers.tasks import resolve_market
-from app.websocket.manager import redis_pubsub
+from app.schemas.market import (
+    CreateMarketRequest,
+    MarketListResponse,
+    MarketResponse,
+    OutcomeResponse,
+    ResolveMarketRequest,
+)
 from app.services.market_service import MarketService
+from app.workers.tasks import resolve_market
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["markets"])
@@ -195,6 +191,9 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     if data.closes_at <= datetime.now():
         raise ValidationError("closes_at must be in the future")
 
+    if data.initial_probability is not None and data.initial_liquidity <= 0:
+        raise ValidationError("initial_probability requires initial_liquidity > 0")
+
     existing = await db.execute(select(Market).where(Market.slug == data.slug))
     if existing.scalar_one_or_none():
         raise ValidationError(f"Market with slug '{data.slug}' already exists")
@@ -211,9 +210,15 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     db.add(market)
     await db.flush()
 
-    outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
-    outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
-    db.add_all([outcome_yes, outcome_no])
+    if data.outcomes_create:
+        db.add_all([
+            Outcome(market_id=market.id, name=oc.name, outcome_index=oc.outcome_index)
+            for oc in data.outcomes_create
+        ])
+    else:
+        outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
+        outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
+        db.add_all([outcome_yes, outcome_no])
     await db.flush()
 
     pool = LiquidityPool(
@@ -233,11 +238,17 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
-            half = amount_dec / Decimal("2")
-            pool.yes_shares += half
-            pool.no_shares += half
+            if data.initial_probability is not None:
+                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
+                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                pool.yes_shares += yes_shares
+                pool.no_shares += no_shares
+            else:
+                half = amount_dec / Decimal(2)
+                pool.yes_shares += half
+                pool.no_shares += half
             pool.collateral += amount_dec
-            pool.lp_token_supply = amount_dec * Decimal("2")
+            pool.lp_token_supply = amount_dec * Decimal(2)
 
     await db.commit()
     logger.info(f"Market created: {data.slug} by admin={user.id}")
@@ -265,8 +276,8 @@ async def get_price_history(
     to_date: str | None = None,
     db: AsyncSession = Depends(get_db_replica),
 ):
-    from app.models.price_history import PriceHistory
     from app.models.market import Outcome
+    from app.models.price_history import PriceHistory
 
     market = await db.execute(select(Market).where(Market.slug == slug))
     market = market.scalar_one_or_none()
@@ -302,7 +313,7 @@ async def get_price_history(
     samples = []
     for bucket_ts in sorted(grouped):
         bucket_rows = grouped[bucket_ts]
-        ts_dt = datetime.fromtimestamp(bucket_ts, tz=timezone.utc)
+        ts_dt = datetime.fromtimestamp(bucket_ts, tz=UTC)
         outcome_prices = {}
         total_vol = 0
         for r in bucket_rows:
@@ -373,7 +384,7 @@ async def resolve_market_endpoint(
 
     market.status = "resolved"
     market.winning_outcome_id = outcome.id
-    market.resolved_at = datetime.now(timezone.utc)
+    market.resolved_at = datetime.now(UTC)
     await db.commit()
 
     resolve_market.delay(str(market.id), str(outcome.id))

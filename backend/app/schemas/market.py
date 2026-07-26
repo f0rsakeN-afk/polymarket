@@ -1,6 +1,6 @@
 from datetime import datetime
+
 from pydantic import BaseModel, Field
-from decimal import Decimal
 
 
 class OutcomeResponse(BaseModel):
@@ -36,6 +36,11 @@ class MarketDetailResponse(MarketResponse):
     created_at: datetime
 
 
+class MarketOutcomeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    outcome_index: int = Field(..., ge=0)
+
+
 class CreateMarketRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=1000)
     description: str | None = Field(None, max_length=5000)
@@ -43,6 +48,8 @@ class CreateMarketRequest(BaseModel):
     slug: str = Field(..., min_length=3, max_length=255)
     closes_at: datetime
     initial_liquidity: float = Field(default=0, ge=0)
+    initial_probability: float | None = Field(default=None, ge=0.01, le=0.99)
+    outcomes_create: list[MarketOutcomeCreate] | None = None
 
 
 class MarketListResponse(BaseModel):

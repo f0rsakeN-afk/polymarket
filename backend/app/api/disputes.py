@@ -1,21 +1,22 @@
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.market import Market
 from app.models.dispute import Dispute
+from app.models.market import Market
 from app.schemas.dispute import (
+    AdjudicateDisputeRequest,
     CreateDisputeRequest,
     DisputeResponse,
     ProposeResolutionRequest,
 )
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("polymarket")
@@ -38,7 +39,7 @@ async def create_dispute(
     if market.status not in ("resolved", "dispute_window"):
         raise ValidationError("Market is not in a resolvable state")
 
-    if market.dispute_deadline and datetime.now(timezone.utc) > market.dispute_deadline:
+    if market.dispute_deadline and datetime.now(UTC) > market.dispute_deadline:
         raise ValidationError("Dispute window has closed")
 
     dispute = Dispute(
@@ -90,8 +91,8 @@ async def propose_resolution(
 
     market.proposed_outcome_id = req.outcome_id
     market.resolution_source = req.resolution_source
-    market.resolution_proposed_at = datetime.now(timezone.utc)
-    market.dispute_deadline = datetime.now(timezone.utc) + timedelta(hours=DISPUTE_WINDOW_HOURS)
+    market.resolution_proposed_at = datetime.now(UTC)
+    market.dispute_deadline = datetime.now(UTC) + timedelta(hours=DISPUTE_WINDOW_HOURS)
     market.status = "dispute_window"
     await db.commit()
 
@@ -119,3 +120,51 @@ async def get_disputes_for_market(
         )
         for d in disputes
     ])
+
+
+@router.post("/{dispute_id}/adjudicate")
+async def adjudicate_dispute(
+    dispute_id: str,
+    req: AdjudicateDisputeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    if not current_user.is_admin:
+        raise ForbiddenError("Only admins can adjudicate disputes")
+
+    if req.ruling not in ("upheld", "dismissed"):
+        raise ValidationError("ruling must be 'upheld' or 'dismissed'")
+
+    result = await db.execute(select(Dispute).where(Dispute.id == dispute_id))
+    dispute = result.scalar_one_or_none()
+    if not dispute:
+        raise NotFoundError("Dispute not found")
+
+    if dispute.status != "open":
+        raise ValidationError("Dispute is already resolved")
+
+    dispute.status = req.ruling
+    await db.commit()
+
+    if req.ruling == "upheld":
+        market_result = await db.execute(select(Market).where(Market.id == dispute.market_id))
+        market = market_result.scalar_one_or_none()
+        if market and market.proposed_outcome_id:
+            market.status = "resolved"
+            market.winning_outcome_id = market.proposed_outcome_id
+            market.resolved_at = datetime.now(UTC)
+            await db.commit()
+
+            await NotificationService.dispatch(
+                db,
+                dispute.user_id,
+                "alert_triggered",
+                "Dispute upheld",
+                f"Your dispute for market {market.slug} has been upheld. The market is now resolved.",
+            )
+
+    return success_response({
+        "dispute_id": str(dispute.id),
+        "ruling": req.ruling,
+        "market_status": dispute.status,
+    })

@@ -1,17 +1,18 @@
 import logging
 from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.market import Market, Outcome
 from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError
+from app.models.wallet import Transaction, Wallet
 from app.services.market_service import MarketService
 
 logger = logging.getLogger("polymarket")

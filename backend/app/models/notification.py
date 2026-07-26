@@ -1,7 +1,8 @@
-from app.models.base import Base, UUIDMixin, TimestampMixin
-from sqlalchemy import Column, String, DateTime, Boolean, Text, JSON, ForeignKey
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
+
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class NotificationPreference(Base, UUIDMixin, TimestampMixin):

@@ -1,9 +1,8 @@
-import uuid
-from sqlalchemy import Column, Numeric, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import Column, ForeignKey, Index, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Position(Base, UUIDMixin, TimestampMixin):
