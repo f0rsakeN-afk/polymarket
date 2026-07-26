@@ -49,10 +49,10 @@ jobs:
         continue-on-error: true
 
       - name: Type check
-        run: bun run typecheck
+        run: bun x turbo typecheck --filter=web
 
       - name: Lint
-        run: bun run lint
+        run: bun x turbo lint --filter=web
 
       - name: Build
-        run: bun run build
+        run: bun x turbo build --filter=web
