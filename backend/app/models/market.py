@@ -63,6 +63,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
     trades = relationship("Trade", back_populates="market", cascade="all, delete-orphan")
     faqs = relationship("MarketFAQ", back_populates="market", cascade="all, delete-orphan")
     disputes = relationship("Dispute", back_populates="market", cascade="all, delete-orphan")
+    flags = relationship("MarketFlag", back_populates="market", cascade="all, delete-orphan")
 
 
 class Outcome(Base, UUIDMixin, TimestampMixin):

@@ -15,6 +15,11 @@ class ProposeResolutionRequest(BaseModel):
     resolution_source: str
 
 
+class AdjudicateDisputeRequest(BaseModel):
+    ruling: str
+    admin_note: str | None = None
+
+
 class DisputeResponse(BaseModel):
     id: str
     market_id: str

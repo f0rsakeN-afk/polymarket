@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6382/1"
 
     # Rate limiting
-    rate_limit_enabled: bool = True
+    rate_limit_enabled: bool = False
 
     # Resend (email notifications)
     resend_api_key: str = ""

@@ -12,6 +12,7 @@ from app.deps import get_current_user
 from app.models.dispute import Dispute
 from app.models.market import Market
 from app.schemas.dispute import (
+    AdjudicateDisputeRequest,
     CreateDisputeRequest,
     DisputeResponse,
     ProposeResolutionRequest,
@@ -119,3 +120,51 @@ async def get_disputes_for_market(
         )
         for d in disputes
     ])
+
+
+@router.post("/{dispute_id}/adjudicate")
+async def adjudicate_dispute(
+    dispute_id: str,
+    req: AdjudicateDisputeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    if not current_user.is_admin:
+        raise ForbiddenError("Only admins can adjudicate disputes")
+
+    if req.ruling not in ("upheld", "dismissed"):
+        raise ValidationError("ruling must be 'upheld' or 'dismissed'")
+
+    result = await db.execute(select(Dispute).where(Dispute.id == dispute_id))
+    dispute = result.scalar_one_or_none()
+    if not dispute:
+        raise NotFoundError("Dispute not found")
+
+    if dispute.status != "open":
+        raise ValidationError("Dispute is already resolved")
+
+    dispute.status = req.ruling
+    await db.commit()
+
+    if req.ruling == "upheld":
+        market_result = await db.execute(select(Market).where(Market.id == dispute.market_id))
+        market = market_result.scalar_one_or_none()
+        if market and market.proposed_outcome_id:
+            market.status = "resolved"
+            market.winning_outcome_id = market.proposed_outcome_id
+            market.resolved_at = datetime.now(UTC)
+            await db.commit()
+
+            await NotificationService.dispatch(
+                db,
+                dispute.user_id,
+                "alert_triggered",
+                "Dispute upheld",
+                f"Your dispute for market {market.slug} has been upheld. The market is now resolved.",
+            )
+
+    return success_response({
+        "dispute_id": str(dispute.id),
+        "ruling": req.ruling,
+        "market_status": dispute.status,
+    })

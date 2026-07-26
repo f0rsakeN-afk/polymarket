@@ -587,6 +587,10 @@ class OrderService:
 
         avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal(0)
 
+        after_total = amm.yes_shares + amm.no_shares
+        yes_price_after = amm.no_shares / after_total if after_total > 0 else Decimal(0)
+        no_price_after = amm.yes_shares / after_total if after_total > 0 else Decimal(0)
+
         return OrderResult(
             order_id=str(order.id),
             status="filled",
@@ -596,8 +600,8 @@ class OrderService:
             price=avg_price,
             price_before=price_before,
             price_after=amm_price_val if amm_price_val > 0 else avg_price,
-            yes_price_after=Decimal(float(pool.no_shares) / float(total_shares + 1)) if data.side == "buy" else Decimal(0),
-            no_price_after=Decimal(0),
+            yes_price_after=yes_price_after,
+            no_price_after=no_price_after,
             slippage=amm_slippage,
             fee=amm_fee,
             wallet_balance=wallet.balance,

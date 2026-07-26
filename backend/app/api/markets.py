@@ -191,6 +191,9 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     if data.closes_at <= datetime.now():
         raise ValidationError("closes_at must be in the future")
 
+    if data.initial_probability is not None and data.initial_liquidity <= 0:
+        raise ValidationError("initial_probability requires initial_liquidity > 0")
+
     existing = await db.execute(select(Market).where(Market.slug == data.slug))
     if existing.scalar_one_or_none():
         raise ValidationError(f"Market with slug '{data.slug}' already exists")
@@ -207,9 +210,15 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     db.add(market)
     await db.flush()
 
-    outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
-    outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
-    db.add_all([outcome_yes, outcome_no])
+    if data.outcomes_create:
+        db.add_all([
+            Outcome(market_id=market.id, name=oc.name, outcome_index=oc.outcome_index)
+            for oc in data.outcomes_create
+        ])
+    else:
+        outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
+        outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
+        db.add_all([outcome_yes, outcome_no])
     await db.flush()
 
     pool = LiquidityPool(
@@ -229,9 +238,15 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
-            half = amount_dec / Decimal(2)
-            pool.yes_shares += half
-            pool.no_shares += half
+            if data.initial_probability is not None:
+                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
+                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                pool.yes_shares += yes_shares
+                pool.no_shares += no_shares
+            else:
+                half = amount_dec / Decimal(2)
+                pool.yes_shares += half
+                pool.no_shares += half
             pool.collateral += amount_dec
             pool.lp_token_supply = amount_dec * Decimal(2)
 

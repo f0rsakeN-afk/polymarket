@@ -12,6 +12,7 @@ from app.api.auth import router as auth_router
 from app.api.comments import router as comments_router
 from app.api.disputes import router as disputes_router
 from app.api.exceptions import AppException
+from app.api.flags import router as flags_router
 from app.api.handlers import (
     app_exception_handler,
     generic_exception_handler,
@@ -117,6 +118,7 @@ app.include_router(referrals_router, prefix="/api/v1")
 app.include_router(market_activity_router, prefix="/api/v1")
 app.include_router(split_merge_router, prefix="/api/v1")
 app.include_router(disputes_router, prefix="/api/v1")
+app.include_router(flags_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(treasury_router, prefix="/api/v1")
 app.include_router(ws_router)
