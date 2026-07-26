@@ -1,17 +1,18 @@
 import logging
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, get_db_replica
+from app.api.exceptions import NotFoundError
+from app.api.responses import success_response
+from app.database import get_db_replica
+from app.models.comment import Comment
+from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.position import Position
 from app.models.trade import Trade
-from app.models.comment import Comment
 from app.models.user import User
-from app.models.liquidity import LiquidityPool
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["market_activity"])
@@ -117,7 +118,7 @@ async def get_market_activity(
     comments_result = await db.execute(
         select(Comment, User.username)
         .join(User, Comment.user_id == User.id)
-        .where(Comment.market_id == market.id, Comment.is_deleted == False)
+        .where(Comment.market_id == market.id, not Comment.is_deleted)
         .order_by(Comment.created_at.desc())
         .limit(limit)
     )

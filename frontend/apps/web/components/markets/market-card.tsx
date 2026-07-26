@@ -14,9 +14,16 @@ interface MarketCardProps {
   market: MarketResponse
 }
 
-function ProbabilityBar({ prob, color }: { prob: number; color: string }) {
+function ProbabilityBar({ prob, color, label }: { prob: number; color: string; label?: string }) {
   return (
-    <div className="h-5 w-full rounded-xs bg-muted overflow-hidden relative">
+    <div
+      role="progressbar"
+      aria-valuenow={Math.round(prob * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={label ? `${label}: ${Math.round(prob * 100)}%` : `${Math.round(prob * 100)}%`}
+      className="h-5 w-full rounded-xs bg-muted overflow-hidden relative"
+    >
       <div
         className="h-full rounded-xs transition-all duration-300"
         style={{ width: `${Math.round(prob * 100)}%`, backgroundColor: color }}
@@ -62,13 +69,14 @@ const OutcomeGrid = memo(function OutcomeGrid({
             <div className="truncate text-[11px] font-medium text-foreground mb-1 group-hover:underline">
               {o.name}
             </div>
-            <ProbabilityBar prob={o.price} color={color} />
+            <ProbabilityBar prob={o.price} color={color} label={o.name} />
           </Link>
         )
       })}
       {overflow > 0 && (
         <Link
           href={`/markets/${marketSlug}`}
+          aria-label={`${overflow} more outcomes`}
           className="flex items-center justify-center rounded-md border border-dashed border-border text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
         >
           +{overflow} more
@@ -89,7 +97,7 @@ function MarketCard({ market }: MarketCardProps) {
       ]
 
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden hover:border-primary/30 hover:shadow-md hover:-translate-y-px transition-all duration-200 flex flex-col">
+    <article className="rounded-xl border border-border bg-card overflow-hidden hover:border-primary/30 hover:shadow-md hover:-translate-y-px transition-all duration-200 flex flex-col">
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-3 pb-2">
         {market.status === "resolved" ? (
@@ -101,7 +109,7 @@ function MarketCard({ market }: MarketCardProps) {
             {market.category}
           </span>
         ) : null}
-        <Link href={`/markets/${market.slug}`} className="flex-1 min-w-0">
+        <Link href={`/markets/${market.slug}`} className="flex-1 min-w-0" aria-label={`View ${market.question}`}>
           <h3 className="text-sm font-semibold text-foreground leading-snug line-clamp-2 hover:underline decoration-2">
             {market.question}
           </h3>
@@ -124,7 +132,7 @@ function MarketCard({ market }: MarketCardProps) {
           {new Date(market.closes_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
         </span>
       </div>
-    </div>
+    </article>
   )
 }
 

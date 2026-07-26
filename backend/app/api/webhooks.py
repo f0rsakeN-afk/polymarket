@@ -1,16 +1,16 @@
-import logging
 import json
+import logging
 from decimal import Decimal
-from fastapi import APIRouter, Request, Header, Depends
+
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models.wallet import Wallet, Transaction
-from app.models.user import User
-from app.api.responses import success_response
 from app.api.exceptions import ValidationError
+from app.api.responses import success_response
 from app.config import settings
+from app.database import get_db
+from app.models.wallet import Transaction, Wallet
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -46,7 +46,7 @@ async def stripe_webhook(
     if event_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id", "")
         amount_cents = data.get("amount", 0)
-        currency = data.get("currency", "usd")
+        data.get("currency", "usd")
         metadata = data.get("metadata", {})
 
         user_id = metadata.get("user_id")

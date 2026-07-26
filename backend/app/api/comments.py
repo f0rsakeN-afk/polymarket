@@ -1,16 +1,17 @@
 import logging
+
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.market import Market
 from app.models.comment import Comment
+from app.models.market import Market
 from app.models.user import User
-from app.schemas.comment import CommentCreate, CommentResponse
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ForbiddenError, ValidationError
+from app.schemas.comment import CommentCreate
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")

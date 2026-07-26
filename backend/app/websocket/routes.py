@@ -1,4 +1,5 @@
 import logging
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.websocket.manager import manager, redis_pubsub

@@ -1,10 +1,8 @@
-import uuid
-from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class LiquidityPool(Base, UUIDMixin, TimestampMixin):

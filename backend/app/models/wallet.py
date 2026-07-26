@@ -1,9 +1,8 @@
-import uuid
-from sqlalchemy import Column, String, Numeric, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Wallet(Base, UUIDMixin, TimestampMixin):
@@ -21,6 +20,11 @@ class Wallet(Base, UUIDMixin, TimestampMixin):
 
 class Transaction(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "transactions"
+    __table_args__ = (
+        Index("ix_transactions_user_id", "user_id"),
+        Index("ix_transactions_user_created", "user_id", "created_at"),
+        Index("ix_transactions_wallet_id", "wallet_id"),
+    )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     wallet_id = Column(UUID(as_uuid=True), ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False)

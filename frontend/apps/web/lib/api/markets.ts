@@ -109,6 +109,13 @@ export function getRelatedMarkets(slug: string, limit = 5) {
   )
 }
 
+export function resolveMarket(slug: string, winning_outcome_id: string) {
+  return api.post<{ success: boolean; data: { slug: string; winning_outcome_id: string; winning_outcome_name: string } }>(
+    `/api/v1/markets/${slug}/resolve`,
+    { winning_outcome_id }
+  )
+}
+
 export function getGlobalTrades(params?: {
   page?: number
   page_size?: number

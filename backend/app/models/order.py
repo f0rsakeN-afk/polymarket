@@ -1,10 +1,17 @@
-import uuid
-from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Order(Base, UUIDMixin, TimestampMixin):
@@ -14,6 +21,8 @@ class Order(Base, UUIDMixin, TimestampMixin):
         CheckConstraint("price >= 0"),
         CheckConstraint("price <= 1"),
         UniqueConstraint("user_id", "client_order_id", name="uq_orders_user_client_order"),
+        Index("ix_orders_user_created", "user_id", "created_at"),
+        Index("ix_orders_market_status", "market_id", "status"),
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

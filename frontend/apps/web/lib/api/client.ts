@@ -13,29 +13,51 @@ class ApiError extends Error {
   }
 }
 
+const pendingRequests = new Map<string, Promise<unknown>>()
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    ...options,
-  })
+  const bodyKey = options.body && typeof options.body === "string" ? options.body : JSON.stringify(options.body ?? null)
+  const cacheKey = `${options.method ?? "GET"}:${path}:${bodyKey}`
 
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new ApiError(
-      (data as { detail?: string }).detail ?? `HTTP ${res.status}`,
-      res.status,
-      data
-    )
+  if (options.method === "GET" || !options.method) {
+    const existing = pendingRequests.get(cacheKey)
+    if (existing) return existing as Promise<T>
   }
 
-  return res.json() as Promise<T>
+  const promise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+        ...options,
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new ApiError(
+          (data as { detail?: string }).detail ?? `HTTP ${res.status}`,
+          res.status,
+          data
+        )
+      }
+
+      return res.json() as Promise<T>
+    } finally {
+      pendingRequests.delete(cacheKey)
+    }
+  })()
+
+  if (options.method === "GET" || !options.method) {
+    pendingRequests.set(cacheKey, promise)
+  }
+
+  return promise
 }
 
 export { ApiError }

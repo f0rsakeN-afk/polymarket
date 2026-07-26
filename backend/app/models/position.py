@@ -1,14 +1,18 @@
-import uuid
-from sqlalchemy import Column, Numeric, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Position(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "positions"
-    __table_args__ = (UniqueConstraint("user_id", "market_id", "outcome_id"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "market_id", "outcome_id"),
+        Index("ix_positions_user_id", "user_id"),
+        Index("ix_positions_created_at", "created_at"),
+        Index("ix_positions_user_market", "user_id", "market_id"),
+    )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     market_id = Column(UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)

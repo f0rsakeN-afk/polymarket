@@ -1,4 +1,4 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from app.config import settings
@@ -11,6 +11,7 @@ engine = create_async_engine(
     max_overflow=settings.db_max_overflow,
     pool_timeout=settings.db_pool_timeout,
     pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
 # Replica engine for read-heavy endpoints — falls back to primary if no replica configured

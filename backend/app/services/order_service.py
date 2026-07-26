@@ -1,31 +1,35 @@
+import json
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
+import time
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.amm.engine import BinaryAMM
+from app.api.exceptions import (
+    InsufficientBalanceError,
+    MarketClosedError,
+    NotFoundError,
+    SlippageExceededError,
+    ValidationError,
+)
 from app.config import settings
+from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
-from app.models.liquidity import LiquidityPool
-from app.models.trade import Trade
 from app.models.referral import Referral
+from app.models.trade import Trade
 from app.models.user import User
-from app.amm.engine import BinaryAMM, AMMQuote
-from app.api.exceptions import (
-    NotFoundError,
-    ValidationError,
-    InsufficientBalanceError,
-    MarketClosedError,
-    IdempotencyError,
-)
-from app.websocket.manager import redis_pubsub
+from app.models.wallet import Transaction, Wallet
+from app.redis import get_redis, redis_cb
 from app.schemas.order import OrderRequest
 from app.services.matching_engine import MatchingEngine
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
@@ -49,12 +53,92 @@ class OrderResult:
 
 class OrderService:
 
+    QUOTE_TTL = 5  # seconds
+
     @staticmethod
     def _get_market_prices(pool: LiquidityPool) -> tuple[float, float]:
         total = float(pool.yes_shares) + float(pool.no_shares)
         if total == 0:
             return 0.5, 0.5
         return float(pool.no_shares) / total, float(pool.yes_shares) / total
+
+    @staticmethod
+    async def compute_quote(
+        db: AsyncSession,
+        market_id: str,
+        outcome_name: str,
+        side: str,
+        amount: Decimal,
+    ) -> dict:
+        market_result = await db.execute(
+            select(Market).where(Market.id == market_id)
+        )
+        market = market_result.scalar_one_or_none()
+        if not market:
+            raise NotFoundError("Market not found")
+        if market.status != "active":
+            raise MarketClosedError()
+
+        outcome_result = await db.execute(
+            select(Outcome).where(
+                Outcome.market_id == market.id,
+                Outcome.name.ilike(outcome_name),
+            )
+        )
+        outcome = outcome_result.scalar_one_or_none()
+        if not outcome:
+            raise ValidationError(f"Invalid outcome '{outcome_name}'")
+
+        pool_result = await db.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == market.id)
+        )
+        pool = pool_result.scalar_one_or_none()
+        if not pool:
+            raise ValidationError("Market has no liquidity")
+
+        amm = BinaryAMM(
+            yes_shares=pool.yes_shares,
+            no_shares=pool.no_shares,
+            fee_rate=pool.fee_rate,
+        )
+
+        price_before = float(amm.price(outcome_name))
+
+        if side == "buy":
+            amm.buy(outcome_name, amount)
+        else:
+            amm.sell(outcome_name, amount)
+
+        price_after = float(amm.price(outcome_name))
+        slippage = abs(price_after - price_before)
+
+        quote_id = str(uuid.uuid4())
+        now = time.time()
+        payload = {
+            "quote_id": quote_id,
+            "market_id": market_id,
+            "outcome": outcome_name,
+            "side": side,
+            "amount": float(amount),
+            "price_before": price_before,
+            "price_after": price_after,
+            "slippage": slippage,
+            "yes_price": float(amm.yes_shares),
+            "no_price": float(amm.no_shares),
+            "expires_at": now + OrderService.QUOTE_TTL,
+        }
+
+        try:
+            r = get_redis()
+            await redis_cb.call(lambda: r.setex(
+                f"quote:{quote_id}",
+                OrderService.QUOTE_TTL,
+                json.dumps(payload),
+            ))
+        except Exception:
+            pass
+
+        return payload
 
     @staticmethod
     async def execute_order(
@@ -64,15 +148,7 @@ class OrderService:
     ) -> OrderResult:
         amount = Decimal(str(data.amount))
 
-        if data.client_order_id:
-            existing = await db.execute(
-                select(Order).where(
-                    Order.user_id == user.id,
-                    Order.client_order_id == data.client_order_id,
-                )
-            )
-            if existing.scalar_one_or_none():
-                raise IdempotencyError("Order already placed with this client_order_id")
+        # ── Step 1: Lock Market + Pool + Wallet (serialization point) ──
 
         market_result = await db.execute(
             select(Market).where(Market.id == data.market_id).with_for_update()
@@ -82,7 +158,7 @@ class OrderService:
             raise NotFoundError("Market not found")
         if market.status != "active":
             raise MarketClosedError()
-        if market.closes_at and datetime.now(timezone.utc) >= market.closes_at:
+        if market.closes_at and datetime.now(UTC) >= market.closes_at:
             raise MarketClosedError({"reason": "Market has closed for trading"})
 
         outcomes_result = await db.execute(
@@ -108,6 +184,50 @@ class OrderService:
         if not wallet:
             raise ValidationError("Wallet not found")
 
+        # ── Step 2: Idempotency check (inside lock — no race) ──
+
+        if data.client_order_id:
+            existing = await db.execute(
+                select(Order).where(
+                    Order.user_id == user.id,
+                    Order.client_order_id == data.client_order_id,
+                ).with_for_update()
+            )
+            existing_order = existing.scalar_one_or_none()
+            if existing_order:
+                return OrderResult(
+                    order_id=str(existing_order.id),
+                    status="duplicate",
+                    side=data.side,
+                    outcome=data.outcome,
+                    shares=existing_order.shares_bought or existing_order.shares_sold or Decimal(0),
+                    price=existing_order.price,
+                    price_before=Decimal(0),
+                    price_after=Decimal(0),
+                    yes_price_after=Decimal(0),
+                    no_price_after=Decimal(0),
+                    slippage=Decimal(0),
+                    fee=existing_order.fees_paid or Decimal(0),
+                    wallet_balance=wallet.balance,
+                )
+
+        # ── Step 3: Validate quote if provided ──
+
+        if data.quote_id:
+            try:
+                r = get_redis()
+                raw = await redis_cb.call(lambda: r.get(f"quote:{data.quote_id}"))
+                if raw:
+                    quote = json.loads(raw)
+                    if quote["expires_at"] < time.time():
+                        raise ValidationError("Quote expired — please refresh")
+            except ValidationError:
+                raise
+            except Exception:
+                pass
+
+        # ── Step 4: Position check for sells ──
+
         position = None
         if data.side == "sell":
             pos_result = await db.execute(
@@ -124,6 +244,8 @@ class OrderService:
                     f"Held: {float(position.shares_held) if position else 0}, "
                     f"Requested: {float(amount)}"
                 )
+
+        # ── Step 5: AMM + Matching ──
 
         amm = BinaryAMM(
             yes_shares=pool.yes_shares,
@@ -157,12 +279,12 @@ class OrderService:
         else:
             remaining = amount - matched_shares
 
-        amm_shares = Decimal("0")
-        amm_price_val = Decimal("0")
-        amm_fee = Decimal("0")
-        amm_slippage = Decimal("0")
-        sell_proceeds_amm = Decimal("0")
-        amm_collateral = Decimal("0")
+        amm_shares = Decimal(0)
+        amm_price_val = Decimal(0)
+        amm_fee = Decimal(0)
+        amm_slippage = Decimal(0)
+        sell_proceeds_amm = Decimal(0)
+        Decimal(0)
 
         if remaining > 0:
             if data.order_type in ("limit", "fill_or_kill"):
@@ -204,8 +326,6 @@ class OrderService:
                         client_order_id=data.client_order_id,
                     )
                     db.add(order)
-                    await db.commit()
-                    await db.refresh(order)
 
                     logger.info(
                         f"Limit order{' partially' if matched_shares > 0 else ''} pending: "
@@ -216,18 +336,18 @@ class OrderService:
                     )
 
                     return OrderResult(
-                        order_id=str(order.id),
+                        order_id="",
                         status="pending" if matched_shares == 0 else "partial",
                         side=data.side,
                         outcome=data.outcome,
                         shares=matched_shares,
-                        price=limit_price or Decimal("0"),
+                        price=limit_price or Decimal(0),
                         price_before=price_before,
                         price_after=price_before,
-                        yes_price_after=Decimal("0"),
-                        no_price_after=Decimal("0"),
-                        slippage=Decimal("0"),
-                        fee=Decimal("0"),
+                        yes_price_after=Decimal(0),
+                        no_price_after=Decimal(0),
+                        slippage=Decimal(0),
+                        fee=Decimal(0),
                         wallet_balance=wallet.balance,
                     )
 
@@ -243,7 +363,6 @@ class OrderService:
                 amm_price_val = quote.price
                 amm_fee = quote.fee
                 amm_slippage = quote.slippage
-                amm_collateral = remaining
             else:
                 tmp_position = await db.execute(
                     select(Position).where(
@@ -270,7 +389,6 @@ class OrderService:
                 amm_price_val = quote.price
                 amm_fee = quote.fee
                 amm_slippage = quote.slippage
-                amm_collateral = sell_proceeds_amm
 
             trade_value = remaining * amm_price_val
             protocol_fee = trade_value * Decimal("0.01")
@@ -280,8 +398,36 @@ class OrderService:
             pool.no_shares = amm.no_shares
 
         total_shares = matched_shares + amm_shares
-        total_usdc_spent = matched_usdc + (remaining if data.side == "buy" else Decimal("0"))
+        total_usdc_spent = matched_usdc + (remaining if data.side == "buy" else Decimal(0))
         total_usdc_received = matched_usdc + sell_proceeds_amm
+
+        # ── Step 6: Slippage validation ──
+
+        if total_shares > 0:
+            actual_price = total_usdc_spent / total_shares if data.side == "buy" else amm_price_val
+            if data.min_shares_out is not None and total_shares < Decimal(str(data.min_shares_out)):
+                raise SlippageExceededError(
+                    expected_price=float(price_before),
+                    actual_price=float(actual_price),
+                    max_slippage=data.max_slippage or 0.01,
+                    details={"received_shares": float(total_shares), "min_shares_out": data.min_shares_out},
+                )
+            if data.max_slippage is not None:
+                expected_price = float(price_before)
+                actual_price_f = float(actual_price)
+                if expected_price > 0:
+                    if data.side == "buy":
+                        slippage_pct = (actual_price_f - expected_price) / expected_price
+                    else:
+                        slippage_pct = (expected_price - actual_price_f) / expected_price
+                    if slippage_pct > data.max_slippage:
+                        raise SlippageExceededError(
+                            expected_price=expected_price,
+                            actual_price=actual_price_f,
+                            max_slippage=data.max_slippage,
+                        )
+
+        # ── Step 7: Save order + positions + trades ──
 
         order = Order(
             user_id=user.id,
@@ -290,14 +436,14 @@ class OrderService:
             side=data.side,
             order_type=data.order_type,
             amount=amount,
-            remaining_amount=Decimal("0"),
-            price=amm_price_val if amm_price_val > 0 else (limit_price or Decimal("0")),
+            remaining_amount=Decimal(0),
+            price=amm_price_val if amm_price_val > 0 else (limit_price or Decimal(0)),
             shares_bought=total_shares if data.side == "buy" else None,
             shares_sold=total_shares if data.side == "sell" else None,
             fees_paid=amm_fee,
             status="filled",
             client_order_id=data.client_order_id,
-            executed_at=datetime.now(timezone.utc),
+            executed_at=datetime.now(UTC),
         )
         db.add(order)
 
@@ -319,7 +465,7 @@ class OrderService:
                     ) / total_shares_pos
                 position.shares_held = total_shares_pos
             else:
-                avg_price = total_cost / total_shares if total_shares > 0 else Decimal("0")
+                avg_price = total_cost / total_shares if total_shares > 0 else Decimal(0)
                 position = Position(
                     user_id=user.id,
                     market_id=market.id,
@@ -340,7 +486,7 @@ class OrderService:
                 side=data.side,
                 price=md["match_price"],
                 amount=md["match_shares"],
-                executed_at=datetime.now(timezone.utc),
+                executed_at=datetime.now(UTC),
             )
             db.add(t)
 
@@ -352,7 +498,7 @@ class OrderService:
                 side=data.side,
                 price=amm_price_val,
                 amount=total_shares,
-                executed_at=datetime.now(timezone.utc),
+                executed_at=datetime.now(UTC),
             )
             db.add(t)
 
@@ -363,11 +509,13 @@ class OrderService:
             type="trade_buy" if data.side == "buy" else "trade_sell",
             amount=trade_amount,
             balance_after=wallet.balance,
-            reference_id=str(order.id),
+            reference_id="",
             reference_type="order",
             status="completed",
         )
         db.add(tx)
+
+        # ── Step 8: Referral (best-effort) ──
 
         try:
             ref_result = await db.execute(
@@ -387,7 +535,7 @@ class OrderService:
                     ref_wallet.balance += reward
                     referral.reward_amount = reward
                     referral.status = "completed"
-                    referral.completed_at = datetime.now(timezone.utc)
+                    referral.completed_at = datetime.now(UTC)
                     ref_tx = Transaction(
                         user_id=referral.referrer_id,
                         wallet_id=ref_wallet.id,
@@ -402,15 +550,20 @@ class OrderService:
         except Exception:
             pass
 
+        # ── Step 9: Single commit ──
+
         await db.commit()
+
+        tx.reference_id = str(order.id)
         await db.refresh(order)
 
-        yes_price, no_price = OrderService._get_market_prices(pool)
-        await redis_pubsub.publish_price_update(
-            str(market.id), yes_price, no_price, float(market.total_volume)
-        )
+        # ── Step 10: Post-commit notifications (best-effort) ──
 
         try:
+            yes_price, no_price = OrderService._get_market_prices(pool)
+            await redis_pubsub.publish_price_update(
+                str(market.id), yes_price, no_price, float(market.total_volume)
+            )
             await redis_pubsub.publish_market_event(str(market.id), "trade:new", {
                 "outcome": data.outcome,
                 "side": data.side,
@@ -421,15 +574,22 @@ class OrderService:
         except Exception:
             pass
 
-        from app.workers.tasks import check_price_alerts
-        check_price_alerts.delay(str(market.id), yes_price, no_price)
+        try:
+            from app.workers.tasks import check_price_alerts
+            check_price_alerts.delay(str(market.id), yes_price, no_price)
+        except Exception:
+            pass
 
         logger.info(
             f"Order filled: user={user.id} market={market.slug} "
             f"{data.side} {data.outcome} amount={float(amount)} shares={float(total_shares)}"
         )
 
-        avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal("0")
+        avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal(0)
+
+        after_total = amm.yes_shares + amm.no_shares
+        yes_price_after = amm.no_shares / after_total if after_total > 0 else Decimal(0)
+        no_price_after = amm.yes_shares / after_total if after_total > 0 else Decimal(0)
 
         return OrderResult(
             order_id=str(order.id),
@@ -440,8 +600,8 @@ class OrderService:
             price=avg_price,
             price_before=price_before,
             price_after=amm_price_val if amm_price_val > 0 else avg_price,
-            yes_price_after=Decimal(float(pool.no_shares) / float(total_shares + 1)) if data.side == "buy" else Decimal("0"),
-            no_price_after=Decimal("0"),
+            yes_price_after=yes_price_after,
+            no_price_after=no_price_after,
             slippage=amm_slippage,
             fee=amm_fee,
             wallet_balance=wallet.balance,
@@ -465,7 +625,7 @@ class OrderService:
             raise NotFoundError("Pending order not found")
 
         order.status = "cancelled"
-        order.executed_at = datetime.now(timezone.utc)
+        order.executed_at = datetime.now(UTC)
 
         if order.side == "buy" and order.amount > 0:
             wallet = await db.execute(
@@ -473,7 +633,7 @@ class OrderService:
             )
             wallet = wallet.scalar_one_or_none()
             if wallet:
-                wallet.locked_balance = max(Decimal("0"), wallet.locked_balance - order.amount)
+                wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.amount)
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")

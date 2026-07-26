@@ -1,15 +1,15 @@
 import logging
-from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.alert import Alert
 from app.schemas.alert import AlertCreate, AlertResponse
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -44,7 +44,7 @@ async def list_alerts(request: Request, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(
         select(Alert)
-        .where(Alert.user_id == user.id, Alert.triggered == False)
+        .where(Alert.user_id == user.id, not Alert.triggered)
         .order_by(Alert.created_at.desc())
     )
     alerts = result.scalars().all()

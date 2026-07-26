@@ -1,13 +1,11 @@
+import asyncio
 import json
 import logging
 import time
-from typing import Dict, Set
-import asyncio
 
 import redis.asyncio as redis
 from fastapi import WebSocket
 
-from app.config import settings
 from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
@@ -18,8 +16,8 @@ _manager_lock = asyncio.Lock()
 
 class ConnectionManager:
     def __init__(self):
-        self._market_subs: Dict[str, Set[WebSocket]] = {}
-        self._ws_to_market: Dict[WebSocket, str] = {}
+        self._market_subs: dict[str, set[WebSocket]] = {}
+        self._ws_to_market: dict[WebSocket, str] = {}
         self._lock = _manager_lock
 
     async def connect(self, websocket: WebSocket, market_id: str):
@@ -90,7 +88,7 @@ class RedisPubSub:
         self._pubsub: redis.client.PubSub | None = None
         self._listener_task: asyncio.Task | None = None
         self._connected = False
-        self._subscribed: Set[str] = set()
+        self._subscribed: set[str] = set()
 
     async def connect(self):
         if self._connected:

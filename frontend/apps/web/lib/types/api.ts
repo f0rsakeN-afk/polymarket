@@ -118,6 +118,19 @@ export interface CommentActivity {
   created_at: string
 }
 
+export interface QuoteResponse {
+  quote_id: string
+  market_id: string
+  outcome: string
+  side: string
+  amount: number
+  price: number
+  slippage: number
+  yes_price: number
+  no_price: number
+  expires_at: number
+}
+
 export interface Order {
   id: string
   market_id: string

@@ -1,7 +1,7 @@
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
 from app.models.trade import Trade
 from app.models.user import User
+from app.models.wallet import Wallet
 
 logger = logging.getLogger("polymarket")
 
@@ -60,6 +60,7 @@ class MatchingEngine:
                 Order.price.desc() if side == "sell" else Order.price.asc(),
                 Order.created_at.asc(),
             )
+            .with_for_update(skip_locked=True)
         )
         return list(result.scalars().all())
 
@@ -71,7 +72,7 @@ class MatchingEngine:
         match_shares: Decimal,
         match_price: Decimal,
     ) -> dict:
-        maker_user = await db.get(User, maker.user_id)
+        await db.get(User, maker.user_id)
         maker_wallet = await db.execute(
             select(Wallet).where(Wallet.user_id == maker.user_id).with_for_update()
         )
@@ -84,16 +85,14 @@ class MatchingEngine:
         fee = usdc_value * Decimal("0.01")
 
         if maker.side == "buy":
-            buyer_user_id = str(maker.user_id)
-            seller_user_id = taker_user_id
+            str(maker.user_id)
             buyer_wallet = maker_wallet
             seller_wallet = await db.execute(
                 select(Wallet).where(Wallet.user_id == taker_user_id).with_for_update()
             )
             seller_wallet = seller_wallet.scalar_one_or_none()
         else:
-            seller_user_id = str(maker.user_id)
-            buyer_user_id = taker_user_id
+            str(maker.user_id)
             seller_wallet = maker_wallet
             buyer_wallet = await db.execute(
                 select(Wallet).where(Wallet.user_id == taker_user_id).with_for_update()
@@ -109,14 +108,14 @@ class MatchingEngine:
         maker.remaining_amount -= match_shares
         if maker.remaining_amount <= 0:
             maker.status = "filled"
-            maker.executed_at = datetime.now(timezone.utc)
+            maker.executed_at = datetime.now(UTC)
         else:
             maker.status = "partial"
 
         if maker.side == "buy" and maker_wallet:
             locked_release = min(maker.amount - maker.remaining_amount, match_shares * maker.price)
             maker_wallet.locked_balance = max(
-                Decimal("0"), maker_wallet.locked_balance - locked_release
+                Decimal(0), maker_wallet.locked_balance - locked_release
             )
 
         trade = Trade(
@@ -126,7 +125,7 @@ class MatchingEngine:
             side=maker.side,
             price=match_price,
             amount=match_shares,
-            executed_at=datetime.now(timezone.utc),
+            executed_at=datetime.now(UTC),
         )
         db.add(trade)
 
@@ -137,7 +136,7 @@ class MatchingEngine:
             side="sell" if maker.side == "buy" else "buy",
             price=match_price,
             amount=match_shares,
-            executed_at=datetime.now(timezone.utc),
+            executed_at=datetime.now(UTC),
         )
         db.add(trade_taker)
 
@@ -168,7 +167,7 @@ class MatchingEngine:
                 total_shares = buyer_pos.shares_held + match_shares
                 buyer_pos.average_price = (
                     buyer_pos.average_price * buyer_pos.shares_held + usdc_value
-                ) / total_shares if total_shares > 0 else Decimal("0")
+                ) / total_shares if total_shares > 0 else Decimal(0)
                 buyer_pos.shares_held = total_shares
             else:
                 buyer_pos = Position(
@@ -192,7 +191,7 @@ class MatchingEngine:
                 total_shares = buyer_pos.shares_held + match_shares
                 buyer_pos.average_price = (
                     buyer_pos.average_price * buyer_pos.shares_held + usdc_value
-                ) / total_shares if total_shares > 0 else Decimal("0")
+                ) / total_shares if total_shares > 0 else Decimal(0)
                 buyer_pos.shares_held = total_shares
             else:
                 buyer_pos = Position(
@@ -242,8 +241,8 @@ class MatchingEngine:
             db, str(market.id), outcome.id, side, limit_price, exclude_user_id=taker_user_id
         )
 
-        matched_shares = Decimal("0")
-        matched_usdc = Decimal("0")
+        matched_shares = Decimal(0)
+        matched_usdc = Decimal(0)
         match_details = []
 
         for maker in matches:
@@ -306,7 +305,7 @@ class MatchingEngine:
             order.remaining_amount -= match_qty
             if order.remaining_amount <= 0:
                 order.status = "filled"
-                order.executed_at = datetime.now(timezone.utc)
+                order.executed_at = datetime.now(UTC)
             elif order.status != "filled":
                 order.status = "partial"
 

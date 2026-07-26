@@ -19,9 +19,11 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
   if (markets.length === 0) return null
 
   return (
-    <div className="relative group/carousel">
+    <section aria-label="Trending markets" className="relative group/carousel">
       <div
         ref={containerRef}
+        role="list"
+        aria-label="Trending markets carousel"
         className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide scroll-smooth"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
@@ -32,20 +34,22 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
       {canScrollLeft && (
         <button
           onClick={handleScrollLeft}
+          aria-label="Scroll left"
           className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
         >
-          <ChevronLeftIcon className="size-4" />
+          <ChevronLeftIcon className="size-4" aria-hidden="true" />
         </button>
       )}
       {canScrollRight && (
         <button
           onClick={handleScrollRight}
+          aria-label="Scroll right"
           className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
         >
-          <ChevronRightIcon className="size-4" />
+          <ChevronRightIcon className="size-4" aria-hidden="true" />
         </button>
       )}
-    </div>
+    </section>
   )
 }
 

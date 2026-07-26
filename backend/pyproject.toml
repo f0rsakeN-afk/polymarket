@@ -29,4 +29,27 @@ dependencies = [
     "httpx>=0.28.0",
     "bcrypt>=5.0.0",
     "psycopg2-binary>=2.9.12",
+    "resend>=0.8.0",
+    "ruff>=0.9.0",
+    "pyright>=1.1.300",
+    "pytest>=9.0.0",
+    "pytest-cov>=6.0.0",
+    "pip-audit>=2.7.0",
 ]
+
+[tool.ruff]
+exclude = ["migrations/", ".venv/"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "S", "BLE", "FURB"]
+ignore = ["E501", "S110", "BLE001", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["S311", "S608", "S106"]
+"migrations/*" = ["ALL"]
+"app/config.py" = ["S105", "S106"]
+
+reportGeneralTypeIssues.enabled = false
+
+[tool.pyright.reportAttributeAccessIssue]
+enabled = false

@@ -1,31 +1,30 @@
-import asyncio
 import logging
-import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.market import Market, Outcome
-from app.models.liquidity import LiquidityPool
 from app.models.faq import MarketFAQ
-from app.schemas.market import (
-    MarketResponse,
-    MarketDetailResponse,
-    MarketListResponse,
-    CreateMarketRequest,
-    OutcomeResponse,
-)
+from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
+from app.models.position import Position
+from app.models.wallet import Transaction, Wallet
 from app.schemas.faq import FAQResponse
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
-from app.amm.engine import BinaryAMM
-from app.workers.tasks import resolve_market
-from app.websocket.manager import redis_pubsub
+from app.schemas.market import (
+    CreateMarketRequest,
+    MarketListResponse,
+    MarketResponse,
+    OutcomeResponse,
+    ResolveMarketRequest,
+)
 from app.services.market_service import MarketService
+from app.workers.tasks import resolve_market
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["markets"])
@@ -192,6 +191,9 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     if data.closes_at <= datetime.now():
         raise ValidationError("closes_at must be in the future")
 
+    if data.initial_probability is not None and data.initial_liquidity <= 0:
+        raise ValidationError("initial_probability requires initial_liquidity > 0")
+
     existing = await db.execute(select(Market).where(Market.slug == data.slug))
     if existing.scalar_one_or_none():
         raise ValidationError(f"Market with slug '{data.slug}' already exists")
@@ -208,9 +210,15 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     db.add(market)
     await db.flush()
 
-    outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
-    outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
-    db.add_all([outcome_yes, outcome_no])
+    if data.outcomes_create:
+        db.add_all([
+            Outcome(market_id=market.id, name=oc.name, outcome_index=oc.outcome_index)
+            for oc in data.outcomes_create
+        ])
+    else:
+        outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
+        outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
+        db.add_all([outcome_yes, outcome_no])
     await db.flush()
 
     pool = LiquidityPool(
@@ -230,11 +238,17 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
-            half = amount_dec / Decimal("2")
-            pool.yes_shares += half
-            pool.no_shares += half
+            if data.initial_probability is not None:
+                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
+                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                pool.yes_shares += yes_shares
+                pool.no_shares += no_shares
+            else:
+                half = amount_dec / Decimal(2)
+                pool.yes_shares += half
+                pool.no_shares += half
             pool.collateral += amount_dec
-            pool.lp_token_supply = amount_dec * Decimal("2")
+            pool.lp_token_supply = amount_dec * Decimal(2)
 
     await db.commit()
     logger.info(f"Market created: {data.slug} by admin={user.id}")
@@ -262,8 +276,8 @@ async def get_price_history(
     to_date: str | None = None,
     db: AsyncSession = Depends(get_db_replica),
 ):
-    from app.models.price_history import PriceHistory
     from app.models.market import Outcome
+    from app.models.price_history import PriceHistory
 
     market = await db.execute(select(Market).where(Market.slug == slug))
     market = market.scalar_one_or_none()
@@ -299,7 +313,7 @@ async def get_price_history(
     samples = []
     for bucket_ts in sorted(grouped):
         bucket_rows = grouped[bucket_ts]
-        ts_dt = datetime.fromtimestamp(bucket_ts, tz=timezone.utc)
+        ts_dt = datetime.fromtimestamp(bucket_ts, tz=UTC)
         outcome_prices = {}
         total_vol = 0
         for r in bucket_rows:
@@ -340,3 +354,102 @@ async def get_related(slug: str, db: AsyncSession = Depends(get_db_replica)):
         market_to_response(m, *MarketService.compute_prices(p)).model_dump()
         for m, p in rows
     ])
+
+
+@router.post("/{slug}/resolve")
+async def resolve_market_endpoint(
+    slug: str,
+    body: ResolveMarketRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if not user.is_admin:
+        raise ForbiddenError("Only admins can resolve markets")
+
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+
+    if market.status == "resolved":
+        raise ValidationError("Market is already resolved")
+
+    outcome_result = await db.execute(
+        select(Outcome).where(Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id)
+    )
+    outcome = outcome_result.scalar_one_or_none()
+    if not outcome:
+        raise ValidationError("Winning outcome does not belong to this market")
+
+    market.status = "resolved"
+    market.winning_outcome_id = outcome.id
+    market.resolved_at = datetime.now(UTC)
+    await db.commit()
+
+    resolve_market.delay(str(market.id), str(outcome.id))
+
+    logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
+    return success_response({
+        "slug": slug,
+        "winning_outcome_id": str(outcome.id),
+        "winning_outcome_name": outcome.name,
+    })
+
+
+@router.post("/{slug}/claim")
+async def claim_winnings(
+    slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+    if market.status != "resolved":
+        raise ValidationError("Market is not yet resolved")
+    if not market.winning_outcome_id:
+        raise ValidationError("Market has no winning outcome set")
+
+    pos_result = await db.execute(
+        select(Position).where(
+            Position.user_id == user.id,
+            Position.market_id == market.id,
+            Position.outcome_id == market.winning_outcome_id,
+            Position.shares_held > 0,
+        ).with_for_update()
+    )
+    winning_pos = pos_result.scalar_one_or_none()
+    if not winning_pos:
+        raise ValidationError("You have no winning shares to claim")
+
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+    )
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise NotFoundError("Wallet not found")
+
+    payout = winning_pos.shares_held
+    wallet.balance += payout
+    winning_pos.realized_pnl += payout
+    winning_pos.shares_held = 0
+
+    tx = Transaction(
+        user_id=user.id,
+        wallet_id=wallet.id,
+        type="settlement_win",
+        amount=payout,
+        balance_after=wallet.balance,
+        reference_id=str(market.id),
+        reference_type="market_settlement",
+        status="completed",
+    )
+    db.add(tx)
+    await db.commit()
+
+    logger.info(f"Claimed winnings: user={user.id} market={slug} payout={payout}")
+    return success_response({"claimed": float(payout)})

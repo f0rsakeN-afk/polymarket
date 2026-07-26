@@ -1,16 +1,16 @@
 import logging
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, get_db_replica
-from app.deps import get_current_user
-from app.models.position import Position
-from app.models.market import Market, Outcome
-from app.models.liquidity import LiquidityPool
-from app.schemas.order import PositionResponse
 from app.api.responses import success_response
-from app.api.exceptions import NotFoundError
+from app.database import get_db_replica
+from app.deps import get_current_user
+from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
+from app.models.position import Position
+from app.schemas.order import PositionResponse
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/positions", tags=["positions"])

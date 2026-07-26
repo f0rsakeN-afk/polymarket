@@ -1,4 +1,5 @@
 from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -12,6 +13,29 @@ class OrderRequest(BaseModel):
     expires_at: datetime | None = None  # for limit orders
     post_only: bool = False  # if True, reject if would execute immediately
     client_order_id: str | None = None
+    max_slippage: float | None = Field(None, ge=0, le=1)  # e.g. 0.005 = 0.5%
+    min_shares_out: float | None = Field(None, gt=0)  # minimum shares to receive
+    quote_id: str | None = None  # bind to a specific quote
+
+
+class QuoteRequest(BaseModel):
+    market_id: str
+    outcome: str = Field(...)
+    side: str = Field(..., pattern="^(buy|sell)$")
+    amount: float = Field(..., gt=0)
+
+
+class QuoteResponse(BaseModel):
+    quote_id: str
+    market_id: str
+    outcome: str
+    side: str
+    amount: float
+    price: float
+    slippage: float
+    yes_price: float
+    no_price: float
+    expires_at: float  # unix timestamp
 
 
 class OrderResponse(BaseModel):
