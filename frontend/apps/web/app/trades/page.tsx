@@ -7,7 +7,7 @@ export default function TradesPage() {
   const { data, isLoading, fetchNextPage, hasNextPage } = useGlobalTrades()
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Trade Feed</h1>
         <p className="mt-1 text-muted-foreground">Recent trades across all markets</p>

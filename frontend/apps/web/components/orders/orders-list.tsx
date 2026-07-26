@@ -8,15 +8,6 @@ import { useCancelOrder } from "@/hooks/use-orders"
 import { sileo } from "sileo"
 import type { Order } from "@/lib/types/api"
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
 interface OrderRowProps {
   order: Order
 }
@@ -52,7 +43,11 @@ function OrderRow({ order }: OrderRowProps) {
             {order.outcome}
           </span>
           <span className="text-[10px]">{order.side}</span>
-          <span className="text-[10px]">{order.amount} @ ${order.price.toFixed(2)}</span>
+          <span className="text-[10px]">
+            {order.status === "partial" || order.status === "pending"
+              ? `${order.remaining_amount?.toFixed(2) ?? order.amount} / ${order.amount} @ $${order.price.toFixed(2)}`
+              : `${order.amount} @ $${order.price.toFixed(2)}`}
+          </span>
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -60,14 +55,16 @@ function OrderRow({ order }: OrderRowProps) {
           className={`text-[10px] font-semibold uppercase ${
             order.status === "filled"
               ? "text-green-500"
-              : order.status === "cancelled"
+              : order.status === "cancelled" || order.status === "expired"
               ? "text-muted-foreground"
+              : order.status === "partial"
+              ? "text-blue-500"
               : "text-yellow-500"
           }`}
         >
           {order.status}
         </span>
-        {order.status === "pending" && (
+        {(order.status === "pending" || order.status === "partial") && (
           <AlertDialog open={open} onOpenChange={handleDialogOpenChange}>
             <AlertDialogTrigger render={<Button variant="ghost" size="sm" className="h-5 text-[10px] text-red-500 hover:text-red-400">Cancel</Button>} />
             <AlertDialogContent>

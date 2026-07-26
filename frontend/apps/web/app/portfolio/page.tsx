@@ -4,6 +4,7 @@ import { useMemo } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { PositionsList } from "@/components/orders/positions-list"
 import { OrdersList } from "@/components/orders/orders-list"
+import { LPDashboard } from "@/components/liquidity/lp-dashboard"
 import { usePositions } from "@/hooks/use-positions"
 import { useOrders } from "@/hooks/use-orders"
 import { useWallet } from "@/hooks/use-wallet"
@@ -105,7 +106,7 @@ export default function PortfolioPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Portfolio</h1>
         <p className="mt-1 text-muted-foreground">Your positions, orders, and wallet</p>
@@ -116,6 +117,13 @@ export default function PortfolioPage() {
           <PortfolioSummary wallet={wallet} positions={positions} />
         </div>
       )}
+
+      <div className="mb-6">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold">Liquidity Positions</h2>
+        </div>
+        <LPDashboard />
+      </div>
 
       <div className="space-y-6">
         <PositionsList

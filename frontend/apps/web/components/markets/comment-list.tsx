@@ -12,10 +12,12 @@ import {
   FieldError,
 } from "@workspace/ui/components/field"
 import { cn } from "@workspace/ui/lib/utils"
-import { useComments, usePostComment } from "@/hooks/use-markets"
+import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/use-markets"
+import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
 import { object, pipe, string, minLength, maxLength } from "valibot"
 import { getMarketCommentReplies } from "@/lib/api/markets"
+import type { Comment } from "@/lib/types/api"
 
 const CommentSchema = object({
   content: pipe(string(), minLength(1, "Comment cannot be empty"), maxLength(2000, "Max 2000 characters")),
@@ -34,20 +36,30 @@ function timeAgo(iso: string) {
 const CommentRow = memo(function CommentRow({
   comment,
   slug,
+  depth = comment.depth,
 }: {
-  comment: { id: string; username: string; content: string; created_at: string; depth: number; reply_count?: number }
+  comment: Comment
   slug: string
+  depth?: number
 }) {
-  const [replies, setReplies] = useState<typeof comment[]>([])
+  const [replies, setReplies] = useState<Comment[]>([])
   const [showReplies, setShowReplies] = useState(false)
   const [loadingReplies, setLoadingReplies] = useState(false)
+  const [showReplyForm, setShowReplyForm] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editValue, setEditValue] = useState(comment.content)
+  const { mutateAsync: postReply, isPending: isReplying } = usePostComment(slug)
+  const { mutateAsync: editComment, isPending: isEditing } = useEditComment(slug)
+  const { mutateAsync: removeComment, isPending: isDeleting } = useDeleteComment(slug)
+  const { data: currentUser } = useCurrentUser()
+  const isOwn = currentUser?.id === comment.user_id
 
   const loadReplies = useCallback(async () => {
     setLoadingReplies(true)
     try {
       const res = await getMarketCommentReplies(slug, comment.id)
       setReplies(res.data.replies)
-    } catch {}
+    } catch { /* ignore */ }
     setLoadingReplies(false)
   }, [slug, comment.id])
 
@@ -58,27 +70,140 @@ const CommentRow = memo(function CommentRow({
     setShowReplies((v) => !v)
   }, [showReplies, replies.length, loadReplies])
 
+  const handleReply = useCallback(async (content: string) => {
+    try {
+      await postReply({ content, parent_id: comment.id })
+      setShowReplyForm(false)
+      await loadReplies()
+      setShowReplies(true)
+    } catch { /* ignore */ }
+  }, [comment.id, postReply, loadReplies])
+
+  const handleEdit = useCallback(async () => {
+    if (!editValue.trim()) return
+    try {
+      await editComment({ commentId: comment.id, content: editValue.trim() })
+      setEditing(false)
+    } catch { /* ignore */ }
+  }, [comment.id, editValue, editComment])
+
+  const handleDelete = useCallback(async () => {
+    try {
+      await removeComment({ commentId: comment.id })
+    } catch { /* ignore */ }
+  }, [comment.id, removeComment])
+
+  if (comment.is_deleted) return null
+
   return (
-    <div className={cn("py-3", comment.depth > 0 && "ml-6 border-l-2 border-border pl-3")}>
+    <div className={cn("py-3", depth > 0 && "ml-6 border-l-2 border-border pl-3")}>
       <div className="flex items-center gap-2 mb-1">
         <span className="text-xs font-semibold text-foreground">{comment.username}</span>
         <span className="text-[10px] text-muted-foreground">{timeAgo(comment.created_at)}</span>
-        {(comment.reply_count ?? 0) > 0 && (
-          <button
-            onClick={toggleReplies}
-            className="ml-auto text-[10px] text-primary hover:text-primary/80 font-medium transition-colors"
-          >
-            {loadingReplies ? "..." : showReplies ? "Hide replies" : `${comment.reply_count} replies`}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {isOwn && !editing && (
+            <>
+              <button
+                onClick={() => { setEditValue(comment.content); setEditing(true) }}
+                className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="text-[10px] text-red-500 hover:text-red-400 font-medium transition-colors"
+              >
+                {isDeleting ? "..." : "Delete"}
+              </button>
+            </>
+          )}
+          {depth < 3 && (
+            <button
+              onClick={() => setShowReplyForm((v) => !v)}
+              className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
+            >
+              Reply
+            </button>
+          )}
+          {comment.reply_count > 0 && (
+            <button
+              onClick={toggleReplies}
+              className="text-[10px] text-primary hover:text-primary/80 font-medium transition-colors"
+            >
+              {loadingReplies ? "..." : showReplies ? "Hide" : `${comment.reply_count} ${comment.reply_count === 1 ? "reply" : "replies"}`}
+            </button>
+          )}
+        </div>
       </div>
-      <p className="text-xs leading-relaxed text-foreground">{comment.content}</p>
+      {editing ? (
+        <div className="flex gap-2">
+          <Input
+            className="h-7 text-xs flex-1"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleEdit() }
+              if (e.key === "Escape") { setEditing(false); setEditValue(comment.content) }
+            }}
+          />
+          <Button size="sm" className="h-7 text-xs" onClick={handleEdit} disabled={isEditing || !editValue.trim()}>
+            {isEditing ? <Spinner className="size-3" /> : "Save"}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditing(false); setEditValue(comment.content) }} disabled={isEditing}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs leading-relaxed text-foreground">{comment.content}</p>
+      )}
+      {showReplyForm && (
+        <ReplyForm onReply={handleReply} isPending={isReplying} onCancel={() => setShowReplyForm(false)} />
+      )}
       {showReplies && replies.map((r) => (
-        <CommentRow key={r.id} comment={r} slug={slug} />
+        <CommentRow key={r.id} comment={r} slug={slug} depth={depth + 1} />
       ))}
     </div>
   )
 })
+
+function ReplyForm({ onReply, isPending, onCancel }: {
+  onReply: (content: string) => Promise<void>
+  isPending: boolean
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState("")
+
+  const handleSubmit = useCallback(async () => {
+    if (!value.trim()) return
+    await onReply(value.trim())
+    setValue("")
+  }, [value, onReply])
+
+  return (
+    <div className="mt-2 flex gap-2">
+      <Input
+        placeholder="Write a reply..."
+        className="h-7 text-xs"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault()
+            handleSubmit()
+          }
+          if (e.key === "Escape") onCancel()
+        }}
+      />
+      <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={isPending || !value.trim()}>
+        {isPending ? <Spinner className="size-3" /> : "Reply"}
+      </Button>
+      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onCancel} disabled={isPending}>
+        Cancel
+      </Button>
+    </div>
+  )
+}
 
 function CommentForm({ slug }: { slug: string }) {
   const { mutateAsync: postComment, isPending } = usePostComment(slug)

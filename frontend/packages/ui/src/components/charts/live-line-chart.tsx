@@ -46,6 +46,8 @@ export interface LiveLinePoint {
   yes_price?: number;
   /** NO price — use as dataKey="no_price" for red line */
   no_price?: number;
+  /** Multi-outcome prices keyed by outcome name */
+  [key: string]: number | string | undefined;
 }
 
 export interface LiveLineChartProps {
@@ -73,6 +75,8 @@ export interface LiveLineChartProps {
   margin?: Partial<Margin>;
   /** Freeze chart scrolling. Default: false */
   paused?: boolean;
+  /** Enable multi-outcome mode (3+ outcomes). Default: false */
+  multiOutcome?: boolean;
   /** Child components (LiveLine, Grid, ChartTooltip, LiveXAxis, LiveYAxis, etc.) */
   children: ReactNode;
   className?: string;
@@ -96,6 +100,18 @@ interface AnimFrame {
   displayValueNo?: number;
 }
 
+function numericValues(d: LiveLinePoint): number[] {
+  const vals: number[] = [d.value];
+  if (d.yes_price != null) vals.push(d.yes_price);
+  if (d.no_price != null) vals.push(d.no_price);
+  for (const [k, v] of Object.entries(d)) {
+    if (k !== "time" && k !== "value" && k !== "yes_price" && k !== "no_price" && typeof v === "number") {
+      vals.push(v);
+    }
+  }
+  return vals;
+}
+
 function computeTargetRange(
   data: LiveLinePoint[],
   value: number,
@@ -108,13 +124,9 @@ function computeTargetRange(
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
   for (const d of data) {
-    const v = d.value;
-    if (v < min) min = v;
-    if (v > max) max = v;
-    if (valueNo !== undefined) {
-      const no = d.no_price ?? (1 - v);
-      if (no < min) min = no;
-      if (no > max) max = no;
+    for (const v of numericValues(d)) {
+      if (v < min) min = v;
+      if (v > max) max = v;
     }
   }
   if (value < min) min = value;
