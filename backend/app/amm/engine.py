@@ -142,12 +142,13 @@ class BinaryAMM:
     def apply_trade(self, outcome: Literal["yes", "no"], collateral: Decimal) -> AMMQuote:
         """Execute trade and update pool state."""
         quote = self.buy(outcome, collateral)
+        k = self.yes_shares * self.no_shares
 
         if outcome == "yes":
             self.yes_shares += collateral - quote.fee
-            self.no_shares = self._k() / self.yes_shares if self.yes_shares > 0 else Decimal("0")
+            self.no_shares = k / self.yes_shares if self.yes_shares > 0 else Decimal("0")
         else:
             self.no_shares += collateral - quote.fee
-            self.yes_shares = self._k() / self.no_shares if self.no_shares > 0 else Decimal("0")
+            self.yes_shares = k / self.no_shares if self.no_shares > 0 else Decimal("0")
 
         return quote

@@ -70,7 +70,9 @@ const LiveXAxisInner = memo(function LiveXAxisInner({
     return Array.from({ length: numTicks }, (_, i) => {
       const t = startMs + i * step;
       const x = (xScale(new Date(t)) ?? 0) + margin.left;
-      return { x, label: formatTime(t), stableKey: i };
+      // Offset edge labels so centered text doesn't clip at container bounds
+      const offset = i === 0 ? 40 : i === numTicks - 1 ? -40 : 0;
+      return { x: x + offset, label: formatTime(t), stableKey: i };
     });
   }, [startMs, endMs, numTicks, xScale, margin.left, formatTime]);
 
@@ -98,7 +100,7 @@ const LiveXAxisInner = memo(function LiveXAxisInner({
   }, [pillX]);
 
   return createPortal(
-    <div className="pointer-events-none absolute inset-0">
+    <div className="pointer-events-none absolute inset-0" style={{ padding: `0 ${margin.right}px 0 ${margin.left}px` }}>
       {/* Time labels */}
       {labels.map((l) => (
         <div

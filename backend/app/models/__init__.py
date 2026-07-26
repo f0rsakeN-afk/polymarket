@@ -8,6 +8,8 @@ from app.models.wallet import Wallet, Transaction
 from app.models.comment import Comment
 from app.models.trade import Trade
 from app.models.referral import Referral
+from app.models.faq import MarketFAQ
+from app.models.alert import Alert
 
 __all__ = [
     "Base",
@@ -25,4 +27,6 @@ __all__ = [
     "Comment",
     "Trade",
     "Referral",
+    "MarketFAQ",
+    "Alert",
 ]

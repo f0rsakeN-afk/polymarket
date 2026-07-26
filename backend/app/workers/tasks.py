@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.config import settings
-from app.models import Order, Market, Wallet, Transaction, Position, LiquidityPool, LPShare, Outcome, Trade, User
+from app.models import Order, Market, Wallet, Transaction, Position, LiquidityPool, LPShare, Outcome, Trade, User, Alert
 from app.workers.celery_app import celery_app
 from app.websocket.manager import redis_pubsub
 
@@ -233,6 +233,7 @@ def check_limit_order_execution(self):
 
                 # Trade for public feed
                 trade = Trade(
+                    user_id=order.user_id,
                     market_id=market.id,
                     outcome=outcome.name.lower(),
                     side=order.side,
@@ -267,6 +268,7 @@ def check_limit_order_execution(self):
                     await redis_pubsub.publish_price_update(
                         str(market.id), yes_price, no_price, float(market.total_volume)
                     )
+                    check_price_alerts.delay(str(market.id), yes_price, no_price)
                     await redis_pubsub.publish_order_fill(str(order.user_id), {
                         "order_id": str(order.id),
                         "market_id": str(market.id),
@@ -565,5 +567,54 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
 
             await db.commit()
             return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
+
+    return asyncio.run(_run())
+
+
+@shared_task(bind=True, name="app.workers.tasks.check_price_alerts")
+def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
+    """Check untriggered alerts when price updates and broadcast triggered ones via WebSocket."""
+    logger.info(f"Running check_price_alerts: market={market_id} yes={yes_price:.4f} no={no_price:.4f}")
+
+    async def _run():
+        async with async_session() as db:
+            result = await db.execute(
+                select(Alert).where(
+                    Alert.market_id == market_id,
+                    Alert.triggered == False,
+                )
+            )
+            alerts = result.scalars().all()
+            if not alerts:
+                return "No active alerts"
+
+            triggered_count = 0
+            for alert in alerts:
+                price = yes_price if (alert.outcome == "yes" or alert.outcome is None) else no_price
+                is_triggered = (
+                    (alert.condition == "above" and price >= alert.trigger_price) or
+                    (alert.condition == "below" and price <= alert.trigger_price)
+                )
+                if is_triggered:
+                    alert.triggered = True
+                    alert.triggered_at = datetime.now(timezone.utc).isoformat()
+                    triggered_count += 1
+                    try:
+                        await redis_pubsub.publish_market_event(
+                            str(alert.user_id),
+                            "alert:triggered",
+                            {
+                                "alert_id": str(alert.id),
+                                "market_id": market_id,
+                                "outcome": alert.outcome or "any",
+                                "condition": alert.condition,
+                                "trigger_price": alert.trigger_price,
+                                "actual_price": price,
+                            },
+                        )
+                    except Exception:
+                        pass
+            await db.commit()
+            return f"Checked {len(alerts)} alerts, {triggered_count} triggered"
 
     return asyncio.run(_run())

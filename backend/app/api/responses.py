@@ -1,7 +1,6 @@
 from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 
-
 T = TypeVar("T")
 
 
@@ -28,10 +27,13 @@ def success_response(data: Any, message: str | None = None) -> dict:
     return resp
 
 
-def error_response(message: str, error_code: str | None = None, details: dict | None = None) -> dict:
+def error_response(
+    message: str, error_code: str | None = None, details: dict | None = None
+) -> dict:
     resp = {"success": False, "error": message}
     if error_code:
         resp["error_code"] = error_code
     if details:
         resp["details"] = details
     return resp
+

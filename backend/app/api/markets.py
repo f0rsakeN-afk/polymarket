@@ -11,6 +11,7 @@ from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.market import Market, Outcome
 from app.models.liquidity import LiquidityPool
+from app.models.faq import MarketFAQ
 from app.schemas.market import (
     MarketResponse,
     MarketDetailResponse,
@@ -18,6 +19,7 @@ from app.schemas.market import (
     CreateMarketRequest,
     OutcomeResponse,
 )
+from app.schemas.faq import FAQResponse
 from app.api.responses import success_response
 from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
 from app.amm.engine import BinaryAMM
@@ -41,30 +43,34 @@ def market_to_response(market: Market, yes_price: float = 0.5, no_price: float =
         yes_price=yes_price,
         no_price=no_price,
         closes_at=market.closes_at,
+        winning_outcome_id=str(market.winning_outcome_id) if market.winning_outcome_id else None,
+        winning_outcome_name=None,  # resolved outcome name loaded separately when needed
     )
 
 
-@router.get("/", response_model=MarketListResponse, summary="List markets", description="List all prediction markets with optional filters for category and status.")
+@router.get("/", response_model=MarketListResponse, summary="List markets", description="List all prediction markets with optional filters for category, status, and search query.")
 async def list_markets(
+    q: str | None = None,
     category: str | None = None,
     status: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
-    query = select(Market)
+    base = select(Market, LiquidityPool)
 
+    if q:
+        base = base.where(Market.question.ilike(f"%{q}%"))
     if status:
-        query = query.where(Market.status == status)
+        base = base.where(Market.status == status)
     if category:
-        query = query.where(Market.category == category)
+        base = base.where(Market.category == category)
 
     query = (
-        select(Market, LiquidityPool)
-        .outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
+        base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
         .order_by(Market.created_at.desc())
         .offset((page - 1) * page_size)
-        .limit(page_size + 1)  # +1 to detect has_more without COUNT query
+        .limit(page_size + 1)
     )
 
     result = await db.execute(query)
@@ -358,7 +364,8 @@ async def resolve_market(
 
     # Broadcast resolution to WebSocket clients
     await redis_pubsub.publish_market_event(
-        str(market.id), "market:resolved", {"winning_outcome_id": winning_outcome_id}
+        str(market.id), "market:resolved",
+        {"winning_outcome_id": winning_outcome_id, "winning_outcome_name": outcome.name}
     )
 
     logger.info(f"Market {market_id} resolved with outcome {winning_outcome_id}")
@@ -393,3 +400,68 @@ async def close_market(
 
     logger.info(f"Market {market_id} closed")
     return success_response({"status": "closed"})
+
+
+@router.get("/{slug}/faqs", summary="Get market FAQs", description="Get frequently asked questions for a market.")
+async def get_market_faqs(slug: str, db: AsyncSession = Depends(get_db_replica)):
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+
+    faqs_result = await db.execute(
+        select(MarketFAQ)
+        .where(MarketFAQ.market_id == market.id)
+        .order_by(MarketFAQ.display_order, MarketFAQ.created_at)
+    )
+    faqs = faqs_result.scalars().all()
+
+    return success_response([
+        FAQResponse(
+            id=str(faq.id),
+            question=faq.question,
+            answer=faq.answer,
+            display_order=faq.display_order or 0,
+        ).model_dump()
+        for faq in faqs
+    ])
+
+
+@router.get("/{slug}/related", summary="Get related markets", description="Get related markets based on category and subcategory.")
+async def get_related_markets(
+    slug: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    db: AsyncSession = Depends(get_db_replica),
+):
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+
+    # Find markets in same category or subcategory, excluding current
+    query = (
+        select(Market, LiquidityPool)
+        .outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
+        .where(
+            Market.id != market.id,
+            Market.status == "active",
+            (Market.category == market.category) | (Market.subcategory == market.subcategory),
+        )
+        .order_by(Market.total_volume.desc())
+        .limit(limit + 1)
+    )
+
+    query_result = await db.execute(query)
+    rows = query_result.all()
+
+    related = []
+    for m, pool in rows[:limit]:
+        if pool:
+            total_shares = float(pool.yes_shares) + float(pool.no_shares)
+            yes_price = float(pool.no_shares) / total_shares if total_shares > 0 else 0.5
+            no_price = float(pool.yes_shares) / total_shares if total_shares > 0 else 0.5
+        else:
+            yes_price, no_price = 0.5, 0.5
+        related.append(market_to_response(m, yes_price, no_price).model_dump())
+
+    return success_response(related)

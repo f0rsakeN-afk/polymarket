@@ -270,8 +270,9 @@ async def place_order(data: OrderRequest, request: Request, db: AsyncSession = D
     )
     db.add(order)
 
-    # Record trade for public feed (denormalized, no user data)
+    # Record trade for public feed
     trade = Trade(
+        user_id=user.id,
         market_id=market.id,
         outcome=data.outcome,
         side=data.side,
@@ -338,6 +339,9 @@ async def place_order(data: OrderRequest, request: Request, db: AsyncSession = D
     await redis_pubsub.publish_price_update(
         str(market.id), yes_price, no_price, float(market.total_volume)
     )
+    # Check price alerts
+    from app.workers.tasks import check_price_alerts
+    check_price_alerts.delay(str(market.id), yes_price, no_price)
 
     # Publish trade event for live feed
     try:
@@ -346,6 +350,7 @@ async def place_order(data: OrderRequest, request: Request, db: AsyncSession = D
             "side": data.side,
             "price": float(quote.price),
             "amount": float(shares),
+            "username": user.username,
         })
     except Exception:
         pass  # non-fatal

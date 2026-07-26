@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 class OrderRequest(BaseModel):
     market_id: str
-    outcome: str = Field(..., pattern="^(yes|no)$")
+    outcome: str = Field(...)  # Accepts "yes", "no", or outcome name for multi-outcome markets
     side: str = Field(..., pattern="^(buy|sell)$")
     order_type: str = Field(default="market", pattern="^(market|limit|fill_or_kill)$")
     amount: float = Field(..., gt=0)

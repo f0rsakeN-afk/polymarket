@@ -82,7 +82,6 @@ async def withdraw(
 
     # Lock and debit
     wallet.balance -= Decimal(str(data.amount))
-    await db.commit()
 
     # Record transaction
     tx = Transaction(
@@ -130,7 +129,7 @@ async def list_transactions(
                 amount=float(tx.amount),
                 balance_after=float(tx.balance_after),
                 status=tx.status,
-                created_at=tx.updated_at.isoformat() if tx.updated_at else None,
+                created_at=tx.created_at.isoformat() if tx.created_at else None,
             )
             for tx in txs
         ],

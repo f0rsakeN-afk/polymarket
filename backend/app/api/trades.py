@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, get_db_replica
 from app.models.market import Market
 from app.models.trade import Trade
+from app.models.user import User
 from app.schemas.trade import TradeResponse
 from app.api.responses import success_response
 from app.api.exceptions import NotFoundError
@@ -22,8 +23,9 @@ async def list_trades(
     db: AsyncSession = Depends(get_db_replica),
 ):
     query = (
-        select(Trade, Market.slug, Market.question)
+        select(Trade, Market.slug, Market.question, User.username)
         .join(Market, Trade.market_id == Market.id)
+        .join(User, Trade.user_id == User.id)
         .order_by(Trade.executed_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -46,8 +48,9 @@ async def list_trades(
             "price": float(trade.price),
             "amount": float(trade.amount),
             "executed_at": trade.executed_at,
+            "username": username,
         }
-        for trade, slug, question in rows
+        for trade, slug, question, username in rows
     ]
 
     return success_response({
@@ -70,13 +73,14 @@ async def list_market_trades(
         raise NotFoundError("Market not found")
 
     result = await db.execute(
-        select(Trade)
+        select(Trade, User.username)
+        .join(User, Trade.user_id == User.id)
         .where(Trade.market_id == market.id)
         .order_by(Trade.executed_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    trades = result.scalars().all()
+    rows = result.all()
 
     return success_response({
         "trades": [
@@ -90,8 +94,9 @@ async def list_market_trades(
                 "price": float(t.price),
                 "amount": float(t.amount),
                 "executed_at": t.executed_at,
+                "username": username,
             }
-            for t in trades
+            for t, username in rows
         ],
         "page": page,
         "page_size": page_size,

@@ -64,57 +64,38 @@ async def get_market_activity(
         "status": market.status,
     }
 
-    # Top YES holders
-    yes_outcome_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id, Outcome.outcome_index == 0)
+    # All outcomes for this market
+    outcomes_result = await db.execute(
+        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
     )
-    yes_outcome = yes_outcome_result.scalar_one_or_none()
+    outcomes = outcomes_result.scalars().all()
 
-    top_holders_yes = []
-    if yes_outcome:
+    # Group top holders by outcome
+    top_holders_by_outcome = {}
+    for outcome in outcomes:
         holders_result = await db.execute(
             select(Position, User.username)
             .join(User, Position.user_id == User.id)
-            .where(Position.market_id == market.id, Position.outcome_id == yes_outcome.id)
+            .where(Position.market_id == market.id, Position.outcome_id == outcome.id)
             .order_by(Position.shares_held.desc())
             .limit(10)
         )
+        holders = []
         for pos, username in holders_result:
-            top_holders_yes.append({
+            holders.append({
                 "user_id": str(pos.user_id),
                 "username": username,
                 "shares_held": float(pos.shares_held),
                 "average_price": float(pos.average_price),
                 "realized_pnl": float(pos.realized_pnl),
             })
-
-    # Top NO holders
-    no_outcome_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id, Outcome.outcome_index == 1)
-    )
-    no_outcome = no_outcome_result.scalar_one_or_none()
-
-    top_holders_no = []
-    if no_outcome:
-        holders_result = await db.execute(
-            select(Position, User.username)
-            .join(User, Position.user_id == User.id)
-            .where(Position.market_id == market.id, Position.outcome_id == no_outcome.id)
-            .order_by(Position.shares_held.desc())
-            .limit(10)
-        )
-        for pos, username in holders_result:
-            top_holders_no.append({
-                "user_id": str(pos.user_id),
-                "username": username,
-                "shares_held": float(pos.shares_held),
-                "average_price": float(pos.average_price),
-                "realized_pnl": float(pos.realized_pnl),
-            })
+        if holders:
+            top_holders_by_outcome[outcome.name] = holders
 
     # Recent trades
     trades_result = await db.execute(
-        select(Trade)
+        select(Trade, User.username)
+        .join(User, Trade.user_id == User.id)
         .where(Trade.market_id == market.id)
         .order_by(Trade.executed_at.desc())
         .limit(limit)
@@ -127,8 +108,9 @@ async def get_market_activity(
             "price": float(t.price),
             "amount": float(t.amount),
             "executed_at": t.executed_at.isoformat(),
+            "username": username,
         }
-        for t in trades_result.scalars().all()
+        for t, username in trades_result.all()
     ]
 
     # Recent comments
@@ -153,8 +135,7 @@ async def get_market_activity(
 
     return success_response({
         "market_stats": market_stats,
-        "top_holders_yes": top_holders_yes,
-        "top_holders_no": top_holders_no,
+        "top_holders_by_outcome": top_holders_by_outcome,
         "recent_trades": recent_trades,
         "recent_comments": recent_comments,
     })

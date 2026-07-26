@@ -20,6 +20,7 @@ from app.api.handlers import (
 )
 from app.api.exceptions import AppException
 from app.api.auth import router as auth_router
+from app.api.alerts import router as alerts_router
 from app.api.markets import router as markets_router
 from app.api.orders import router as orders_router
 from app.api.positions import router as positions_router
@@ -103,6 +104,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(markets_router, prefix="/api/v1")
 app.include_router(orders_router, prefix="/api/v1")
 app.include_router(positions_router, prefix="/api/v1")
+app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(wallet_router, prefix="/api/v1")
 app.include_router(webhook_router, prefix="/api/v1")
 app.include_router(liquidity_router, prefix="/api/v1")

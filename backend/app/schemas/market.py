@@ -23,6 +23,8 @@ class MarketResponse(BaseModel):
     yes_price: float
     no_price: float
     closes_at: datetime
+    winning_outcome_id: str | None = None
+    winning_outcome_name: str | None = None
 
     model_config = {"from_attributes": True}
 
