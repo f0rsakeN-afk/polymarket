@@ -27,7 +27,7 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
 
     type = Column(
         String(30), nullable=False
-    )  # deposit, withdrawal, trade_buy, trade_sell, fee, liquidity_add, liquidity_remove, settlement_win, settlement_loss, refund
+    )  # deposit, withdrawal, trade_buy, trade_sell, fee, liquidity_add, liquidity_remove, settlement_win, settlement_loss, refund, split, merge
     amount = Column(Numeric(20, 8), nullable=False)  # positive = credit, negative = debit
     balance_after = Column(Numeric(20, 8), nullable=False)
 

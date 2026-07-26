@@ -10,6 +10,7 @@ from app.models.trade import Trade
 from app.models.referral import Referral
 from app.models.faq import MarketFAQ
 from app.models.alert import Alert
+from app.models.price_history import PriceHistory
 
 __all__ = [
     "Base",
@@ -29,4 +30,5 @@ __all__ = [
     "Referral",
     "MarketFAQ",
     "Alert",
+    "PriceHistory",
 ]
