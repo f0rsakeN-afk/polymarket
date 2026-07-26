@@ -34,6 +34,6 @@ jobs:
           SHA_SHORT="${GITHUB_SHA:0:7}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          echo "{\"embeds\":[{\"title\":\"Code Pushed to ${BRANCH_NAME}\",\"description\":\"**${COMMIT_MSG}**\",\"color\":16747520,\"fields\":[{\"name\":\"Author\",\"value\":\"${AUTHOR_NAME}\",\"inline\":true},{\"name\":\"Branch\",\"value\":\"${BRANCH_NAME}\",\"inline\":true},{\"name\":\"Files Changed\",\"value\":\"\\\`\\\`\\\`diff\\n${FILES_CHANGED}\\n\\\`\\\`\\\`\"}],\"footer\":{\"text\":\"sha: ${SHA_SHORT}\"},\"timestamp\":\"${TIMESTAMP}\"}]}" > payload.json
+          python3 .github/workflows/send_discord.py "${BRANCH_NAME}" "${COMMIT_MSG}" "${AUTHOR_NAME}" "${FILES_CHANGED}" "${SHA_SHORT}" "${TIMESTAMP}"
 
           curl -X POST "${DISCORD_WEBHOOK}" -H "Content-Type: application/json" -d @payload.json
