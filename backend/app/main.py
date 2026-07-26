@@ -1,44 +1,42 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
+from app.api.alerts import router as alerts_router
+from app.api.auth import router as auth_router
+from app.api.comments import router as comments_router
+from app.api.disputes import router as disputes_router
+from app.api.exceptions import AppException
+from app.api.handlers import (
+    app_exception_handler,
+    generic_exception_handler,
+    http_exception_handler,
+    integrity_error_handler,
+    validation_exception_handler,
+)
+from app.api.liquidity import router as liquidity_router
+from app.api.market_activity import router as market_activity_router
+from app.api.markets import router as markets_router
+from app.api.middleware import RateLimitMiddleware, RequestLoggingMiddleware
+from app.api.notifications import router as notifications_router
+from app.api.orders import router as orders_router
+from app.api.positions import router as positions_router
+from app.api.referrals import router as referrals_router
+from app.api.split_merge import router as split_merge_router
+from app.api.trades import router as trades_router
+from app.api.treasury import router as treasury_router
+from app.api.wallet import router as wallet_router
+from app.api.webhooks import router as webhook_router
 from app.config import settings
 from app.database import engine, replica_engine
 from app.models import Base
-from app.api.handlers import (
-    http_exception_handler,
-    app_exception_handler,
-    validation_exception_handler,
-    integrity_error_handler,
-    generic_exception_handler,
-)
-from app.api.exceptions import AppException
-from app.api.auth import router as auth_router
-from app.api.alerts import router as alerts_router
-from app.api.markets import router as markets_router
-from app.api.orders import router as orders_router
-from app.api.positions import router as positions_router
-from app.api.wallet import router as wallet_router
-from app.api.webhooks import router as webhook_router
-from app.api.liquidity import router as liquidity_router
-from app.api.comments import router as comments_router
-from app.api.trades import router as trades_router
-from app.api.referrals import router as referrals_router
-from app.api.market_activity import router as market_activity_router
-from app.api.split_merge import router as split_merge_router
-from app.api.disputes import router as disputes_router
-from app.api.notifications import router as notifications_router
-from app.api.treasury import router as treasury_router
-from app.websocket.routes import router as ws_router
 from app.websocket.manager import redis_pubsub
-from app.api.middleware import RequestLoggingMiddleware, RateLimitMiddleware
-from app.api.responses import error_response
+from app.websocket.routes import router as ws_router
 
 # Structured logging
 logging.basicConfig(

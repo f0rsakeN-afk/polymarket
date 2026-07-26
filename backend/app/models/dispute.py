@@ -1,7 +1,8 @@
-from app.models.base import Base, UUIDMixin, TimestampMixin
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
+
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Dispute(Base, UUIDMixin, TimestampMixin):

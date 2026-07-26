@@ -1,10 +1,10 @@
-import uuid
-from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, Text
+from datetime import UTC, datetime
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class User(Base, UUIDMixin, TimestampMixin):
@@ -46,8 +46,8 @@ class Session(Base, UUIDMixin):
     )
     user_agent = Column(Text)
     ip_address = Column(String(45))
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    last_active_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
+    last_active_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
     user = relationship("User")

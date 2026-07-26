@@ -1,9 +1,8 @@
-import uuid
-from sqlalchemy import Column, String, Float, Boolean, ForeignKey
+from sqlalchemy import Boolean, Column, Float, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Alert(Base, UUIDMixin, TimestampMixin):

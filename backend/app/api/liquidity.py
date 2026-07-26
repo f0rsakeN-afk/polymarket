@@ -1,17 +1,17 @@
 import logging
 from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ValidationError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.market import Market
 from app.models.liquidity import LiquidityPool, LPShare
-from app.api.responses import success_response
-from app.api.exceptions import ValidationError, NotFoundError
+from app.models.market import Market
 from app.services.liquidity_service import LiquidityService
-from app.models.trade import Trade
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["liquidity"])
@@ -98,18 +98,18 @@ async def get_lp_analytics(
     rows = lp_result.all()
 
     positions = []
-    total_value = Decimal("0")
+    total_value = Decimal(0)
 
     for lp, pool, market in rows:
-        share_pct = lp.lp_tokens / pool.lp_token_supply if pool.lp_token_supply > 0 else Decimal("0")
+        share_pct = lp.lp_tokens / pool.lp_token_supply if pool.lp_token_supply > 0 else Decimal(0)
         pool_value = pool.yes_shares + pool.no_shares
         position_value = pool_value * share_pct
         fees_earned = pool.protocol_fees * share_pct
         net_value = position_value - lp.collateral_deposited
-        apr = Decimal("0")
+        apr = Decimal(0)
         if lp.collateral_deposited > 0:
             days_since = max(1, (pool.updated_at - lp.created_at).days) if lp.created_at and pool.updated_at else 1
-            apr = (net_value / lp.collateral_deposited) * (Decimal("365") / Decimal(str(days_since))) * Decimal("100")
+            apr = (net_value / lp.collateral_deposited) * (Decimal(365) / Decimal(str(days_since))) * Decimal(100)
 
         total_value += position_value
 

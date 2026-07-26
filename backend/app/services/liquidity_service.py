@@ -4,11 +4,11 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market import Market
-from app.models.liquidity import LiquidityPool, LPShare
-from app.models.wallet import Wallet, Transaction
-from app.models.user import User
 from app.api.exceptions import NotFoundError, ValidationError
+from app.models.liquidity import LiquidityPool, LPShare
+from app.models.market import Market
+from app.models.user import User
+from app.models.wallet import Transaction, Wallet
 
 logger = logging.getLogger("polymarket")
 
@@ -56,9 +56,9 @@ class LiquidityService:
             pool_total = pool.yes_shares + pool.no_shares
             lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total
         else:
-            lp_tokens_minted = amount * Decimal("2")
+            lp_tokens_minted = amount * Decimal(2)
 
-        collateral_each = amount / Decimal("2")
+        collateral_each = amount / Decimal(2)
         pool.yes_shares += collateral_each
         pool.no_shares += collateral_each
         pool.collateral += amount

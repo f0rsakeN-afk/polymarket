@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy import select
@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
-from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
 
@@ -102,7 +101,7 @@ class NotificationService:
         notif = result.scalar_one_or_none()
         if not notif:
             return False
-        notif.read_at = datetime.now(timezone.utc)
+        notif.read_at = datetime.now(UTC)
         await db.commit()
         return True
 
@@ -113,6 +112,6 @@ class NotificationService:
             update(Notification).where(
                 Notification.user_id == user_id,
                 Notification.read_at.is_(None),
-            ).values(read_at=datetime.now(timezone.utc))
+            ).values(read_at=datetime.now(UTC))
         )
         await db.commit()

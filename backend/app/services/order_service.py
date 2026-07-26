@@ -1,36 +1,35 @@
+import json
 import logging
 import time
-import json
 import uuid
-from datetime import datetime, timezone
-from decimal import Decimal
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.amm.engine import BinaryAMM
+from app.api.exceptions import (
+    InsufficientBalanceError,
+    MarketClosedError,
+    NotFoundError,
+    SlippageExceededError,
+    ValidationError,
+)
 from app.config import settings
+from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
-from app.models.liquidity import LiquidityPool
-from app.models.trade import Trade
 from app.models.referral import Referral
+from app.models.trade import Trade
 from app.models.user import User
-from app.amm.engine import BinaryAMM, AMMQuote
-from app.api.exceptions import (
-    NotFoundError,
-    ValidationError,
-    InsufficientBalanceError,
-    MarketClosedError,
-    IdempotencyError,
-    SlippageExceededError,
-)
-from app.websocket.manager import redis_pubsub
+from app.models.wallet import Transaction, Wallet
 from app.redis import get_redis, redis_cb
 from app.schemas.order import OrderRequest
 from app.services.matching_engine import MatchingEngine
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
@@ -106,9 +105,9 @@ class OrderService:
         price_before = float(amm.price(outcome_name))
 
         if side == "buy":
-            quote = amm.buy(outcome_name, amount)
+            amm.buy(outcome_name, amount)
         else:
-            quote = amm.sell(outcome_name, amount)
+            amm.sell(outcome_name, amount)
 
         price_after = float(amm.price(outcome_name))
         slippage = abs(price_after - price_before)
@@ -159,7 +158,7 @@ class OrderService:
             raise NotFoundError("Market not found")
         if market.status != "active":
             raise MarketClosedError()
-        if market.closes_at and datetime.now(timezone.utc) >= market.closes_at:
+        if market.closes_at and datetime.now(UTC) >= market.closes_at:
             raise MarketClosedError({"reason": "Market has closed for trading"})
 
         outcomes_result = await db.execute(
@@ -201,14 +200,14 @@ class OrderService:
                     status="duplicate",
                     side=data.side,
                     outcome=data.outcome,
-                    shares=existing_order.shares_bought or existing_order.shares_sold or Decimal("0"),
+                    shares=existing_order.shares_bought or existing_order.shares_sold or Decimal(0),
                     price=existing_order.price,
-                    price_before=Decimal("0"),
-                    price_after=Decimal("0"),
-                    yes_price_after=Decimal("0"),
-                    no_price_after=Decimal("0"),
-                    slippage=Decimal("0"),
-                    fee=existing_order.fees_paid or Decimal("0"),
+                    price_before=Decimal(0),
+                    price_after=Decimal(0),
+                    yes_price_after=Decimal(0),
+                    no_price_after=Decimal(0),
+                    slippage=Decimal(0),
+                    fee=existing_order.fees_paid or Decimal(0),
                     wallet_balance=wallet.balance,
                 )
 
@@ -280,12 +279,12 @@ class OrderService:
         else:
             remaining = amount - matched_shares
 
-        amm_shares = Decimal("0")
-        amm_price_val = Decimal("0")
-        amm_fee = Decimal("0")
-        amm_slippage = Decimal("0")
-        sell_proceeds_amm = Decimal("0")
-        amm_collateral = Decimal("0")
+        amm_shares = Decimal(0)
+        amm_price_val = Decimal(0)
+        amm_fee = Decimal(0)
+        amm_slippage = Decimal(0)
+        sell_proceeds_amm = Decimal(0)
+        Decimal(0)
 
         if remaining > 0:
             if data.order_type in ("limit", "fill_or_kill"):
@@ -342,13 +341,13 @@ class OrderService:
                         side=data.side,
                         outcome=data.outcome,
                         shares=matched_shares,
-                        price=limit_price or Decimal("0"),
+                        price=limit_price or Decimal(0),
                         price_before=price_before,
                         price_after=price_before,
-                        yes_price_after=Decimal("0"),
-                        no_price_after=Decimal("0"),
-                        slippage=Decimal("0"),
-                        fee=Decimal("0"),
+                        yes_price_after=Decimal(0),
+                        no_price_after=Decimal(0),
+                        slippage=Decimal(0),
+                        fee=Decimal(0),
                         wallet_balance=wallet.balance,
                     )
 
@@ -364,7 +363,6 @@ class OrderService:
                 amm_price_val = quote.price
                 amm_fee = quote.fee
                 amm_slippage = quote.slippage
-                amm_collateral = remaining
             else:
                 tmp_position = await db.execute(
                     select(Position).where(
@@ -391,7 +389,6 @@ class OrderService:
                 amm_price_val = quote.price
                 amm_fee = quote.fee
                 amm_slippage = quote.slippage
-                amm_collateral = sell_proceeds_amm
 
             trade_value = remaining * amm_price_val
             protocol_fee = trade_value * Decimal("0.01")
@@ -401,7 +398,7 @@ class OrderService:
             pool.no_shares = amm.no_shares
 
         total_shares = matched_shares + amm_shares
-        total_usdc_spent = matched_usdc + (remaining if data.side == "buy" else Decimal("0"))
+        total_usdc_spent = matched_usdc + (remaining if data.side == "buy" else Decimal(0))
         total_usdc_received = matched_usdc + sell_proceeds_amm
 
         # ── Step 6: Slippage validation ──
@@ -439,14 +436,14 @@ class OrderService:
             side=data.side,
             order_type=data.order_type,
             amount=amount,
-            remaining_amount=Decimal("0"),
-            price=amm_price_val if amm_price_val > 0 else (limit_price or Decimal("0")),
+            remaining_amount=Decimal(0),
+            price=amm_price_val if amm_price_val > 0 else (limit_price or Decimal(0)),
             shares_bought=total_shares if data.side == "buy" else None,
             shares_sold=total_shares if data.side == "sell" else None,
             fees_paid=amm_fee,
             status="filled",
             client_order_id=data.client_order_id,
-            executed_at=datetime.now(timezone.utc),
+            executed_at=datetime.now(UTC),
         )
         db.add(order)
 
@@ -468,7 +465,7 @@ class OrderService:
                     ) / total_shares_pos
                 position.shares_held = total_shares_pos
             else:
-                avg_price = total_cost / total_shares if total_shares > 0 else Decimal("0")
+                avg_price = total_cost / total_shares if total_shares > 0 else Decimal(0)
                 position = Position(
                     user_id=user.id,
                     market_id=market.id,
@@ -489,7 +486,7 @@ class OrderService:
                 side=data.side,
                 price=md["match_price"],
                 amount=md["match_shares"],
-                executed_at=datetime.now(timezone.utc),
+                executed_at=datetime.now(UTC),
             )
             db.add(t)
 
@@ -501,7 +498,7 @@ class OrderService:
                 side=data.side,
                 price=amm_price_val,
                 amount=total_shares,
-                executed_at=datetime.now(timezone.utc),
+                executed_at=datetime.now(UTC),
             )
             db.add(t)
 
@@ -538,7 +535,7 @@ class OrderService:
                     ref_wallet.balance += reward
                     referral.reward_amount = reward
                     referral.status = "completed"
-                    referral.completed_at = datetime.now(timezone.utc)
+                    referral.completed_at = datetime.now(UTC)
                     ref_tx = Transaction(
                         user_id=referral.referrer_id,
                         wallet_id=ref_wallet.id,
@@ -588,7 +585,7 @@ class OrderService:
             f"{data.side} {data.outcome} amount={float(amount)} shares={float(total_shares)}"
         )
 
-        avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal("0")
+        avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal(0)
 
         return OrderResult(
             order_id=str(order.id),
@@ -599,8 +596,8 @@ class OrderService:
             price=avg_price,
             price_before=price_before,
             price_after=amm_price_val if amm_price_val > 0 else avg_price,
-            yes_price_after=Decimal(float(pool.no_shares) / float(total_shares + 1)) if data.side == "buy" else Decimal("0"),
-            no_price_after=Decimal("0"),
+            yes_price_after=Decimal(float(pool.no_shares) / float(total_shares + 1)) if data.side == "buy" else Decimal(0),
+            no_price_after=Decimal(0),
             slippage=amm_slippage,
             fee=amm_fee,
             wallet_balance=wallet.balance,
@@ -624,7 +621,7 @@ class OrderService:
             raise NotFoundError("Pending order not found")
 
         order.status = "cancelled"
-        order.executed_at = datetime.now(timezone.utc)
+        order.executed_at = datetime.now(UTC)
 
         if order.side == "buy" and order.amount > 0:
             wallet = await db.execute(
@@ -632,7 +629,7 @@ class OrderService:
             )
             wallet = wallet.scalar_one_or_none()
             if wallet:
-                wallet.locked_balance = max(Decimal("0"), wallet.locked_balance - order.amount)
+                wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.amount)
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")

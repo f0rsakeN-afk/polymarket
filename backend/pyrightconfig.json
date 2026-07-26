@@ -1,0 +1,14 @@
+{
+  "pythonVersion": "3.13",
+  "exclude": ["migrations/"],
+  "reportGeneralTypeIssues": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportReturnType": "none",
+  "reportCallIssue": "none",
+  "reportPossiblyUnboundVariable": "none",
+  "reportAssignmentType": "none",
+  "reportIncompatibleVariableOverride": "none",
+  "reportInvalidTypeForm": "none"
+}

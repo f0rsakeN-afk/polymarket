@@ -1,18 +1,18 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.notification import Notification, NotificationPreference
+from app.models.notification import Notification
 from app.schemas.notification import (
     NotificationPreferenceResponse,
     NotificationResponse,
     UpdateNotificationPreferencesRequest,
 )
-from app.api.responses import success_response, PaginatedResponse
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("polymarket")

@@ -1,21 +1,21 @@
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.market import Market
 from app.models.dispute import Dispute
+from app.models.market import Market
 from app.schemas.dispute import (
     CreateDisputeRequest,
     DisputeResponse,
     ProposeResolutionRequest,
 )
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("polymarket")
@@ -38,7 +38,7 @@ async def create_dispute(
     if market.status not in ("resolved", "dispute_window"):
         raise ValidationError("Market is not in a resolvable state")
 
-    if market.dispute_deadline and datetime.now(timezone.utc) > market.dispute_deadline:
+    if market.dispute_deadline and datetime.now(UTC) > market.dispute_deadline:
         raise ValidationError("Dispute window has closed")
 
     dispute = Dispute(
@@ -90,8 +90,8 @@ async def propose_resolution(
 
     market.proposed_outcome_id = req.outcome_id
     market.resolution_source = req.resolution_source
-    market.resolution_proposed_at = datetime.now(timezone.utc)
-    market.dispute_deadline = datetime.now(timezone.utc) + timedelta(hours=DISPUTE_WINDOW_HOURS)
+    market.resolution_proposed_at = datetime.now(UTC)
+    market.dispute_deadline = datetime.now(UTC) + timedelta(hours=DISPUTE_WINDOW_HOURS)
     market.status = "dispute_window"
     await db.commit()
 

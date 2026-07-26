@@ -1,7 +1,8 @@
 import logging
-from fastapi import Request, HTTPException, status
-from fastapi.responses import JSONResponse
+
+from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
 from app.api.exceptions import AppException

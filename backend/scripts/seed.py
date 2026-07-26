@@ -4,23 +4,22 @@ Run with: python -m scripts.seed
 """
 import asyncio
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from random import choice, randint, uniform
 
 from sqlalchemy import text
 
 from app.database import async_session_maker
+from app.models.comment import Comment
+from app.models.faq import MarketFAQ
+from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
+from app.models.order import Order
+from app.models.position import Position
+from app.models.trade import Trade
 from app.models.user import User
 from app.models.wallet import Wallet
-from app.models.market import Market, Outcome
-from app.models.liquidity import LiquidityPool
-from app.models.trade import Trade
-from app.models.comment import Comment
-from app.models.position import Position
-from app.models.faq import MarketFAQ
-from app.models.order import Order
-
 
 # Test users
 TEST_USERS = [
@@ -114,7 +113,7 @@ async def seed():
                     id=uuid.uuid4(),
                     user_id=user.id,
                     balance=Decimal(str(randint(5000, 100000))),
-                    locked_balance=Decimal("0"),
+                    locked_balance=Decimal(0),
                     currency="USDC",
                 )
                 db.add(wallet)
@@ -124,7 +123,7 @@ async def seed():
         # Create markets (skip if exists)
         print("Creating markets...")
         markets = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for market_data in MARKETS_DATA:
             result = await db.execute(
@@ -223,7 +222,7 @@ async def seed():
             )
             if not result.fetchone():
                 faq_templates = [
-                    {"question": "What does this market resolve to?", "answer": f"This market will resolve based on the outcome of the event described in the question."},
+                    {"question": "What does this market resolve to?", "answer": "This market will resolve based on the outcome of the event described in the question."},
                     {"question": "How is the winner determined?", "answer": "The market resolves based on credible public sources."},
                     {"question": "What happens if the question is ambiguous?", "answer": "The market resolver makes a final decision using reasonable interpretation."},
                 ]
@@ -326,7 +325,7 @@ async def seed():
                     position_count += 1
 
         await db.commit()
-        print(f"Seeding complete!")
+        print("Seeding complete!")
         print(f"  - {len(users)} users")
         print(f"  - {len(markets)} markets")
         print(f"  - {trade_count} trades")

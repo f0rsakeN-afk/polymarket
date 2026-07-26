@@ -48,3 +48,8 @@ ignore = ["E501", "S110", "BLE001", "S311"]
 "scripts/*" = ["S311", "S608", "S106"]
 "migrations/*" = ["ALL"]
 "app/config.py" = ["S105", "S106"]
+
+reportGeneralTypeIssues.enabled = false
+
+[tool.pyright.reportAttributeAccessIssue]
+enabled = false

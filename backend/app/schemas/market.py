@@ -1,6 +1,6 @@
 from datetime import datetime
+
 from pydantic import BaseModel, Field
-from decimal import Decimal
 
 
 class OutcomeResponse(BaseModel):

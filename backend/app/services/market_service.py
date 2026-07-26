@@ -1,12 +1,10 @@
 import asyncio
-import time
 import logging
+import time
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.market import Market
 from app.models.liquidity import LiquidityPool
 from app.redis import get_redis, redis_cb
 
@@ -50,7 +48,6 @@ class MarketService:
     @staticmethod
     async def get_cached_market_prices(market_id: str):
         try:
-            import redis as redis_lib
             r = get_redis()
             key = f"market:{market_id}:price"
             async def _hgetall():

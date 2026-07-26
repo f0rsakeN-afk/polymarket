@@ -1,18 +1,14 @@
-import uuid
 import logging
-from decimal import Decimal
-from fastapi import APIRouter, Depends, Query, Request
+import uuid
+
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.user import User
 from app.models.referral import Referral
-from app.models.wallet import Wallet, Transaction
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError
-from app.config import settings
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/referrals", tags=["referrals"])

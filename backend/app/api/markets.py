@@ -1,34 +1,30 @@
-import asyncio
 import logging
-import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
-from app.models.market import Market, Outcome
-from app.models.liquidity import LiquidityPool
 from app.models.faq import MarketFAQ
+from app.models.liquidity import LiquidityPool
+from app.models.market import Market, Outcome
 from app.models.position import Position
-from app.models.wallet import Wallet, Transaction
-from app.schemas.market import (
-    MarketResponse,
-    MarketDetailResponse,
-    MarketListResponse,
-    CreateMarketRequest,
-    OutcomeResponse,
-)
+from app.models.wallet import Transaction, Wallet
 from app.schemas.faq import FAQResponse
-from app.schemas.market import ResolveMarketRequest
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
-from app.amm.engine import BinaryAMM
-from app.workers.tasks import resolve_market
-from app.websocket.manager import redis_pubsub
+from app.schemas.market import (
+    CreateMarketRequest,
+    MarketListResponse,
+    MarketResponse,
+    OutcomeResponse,
+    ResolveMarketRequest,
+)
 from app.services.market_service import MarketService
+from app.workers.tasks import resolve_market
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["markets"])
@@ -233,11 +229,11 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
-            half = amount_dec / Decimal("2")
+            half = amount_dec / Decimal(2)
             pool.yes_shares += half
             pool.no_shares += half
             pool.collateral += amount_dec
-            pool.lp_token_supply = amount_dec * Decimal("2")
+            pool.lp_token_supply = amount_dec * Decimal(2)
 
     await db.commit()
     logger.info(f"Market created: {data.slug} by admin={user.id}")
@@ -265,8 +261,8 @@ async def get_price_history(
     to_date: str | None = None,
     db: AsyncSession = Depends(get_db_replica),
 ):
-    from app.models.price_history import PriceHistory
     from app.models.market import Outcome
+    from app.models.price_history import PriceHistory
 
     market = await db.execute(select(Market).where(Market.slug == slug))
     market = market.scalar_one_or_none()
@@ -302,7 +298,7 @@ async def get_price_history(
     samples = []
     for bucket_ts in sorted(grouped):
         bucket_rows = grouped[bucket_ts]
-        ts_dt = datetime.fromtimestamp(bucket_ts, tz=timezone.utc)
+        ts_dt = datetime.fromtimestamp(bucket_ts, tz=UTC)
         outcome_prices = {}
         total_vol = 0
         for r in bucket_rows:
@@ -373,7 +369,7 @@ async def resolve_market_endpoint(
 
     market.status = "resolved"
     market.winning_outcome_id = outcome.id
-    market.resolved_at = datetime.now(timezone.utc)
+    market.resolved_at = datetime.now(UTC)
     await db.commit()
 
     resolve_market.delay(str(market.id), str(outcome.id))

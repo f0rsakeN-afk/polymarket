@@ -1,8 +1,10 @@
-from app.models.base import Base, UUIDMixin
-from sqlalchemy import Column, String, Numeric, DateTime, ForeignKey, Index
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone
+
+from app.models.base import Base, UUIDMixin
 
 
 class Trade(Base, UUIDMixin):
@@ -20,6 +22,6 @@ class Trade(Base, UUIDMixin):
     side = Column(String(10), nullable=False)
     price = Column(Numeric(10, 8), nullable=False)
     amount = Column(Numeric(20, 8), nullable=False)
-    executed_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    executed_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
 
     market = relationship("Market", back_populates="trades")

@@ -3,16 +3,16 @@ from datetime import datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import NotFoundError
+from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.market import Market, Outcome
 from app.models.order import Order
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError
-from app.schemas.order import OrderRequest, QuoteRequest, QuoteResponse
+from app.schemas.order import OrderRequest, QuoteRequest
 from app.services.order_service import OrderService
 
 logger = logging.getLogger("polymarket")
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 @router.post("/quote", summary="Get a firm quote with price and slippage estimate")
 async def get_quote(data: QuoteRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    user = await get_current_user(request, db)
+    await get_current_user(request, db)
     result = await OrderService.compute_quote(
         db, data.market_id, data.outcome, data.side, Decimal(str(data.amount))
     )

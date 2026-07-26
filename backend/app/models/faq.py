@@ -1,7 +1,8 @@
-from app.models.base import Base, UUIDMixin, TimestampMixin
-from sqlalchemy import Column, Text, ForeignKey, Integer
+from sqlalchemy import Column, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
+
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class MarketFAQ(Base, UUIDMixin, TimestampMixin):

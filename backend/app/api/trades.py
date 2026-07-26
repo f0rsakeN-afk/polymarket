@@ -1,15 +1,15 @@
 import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, get_db_replica
+from app.api.exceptions import NotFoundError
+from app.api.responses import success_response
+from app.database import get_db_replica
 from app.models.market import Market
 from app.models.trade import Trade
 from app.models.user import User
-from app.schemas.trade import TradeResponse
-from app.api.responses import success_response
-from app.api.exceptions import NotFoundError
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(tags=["trades"])
