@@ -9,7 +9,7 @@ import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets } from "@/hooks/use-markets"
+import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets, usePriceHistory } from "@/hooks/use-markets"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { api } from "@/lib/api/client"
 import { TradeFeed } from "@/components/trades/trade-feed"
@@ -17,10 +17,11 @@ import { TradeForm } from "./trade-form"
 import { AlertDialog } from "@/components/alerts/alert-dialog"
 import { OrderBook } from "./order-book"
 import { CommentList, CommentForm } from "./comment-list"
+import { AddLiquidityForm } from "@/components/liquidity/add-liquidity-form"
 import { LiveTradeTicker } from "./live-trade-ticker"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
-import type { MarketDetailResponse } from "@/lib/types/api"
+import type { MarketDetailResponse, PriceHistoryPoint, Trade } from "@/lib/types/api"
 import { cn } from "@workspace/ui/lib/utils"
 
 interface MarketDetailProps {
@@ -32,9 +33,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const queryClient = useQueryClient()
   const { data: market, isLoading: marketLoading } = useMarket(slug)
   const { data: activity, isLoading: activityLoading } = useMarketActivity(slug)
-  const { data: tradesData, isLoading: tradesLoading } = useMarketTrades(slug)
+  const { data: tradesData, isLoading: tradesLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useMarketTrades(slug)
   const { data: faqs } = useFAQs(slug)
   const { data: relatedMarkets } = useRelatedMarkets(slug)
+  const { data: priceHistoryData } = usePriceHistory(slug)
 
   const { data: orderbookData } = useQuery({
     queryKey: ["orderbook-header", slug] as const,
@@ -45,21 +47,31 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   })
 
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
+  const [outcomeNames, setOutcomeNames] = useState<string[]>([])
+  const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number; no_price?: number; winning_outcome_name?: string }
-    if (msg.type === "market:price_update" && msg.yes_price != null && msg.no_price != null) {
+    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
+    if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
+      setRealtimeTrades((prev) => {
+        const next = [{ id: `ws-${Date.now()}`, market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: msg.price!, amount: msg.amount!, executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
+        return next.slice(0, 200)
+      })
+      return
+    }
+    if (msg.type === "market:price_update") {
       const now = Math.floor(Date.now() / 1000)
       setPriceHistory((prev) => {
-        const next = [
-          ...prev,
-          {
-            time: now,
-            value: msg.yes_price ?? 0,
-            yes_price: msg.yes_price,
-            no_price: msg.no_price,
-          },
-        ]
+        const point: Record<string, number | string> = { time: now }
+        if (msg.outcome_prices) {
+          for (const [name, price] of Object.entries(msg.outcome_prices)) {
+            point[name] = price
+          }
+        } else if (msg.yes_price != null && msg.no_price != null) {
+          point["Yes"] = msg.yes_price
+          point["No"] = msg.no_price
+        }
+        const next = [...prev, point as LiveLinePoint]
         return next.slice(-200)
       })
     }
@@ -85,13 +97,44 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   })
 
   useEffect(() => {
+    if (priceHistoryData && priceHistoryData.length > 0) {
+      const first = priceHistoryData[0]!
+      const names = first.outcomes.map((o) => o.name)
+      setOutcomeNames(names)
+      setPriceHistory(
+        priceHistoryData.map((p: PriceHistoryPoint) => {
+          const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000, value: 0 }
+          for (const o of p.outcomes) {
+            point[o.name] = o.price
+          }
+          return point as LiveLinePoint
+        })
+      )
+      return
+    }
     if (!market) return
+    const names = isMultiOutcome
+      ? (market as MarketDetailResponse).outcomes.map((o) => o.name)
+      : ["Yes", "No"]
+    setOutcomeNames(names)
     const now = Math.floor(Date.now() / 1000)
-    setPriceHistory([
-      { time: now - 60, value: market.yes_price, yes_price: market.yes_price, no_price: market.no_price },
-      { time: now, value: market.yes_price, yes_price: market.yes_price, no_price: market.no_price },
-    ])
-  }, [market])
+    const seedPoint: Record<string, number | string> = { time: now - 60 }
+    const seedPoint2: Record<string, number | string> = { time: now }
+    if (isMultiOutcome) {
+      const outcomes = (market as MarketDetailResponse).outcomes
+      const uniform = 1 / outcomes.length
+      for (const o of outcomes) {
+        seedPoint[o.name] = uniform
+        seedPoint2[o.name] = uniform
+      }
+    } else {
+      seedPoint["Yes"] = market.yes_price
+      seedPoint["No"] = market.no_price
+      seedPoint2["Yes"] = market.yes_price
+      seedPoint2["No"] = market.no_price
+    }
+    setPriceHistory([seedPoint, seedPoint2] as LiveLinePoint[])
+  }, [market, priceHistoryData])
 
   const handleTrade = useCallback(
     async (order: PlaceOrderInput) => { await onTrade?.(order) },
@@ -114,16 +157,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-4">
-      {/* Left sidebar - Order Book */}
-      <div className="space-y-4">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-3 text-sm font-semibold text-foreground">Order Book</h3>
-          <OrderBook slug={slug} />
-        </div>
-      </div>
 
       {/* Main content */}
-      <div className="space-y-6 lg:col-span-2">
+      <div className="space-y-6 lg:col-span-3">
         {/* Resolution banner */}
         {market.status === "resolved" && market.winning_outcome_name && (
           <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
@@ -196,17 +232,20 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           <div className="h-[220px]">
             <LiveLineChart
               data={priceHistory}
-              value={priceHistory.at(-1)?.yes_price ?? market.yes_price}
-              valueNo={priceHistory.at(-1)?.no_price ?? market.no_price}
+              value={priceHistory.at(-1)?.[outcomeNames[0] ?? "Yes"] as number ?? market.yes_price}
+              valueNo={outcomeNames.length > 1 ? priceHistory.at(-1)?.[outcomeNames[1]!] as number ?? market.no_price : undefined}
               window={60}
               numXTicks={5}
               height={220}
               margin={{ top: 16, right: 36, bottom: 40, left: 48 }}
+              multiOutcome={outcomeNames.length > 2}
             >
               <LiveXAxis />
               <LiveYAxis />
-              <LiveLine dataKey="yes_price" stroke="var(--chart-1)" fill />
-              <LiveLine dataKey="no_price" stroke="var(--chart-5)" fill />
+              {outcomeNames.map((name, i) => {
+                const colors = ["var(--chart-1)", "var(--chart-5)", "var(--chart-3)", "var(--chart-4)", "var(--chart-2)", "var(--chart-6)", "var(--chart-7)", "var(--chart-8)"]
+                return <LiveLine key={name} dataKey={name} stroke={colors[i % colors.length]} fill />
+              })}
             </LiveLineChart>
           </div>
           {/* Live Trade Ticker - floats over the chart */}
@@ -232,9 +271,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           </div>
         )}
 
-        {/* Tabs: Trades / Positions / Discussion / FAQs */}
-        <Tabs defaultValue="trades" className="rounded-xl border border-border bg-card overflow-hidden">
+        {/* Tabs: Orderbook / Trades / Positions / Discussion / FAQs */}
+        <Tabs defaultValue="orderbook" className="rounded-xl border border-border bg-card overflow-hidden">
           <TabsList className="w-full justify-start rounded-none border-b border-border bg-muted/50 p-0 h-auto">
+            <TabsTrigger value="orderbook" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Orderbook</TabsTrigger>
             <TabsTrigger value="trades" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Trades</TabsTrigger>
             <TabsTrigger value="positions" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Positions</TabsTrigger>
             <TabsTrigger value="discussion" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Discussion</TabsTrigger>
@@ -244,10 +284,16 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           </TabsList>
 
           <div className="p-4">
+            <TabsContent value="orderbook" className="min-h-[200px]">
+              <OrderBook slug={slug} />
+            </TabsContent>
             <TabsContent value="trades" className="min-h-[200px]">
               <TradeFeed
-                trades={(tradesData?.trades ?? []).slice(0, 20)}
+                trades={[...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200)}
                 loading={tradesLoading}
+                hasMore={hasNextPage}
+                fetchNextPage={fetchNextPage}
+                isFetchingNextPage={isFetchingNextPage}
               />
             </TabsContent>
 
@@ -322,6 +368,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             currentYesPrice={market.yes_price}
             currentNoPrice={market.no_price}
           />
+        </div>
+
+        {/* Liquidity */}
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h3 className="mb-3 text-sm font-semibold text-foreground">Liquidity</h3>
+          <AddLiquidityForm marketId={market.id} />
         </div>
 
         {/* Market Info */}

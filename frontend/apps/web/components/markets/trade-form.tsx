@@ -1,18 +1,24 @@
 "use client"
 
-import { useCallback, useState, memo } from "react"
+import { useCallback, useMemo, useState, memo } from "react"
 import { useForm } from "react-hook-form"
 import { valibotResolver } from "@hookform/resolvers/valibot"
 import { InferInput } from "valibot"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
+import { Checkbox } from "@workspace/ui/components/checkbox"
+import { Label } from "@workspace/ui/components/label"
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from "@workspace/ui/components/select"
 import {
   Field,
   FieldContent,
   FieldError,
   FieldLabel,
 } from "@workspace/ui/components/field"
+
 import { cn } from "@workspace/ui/lib/utils"
 import { PlaceOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
 import type { Outcome } from "@/lib/types/api"
@@ -87,35 +93,14 @@ const SideButton = memo(function SideButton({
   )
 })
 
-const OrderTypeButton = memo(function OrderTypeButton({
-  type,
-  current,
-  onClick,
-}: {
-  type: "market" | "limit"
-  current: "market" | "limit"
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-md border px-3 py-1 text-xs font-medium transition-colors",
-        type === current
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:bg-muted"
-      )}
-    >
-      {type}
-    </button>
-  )
-})
+
 
 function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubmit, disabled }: TradeFormProps) {
   const isMultiOutcome = outcomes && outcomes.length > 2
   const [outcome, setOutcome] = useState<string>(isMultiOutcome ? (outcomes?.[0]?.name?.toLowerCase() ?? "yes") : "yes")
   const [side, setSide] = useState<"buy" | "sell">("buy")
+
+  const clientOrderId = useMemo(() => crypto.randomUUID(), [])
 
   const {
     register,
@@ -133,6 +118,7 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
       amount: undefined,
       price: undefined,
       post_only: false,
+      client_order_id: clientOrderId,
     },
   })
 
@@ -164,18 +150,11 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
     [setValue]
   )
 
-  const handleOrderTypeClick = useCallback(
-    (t: "market" | "limit") => {
-      setValue("order_type", t)
-    },
-    [setValue]
-  )
-
   const onValid = useCallback(
     async (data: PlaceOrderInput) => {
-      await onSubmit(data)
+      await onSubmit({ ...data, client_order_id: clientOrderId })
     },
-    [onSubmit]
+    [onSubmit, clientOrderId]
   )
 
   return (
@@ -233,28 +212,72 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
         {errors.amount && <FieldError errors={[{ message: errors.amount.message }]} />}
       </Field>
 
-      <div className="flex gap-2">
-        {(["market", "limit"] as const).map((t) => (
-          <OrderTypeButton key={t} type={t} current={orderType as "market" | "limit"} onClick={() => handleOrderTypeClick(t)} />
-        ))}
-      </div>
+      <Field>
+        <FieldLabel>Order Type</FieldLabel>
+        <FieldContent>
+          <Select
+            value={orderType as string}
+            onValueChange={(v) => {
+              if (v) setValue("order_type", v as "market" | "limit" | "fill_or_kill")
+              if (v !== "limit") setValue("post_only", false)
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Market" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="market">Market</SelectItem>
+              <SelectItem value="limit">Limit</SelectItem>
+              <SelectItem value="fill_or_kill">Fill or Kill</SelectItem>
+            </SelectContent>
+          </Select>
+        </FieldContent>
+      </Field>
 
-      {orderType === "limit" && (
-        <Field>
-          <FieldLabel htmlFor="price">Limit Price</FieldLabel>
-          <FieldContent>
-            <Input
-              id="price"
-              type="number"
-              step="0.001"
-              min="0.001"
-              max="0.999"
-              placeholder={effectivePrice.toFixed(3)}
-              {...register("price", { valueAsNumber: true })}
-            />
-          </FieldContent>
-          {errors.price && <FieldError errors={[{ message: errors.price.message }]} />}
-        </Field>
+      {(orderType === "limit" || orderType === "fill_or_kill") && (
+        <>
+          <Field>
+            <FieldLabel htmlFor="price">Limit Price</FieldLabel>
+            <FieldContent>
+              <Input
+                id="price"
+                type="number"
+                step="0.001"
+                min="0.001"
+                max="0.999"
+                placeholder={effectivePrice.toFixed(3)}
+                {...register("price", { valueAsNumber: true })}
+              />
+            </FieldContent>
+            {errors.price && <FieldError errors={[{ message: errors.price.message }]} />}
+          </Field>
+
+          {orderType === "limit" && (
+            <>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="post_only"
+                  checked={watch("post_only")}
+                  onCheckedChange={(c) => setValue("post_only", c === true)}
+                />
+                <Label htmlFor="post_only" className="text-[11px] text-muted-foreground cursor-pointer select-none">
+                  Post-only (never executes immediately)
+                </Label>
+              </div>
+
+              <Field>
+                <FieldLabel htmlFor="expires_at">Expiry (optional)</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="expires_at"
+                    type="datetime-local"
+                    {...register("expires_at")}
+                  />
+                </FieldContent>
+              </Field>
+            </>
+          )}
+        </>
       )}
 
       {amount > 0 && (

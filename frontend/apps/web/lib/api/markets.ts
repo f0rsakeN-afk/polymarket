@@ -8,6 +8,7 @@ import type {
   Comment,
   FAQ,
   MarketResponse,
+  PriceHistoryPoint,
 } from "../types/api"
 
 export function listMarkets(params?: {
@@ -68,6 +69,18 @@ export function getMarketCommentReplies(slug: string, commentId: string) {
   )
 }
 
+export function updateComment(slug: string, commentId: string, content: string) {
+  return api.patch<{ success: boolean; data: { id: string; content: string } }>(
+    `/api/v1/markets/${slug}/comments/${commentId}`, { content }
+  )
+}
+
+export function deleteComment(slug: string, commentId: string) {
+  return api.delete<{ success: boolean; data: { id: string; status: string } }>(
+    `/api/v1/markets/${slug}/comments/${commentId}`
+  )
+}
+
 export function postComment(slug: string, content: string, parent_id?: string) {
   return api.post<{ success: boolean; data: Comment }>(`/api/v1/markets/${slug}/comments`, {
     content,
@@ -77,6 +90,17 @@ export function postComment(slug: string, content: string, parent_id?: string) {
 
 export function getMarketFAQs(slug: string) {
   return api.get<{ success: boolean; data: FAQ[] }>(`/api/v1/markets/${slug}/faqs/`)
+}
+
+export function getPriceHistory(slug: string, params?: { interval?: string; from_date?: string; to_date?: string }) {
+  const qs = new URLSearchParams()
+  if (params?.interval) qs.set("interval", params.interval)
+  if (params?.from_date) qs.set("from_date", params.from_date)
+  if (params?.to_date) qs.set("to_date", params.to_date)
+  const query = qs.toString()
+  return api.get<{ success: boolean; data: PriceHistoryPoint[] }>(
+    `/api/v1/markets/${slug}/price-history${query ? `?${query}` : ""}`
+  )
 }
 
 export function getRelatedMarkets(slug: string, limit = 5) {

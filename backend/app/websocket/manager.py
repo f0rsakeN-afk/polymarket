@@ -8,7 +8,7 @@ import redis.asyncio as redis
 from fastapi import WebSocket
 
 from app.config import settings
-from app.redis import get_redis
+from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
 
@@ -90,35 +90,7 @@ class RedisPubSub:
         self._pubsub: redis.client.PubSub | None = None
         self._listener_task: asyncio.Task | None = None
         self._connected = False
-        # Circuit breaker state
-        self._cb_failures = 0
-        self._cb_open_since: float = 0
-        self._cb_state = "closed"  # closed | open | half_open
-        self._cb_lock = asyncio.Lock()
-        # Subscriptions tracking to prevent duplicates
         self._subscribed: Set[str] = set()
-
-    async def _cb_should_allow(self) -> bool:
-        async with self._cb_lock:
-            if self._cb_state == "open":
-                if time.time() - self._cb_open_since >= 30:
-                    self._cb_state = "half_open"
-                    self._cb_failures = 0  # reset failures on transition to half_open
-                    return True
-                return False
-            return True
-
-    async def _cb_record_success(self):
-        async with self._cb_lock:
-            self._cb_failures = 0
-            self._cb_state = "closed"
-
-    async def _cb_record_failure(self):
-        async with self._cb_lock:
-            self._cb_failures += 1
-            self._cb_open_since = time.time()
-            if self._cb_failures >= 5:
-                self._cb_state = "open"
 
     async def connect(self):
         if self._connected:
@@ -127,61 +99,61 @@ class RedisPubSub:
         self._pubsub = self._redis.pubsub()
         self._connected = True
 
-    async def publish_price_update(self, market_id: str, yes_price: float, no_price: float, volume: float):
+    async def publish_price_update(self, market_id: str, yes_price: float, no_price: float, volume: float, outcome_prices: dict[str, float] | None = None):
         if not self._redis:
             return
-        if not await self._cb_should_allow():
-            return  # fail fast, don't block trading
 
         key = f"market:{market_id}:price"
         pubsub_channel = f"market:{market_id}:price"
-        try:
-            # Atomic pipeline: cache write + publish in sequence
-            # If Redis crashes mid-pipeline, cache may have stale data but that's
-            # bounded by TTL (5 min) and self-corrects on next successful publish
+
+        msg_payload: dict = {
+            "type": "market:price_update",
+            "market_id": market_id,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "volume": volume,
+        }
+        if outcome_prices:
+            msg_payload["outcome_prices"] = outcome_prices
+
+        async def _op():
             pipe = self._redis.pipeline()
             pipe.hset(key, mapping={
                 "yes_price": str(yes_price),
                 "no_price": str(no_price),
                 "volume": str(volume),
-                "updated_at": time.time(),  # unix timestamp for staleness check
+                "updated_at": time.time(),
             })
             pipe.expire(key, 300)
-            pipe.publish(pubsub_channel, json.dumps({
-                "type": "market:price_update",
-                "market_id": market_id,
-                "yes_price": yes_price,
-                "no_price": no_price,
-                "volume": volume,
-            }))
+            pipe.publish(pubsub_channel, json.dumps(msg_payload))
             await pipe.execute()
-            await self._cb_record_success()
+
+        try:
+            await redis_cb.call(_op)
         except redis.RedisError:
-            await self._cb_record_failure()
+            pass
 
     async def publish_order_fill(self, user_id: str, order_data: dict):
         if not self._redis:
             return
-        if not await self._cb_should_allow():
-            return
-        try:
+        async def _op():
             msg = json.dumps({**order_data, "type": "order:fill"})
             await self._redis.publish(f"user:{user_id}:fills", msg)
-            await self._cb_record_success()
+        try:
+            await redis_cb.call(_op)
         except redis.RedisError:
-            await self._cb_record_failure()
+            pass
 
     async def publish_market_event(self, market_id: str, event_type: str, data: dict | None = None):
         if not self._redis:
             return
-        if not await self._cb_should_allow():
-            return
-        try:
+        async def _op():
             msg = json.dumps({"type": event_type, "market_id": market_id, **(data or {})})
             await self._redis.publish(f"market:{market_id}:events", msg)
-            await self._cb_record_success()
+        try:
+            await redis_cb.call(_op)
         except redis.RedisError:
-            await self._cb_record_failure()
+            pass
 
     async def subscribe_market(self, market_id: str):
         if not self._pubsub:

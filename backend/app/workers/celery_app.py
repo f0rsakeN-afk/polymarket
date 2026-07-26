@@ -34,4 +34,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_market_resolution",
         "schedule": crontab(minute="*/5"),
     },
+    "check-limit-order-execution": {
+        "task": "app.workers.tasks.check_limit_order_execution",
+        "schedule": 30.0,
+    },
+    "snapshot-price-history": {
+        "task": "app.workers.tasks.snapshot_price_history",
+        "schedule": 300.0,
+    },
 }

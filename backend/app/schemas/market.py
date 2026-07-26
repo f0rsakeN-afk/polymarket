@@ -25,6 +25,7 @@ class MarketResponse(BaseModel):
     closes_at: datetime
     winning_outcome_id: str | None = None
     winning_outcome_name: str | None = None
+    outcomes: list[OutcomeResponse] | None = None
 
     model_config = {"from_attributes": True}
 

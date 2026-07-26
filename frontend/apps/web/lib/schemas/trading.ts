@@ -13,6 +13,8 @@ export const PlaceOrderSchema = object({
   amount: pipe(number(), minValue(0.01)),
   price: optional(pipe(number(), minValue(0.001), maxValue(0.999))),
   post_only: optional(boolean(), false),
+  expires_at: optional(string()),
+  client_order_id: optional(string()),
 })
 
 export const DepositSchema = object({
@@ -31,4 +33,6 @@ export type PlaceOrderInput = {
   amount: number
   price?: number
   post_only: boolean
+  expires_at?: string
+  client_order_id?: string
 }

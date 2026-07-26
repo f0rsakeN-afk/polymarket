@@ -31,6 +31,7 @@ from app.api.comments import router as comments_router
 from app.api.trades import router as trades_router
 from app.api.referrals import router as referrals_router
 from app.api.market_activity import router as market_activity_router
+from app.api.split_merge import router as split_merge_router
 from app.websocket.routes import router as ws_router
 from app.websocket.manager import redis_pubsub
 from app.api.middleware import RequestLoggingMiddleware
@@ -112,6 +113,7 @@ app.include_router(comments_router, prefix="/api/v1")
 app.include_router(trades_router, prefix="/api/v1")
 app.include_router(referrals_router, prefix="/api/v1")
 app.include_router(market_activity_router, prefix="/api/v1")
+app.include_router(split_merge_router, prefix="/api/v1")
 app.include_router(ws_router)
 
 

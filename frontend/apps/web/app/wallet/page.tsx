@@ -46,14 +46,14 @@ export default function WalletPage() {
 
   if (!wallet) {
     return (
-      <div className="container mx-auto max-w-2xl px-4 py-8 text-center text-muted-foreground">
+      <div className="container mx-auto max-w-7xl px-4 py-8 text-center text-muted-foreground">
         Unable to load wallet
       </div>
     )
   }
 
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Wallet</h1>
         <p className="mt-1 text-muted-foreground">Manage your funds</p>

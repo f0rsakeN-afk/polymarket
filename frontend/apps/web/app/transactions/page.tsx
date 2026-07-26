@@ -105,7 +105,7 @@ export default function TransactionsPage() {
   const { data, isLoading, fetchNextPage, hasNextPage } = useTransactions()
 
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Transactions</h1>
         <p className="mt-1 text-muted-foreground">Your wallet transaction history</p>
