@@ -40,8 +40,12 @@ class Settings(BaseSettings):
     # Celery
     celery_broker_url: str = "redis://localhost:6382/1"
 
-    # Resend
+    # Rate limiting
+    rate_limit_enabled: bool = True
+
+    # Resend (email notifications)
     resend_api_key: str = ""
+    notifications_from_email: str = "noreply@polymarket.example.com"
 
     # Referral
     referral_reward_amount: float = 1.0

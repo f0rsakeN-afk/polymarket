@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useState, memo } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react"
 import { useForm } from "react-hook-form"
 import { valibotResolver } from "@hookform/resolvers/valibot"
 import { InferInput } from "valibot"
@@ -21,7 +21,8 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 import { PlaceOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
-import type { Outcome } from "@/lib/types/api"
+import { getQuote } from "@/lib/api/orders"
+import type { Outcome, QuoteResponse } from "@/lib/types/api"
 
 type FormInput = InferInput<typeof PlaceOrderSchema>
 
@@ -100,6 +101,10 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
   const [outcome, setOutcome] = useState<string>(isMultiOutcome ? (outcomes?.[0]?.name?.toLowerCase() ?? "yes") : "yes")
   const [side, setSide] = useState<"buy" | "sell">("buy")
 
+  const [quote, setQuote] = useState<QuoteResponse | null>(null)
+  const [quoteLoading, setQuoteLoading] = useState(false)
+  const quoteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const clientOrderId = useMemo(() => crypto.randomUUID(), [])
 
   const {
@@ -131,8 +136,32 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
     : outcome === "yes"
     ? currentYesPrice
     : currentNoPrice
-  const displayPrice = orderType === "limit" ? (price ?? effectivePrice) : effectivePrice
+  const displayPrice = orderType === "limit" ? (price ?? (quote?.price ?? effectivePrice)) : (quote?.price ?? effectivePrice)
   const total = amount && displayPrice ? amount * displayPrice : 0
+
+  // ── Quote fetching ──
+
+  useEffect(() => {
+    if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
+    if (!amount || amount <= 0 || orderType !== "market") {
+      setQuote(null)
+      return
+    }
+    quoteDebounceRef.current = setTimeout(async () => {
+      setQuoteLoading(true)
+      try {
+        const res = await getQuote({ market_id: marketId, outcome, side, amount })
+        setQuote(res.data)
+      } catch {
+        setQuote(null)
+      } finally {
+        setQuoteLoading(false)
+      }
+    }, 300)
+    return () => {
+      if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
+    }
+  }, [amount, outcome, side, marketId, orderType])
 
   const handleOutcomeClick = useCallback(
     (name: string) => {
@@ -152,9 +181,16 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
 
   const onValid = useCallback(
     async (data: PlaceOrderInput) => {
-      await onSubmit({ ...data, client_order_id: clientOrderId })
+      const payload: PlaceOrderInput = {
+        ...data,
+        client_order_id: clientOrderId,
+        max_slippage: 0.005,
+        quote_id: quote?.quote_id,
+      }
+      setQuote(null)
+      await onSubmit(payload)
     },
-    [onSubmit, clientOrderId]
+    [onSubmit, clientOrderId, quote]
   )
 
   return (
@@ -281,12 +317,29 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
       )}
 
       {amount > 0 && (
-        <div className="rounded-md bg-muted/50 p-3 text-xs">
+        <div className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Price</span>
             <span>${displayPrice.toFixed(4)}</span>
           </div>
-          <div className="mt-2 flex justify-between border-t border-border pt-2">
+          {quote && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Slippage</span>
+              <span className={cn(
+                "font-medium",
+                quote.slippage > 0.01 ? "text-yellow-500" : "text-green-500"
+              )}>
+                {(quote.slippage * 100).toFixed(2)}%
+              </span>
+            </div>
+          )}
+          {quoteLoading && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Quote</span>
+              <Spinner className="size-3" />
+            </div>
+          )}
+          <div className="flex justify-between border-t border-border pt-2">
             <span className="text-muted-foreground">Est. Cost</span>
             <span className="font-bold">${total.toFixed(2)}</span>
           </div>

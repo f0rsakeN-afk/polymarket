@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, memo } from "react"
 import { MarketCard } from "./market-card"
-import { Spinner } from "@workspace/ui/components/spinner"
+import { SkeletonMarketGrid } from "@/components/shared/skeletons"
 import type { MarketResponse } from "@/lib/types/api"
 
 interface MarketListProps {
@@ -33,6 +33,10 @@ function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) 
     return () => observer.disconnect()
   }, [hasMore, loading, onLoadMore])
 
+  if (loading && markets.length === 0) {
+    return <SkeletonMarketGrid />
+  }
+
   if (!loading && markets.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
@@ -49,9 +53,9 @@ function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) 
         ))}
       </div>
       <div ref={sentinelRef} className="flex justify-center py-4">
-        {loading && <Spinner className="size-5" />}
+        {loading && <div className="flex items-center gap-1 text-muted-foreground"><div className="size-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" /> Loading...</div>}
         {!hasMore && markets.length > 0 && (
-          <span className="text-muted-foreground">No more markets</span>
+          <span className="text-xs text-muted-foreground">No more markets</span>
         )}
       </div>
     </div>

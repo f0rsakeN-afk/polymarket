@@ -60,6 +60,7 @@ class MatchingEngine:
                 Order.price.desc() if side == "sell" else Order.price.asc(),
                 Order.created_at.asc(),
             )
+            .with_for_update(skip_locked=True)
         )
         return list(result.scalars().all())
 

@@ -705,3 +705,21 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
             return f"Checked {len(alerts)} alerts, {triggered_count} triggered"
 
     return asyncio.run(_run())
+
+
+@shared_task(bind=True, name="app.workers.tasks.send_email", max_retries=3, default_retry_delay=60)
+def send_email(self, to_email: str, subject: str, body: str):
+    """Send transactional email via Resend."""
+    try:
+        import resend
+        resend.api_key = settings.resend_api_key
+        resend.Emails.send({
+            "from": settings.notifications_from_email,
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        })
+        logger.info(f"Email sent to {to_email}: {subject}")
+    except Exception as exc:
+        logger.error(f"Failed to send email to {to_email}: {exc}")
+        raise self.retry(exc=exc)

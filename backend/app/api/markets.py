@@ -12,6 +12,8 @@ from app.deps import get_current_user
 from app.models.market import Market, Outcome
 from app.models.liquidity import LiquidityPool
 from app.models.faq import MarketFAQ
+from app.models.position import Position
+from app.models.wallet import Wallet, Transaction
 from app.schemas.market import (
     MarketResponse,
     MarketDetailResponse,
@@ -20,6 +22,7 @@ from app.schemas.market import (
     OutcomeResponse,
 )
 from app.schemas.faq import FAQResponse
+from app.schemas.market import ResolveMarketRequest
 from app.api.responses import success_response
 from app.api.exceptions import NotFoundError, ValidationError, ForbiddenError
 from app.amm.engine import BinaryAMM
@@ -340,3 +343,102 @@ async def get_related(slug: str, db: AsyncSession = Depends(get_db_replica)):
         market_to_response(m, *MarketService.compute_prices(p)).model_dump()
         for m, p in rows
     ])
+
+
+@router.post("/{slug}/resolve")
+async def resolve_market_endpoint(
+    slug: str,
+    body: ResolveMarketRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if not user.is_admin:
+        raise ForbiddenError("Only admins can resolve markets")
+
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+
+    if market.status == "resolved":
+        raise ValidationError("Market is already resolved")
+
+    outcome_result = await db.execute(
+        select(Outcome).where(Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id)
+    )
+    outcome = outcome_result.scalar_one_or_none()
+    if not outcome:
+        raise ValidationError("Winning outcome does not belong to this market")
+
+    market.status = "resolved"
+    market.winning_outcome_id = outcome.id
+    market.resolved_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    resolve_market.delay(str(market.id), str(outcome.id))
+
+    logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
+    return success_response({
+        "slug": slug,
+        "winning_outcome_id": str(outcome.id),
+        "winning_outcome_name": outcome.name,
+    })
+
+
+@router.post("/{slug}/claim")
+async def claim_winnings(
+    slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+
+    result = await db.execute(select(Market).where(Market.slug == slug))
+    market = result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError(f"Market '{slug}' not found")
+    if market.status != "resolved":
+        raise ValidationError("Market is not yet resolved")
+    if not market.winning_outcome_id:
+        raise ValidationError("Market has no winning outcome set")
+
+    pos_result = await db.execute(
+        select(Position).where(
+            Position.user_id == user.id,
+            Position.market_id == market.id,
+            Position.outcome_id == market.winning_outcome_id,
+            Position.shares_held > 0,
+        ).with_for_update()
+    )
+    winning_pos = pos_result.scalar_one_or_none()
+    if not winning_pos:
+        raise ValidationError("You have no winning shares to claim")
+
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+    )
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise NotFoundError("Wallet not found")
+
+    payout = winning_pos.shares_held
+    wallet.balance += payout
+    winning_pos.realized_pnl += payout
+    winning_pos.shares_held = 0
+
+    tx = Transaction(
+        user_id=user.id,
+        wallet_id=wallet.id,
+        type="settlement_win",
+        amount=payout,
+        balance_after=wallet.balance,
+        reference_id=str(market.id),
+        reference_type="market_settlement",
+        status="completed",
+    )
+    db.add(tx)
+    await db.commit()
+
+    logger.info(f"Claimed winnings: user={user.id} market={slug} payout={payout}")
+    return success_response({"claimed": float(payout)})

@@ -105,6 +105,7 @@ const CommentRow = memo(function CommentRow({
             <>
               <button
                 onClick={() => { setEditValue(comment.content); setEditing(true) }}
+                aria-label="Edit comment"
                 className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
               >
                 Edit
@@ -112,6 +113,7 @@ const CommentRow = memo(function CommentRow({
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
+                aria-label="Delete comment"
                 className="text-[10px] text-red-500 hover:text-red-400 font-medium transition-colors"
               >
                 {isDeleting ? "..." : "Delete"}
@@ -121,6 +123,7 @@ const CommentRow = memo(function CommentRow({
           {depth < 3 && (
             <button
               onClick={() => setShowReplyForm((v) => !v)}
+              aria-label={showReplyForm ? "Cancel reply" : "Reply to comment"}
               className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
             >
               Reply
@@ -129,6 +132,8 @@ const CommentRow = memo(function CommentRow({
           {comment.reply_count > 0 && (
             <button
               onClick={toggleReplies}
+              aria-expanded={showReplies}
+              aria-label={showReplies ? "Hide replies" : `Show ${comment.reply_count} ${comment.reply_count === 1 ? "reply" : "replies"}`}
               className="text-[10px] text-primary hover:text-primary/80 font-medium transition-colors"
             >
               {loadingReplies ? "..." : showReplies ? "Hide" : `${comment.reply_count} ${comment.reply_count === 1 ? "reply" : "replies"}`}
@@ -138,7 +143,9 @@ const CommentRow = memo(function CommentRow({
       </div>
       {editing ? (
         <div className="flex gap-2">
+          <label htmlFor={`edit-${comment.id}`} className="sr-only">Edit comment</label>
           <Input
+            id={`edit-${comment.id}`}
             className="h-7 text-xs flex-1"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
@@ -182,7 +189,9 @@ function ReplyForm({ onReply, isPending, onCancel }: {
 
   return (
     <div className="mt-2 flex gap-2">
+      <label htmlFor="reply-input" className="sr-only">Write a reply</label>
       <Input
+        id="reply-input"
         placeholder="Write a reply..."
         className="h-7 text-xs"
         value={value}
@@ -223,20 +232,23 @@ function CommentForm({ slug }: { slug: string }) {
   }, [postComment, reset])
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2">
+    <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2" aria-label="Post a comment">
       <Field className="flex-1">
         <FieldContent>
           <Input
+            id="comment-input"
             placeholder="Add a comment..."
             className="h-7"
+            aria-describedby={errors.content ? "comment-error" : undefined}
+            aria-invalid={!!errors.content}
             {...register("content")}
           />
         </FieldContent>
         {errors.content && (
-          <FieldError errors={[{ message: errors.content.message }]} />
+          <FieldError id="comment-error" errors={[{ message: errors.content.message }]} />
         )}
       </Field>
-      <Button type="submit" size="sm" disabled={isPending}>
+      <Button type="submit" size="sm" disabled={isPending} aria-label="Post comment">
         {isPending ? <Spinner className="size-4" /> : "Post"}
       </Button>
     </form>
@@ -269,7 +281,7 @@ function CommentList({ slug }: { slug: string }) {
   }
 
   return (
-    <div className="divide-y divide-border overflow-y-auto max-h-64 scrollbar-hide">
+    <div className="divide-y divide-border overflow-y-auto max-h-64 scrollbar-hide" role="feed" aria-label="Comments" aria-live="polite">
       {comments.map((comment) => (
         <CommentRow key={comment.id} comment={comment} slug={slug} />
       ))}

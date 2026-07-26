@@ -51,3 +51,7 @@ class MarketListResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class ResolveMarketRequest(BaseModel):
+    winning_outcome_id: str

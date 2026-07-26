@@ -11,6 +11,9 @@ from app.models.referral import Referral
 from app.models.faq import MarketFAQ
 from app.models.alert import Alert
 from app.models.price_history import PriceHistory
+from app.models.dispute import Dispute
+from app.models.notification import Notification, NotificationPreference
+from app.models.treasury import Treasury, TreasuryLog
 
 __all__ = [
     "Base",
@@ -31,4 +34,9 @@ __all__ = [
     "MarketFAQ",
     "Alert",
     "PriceHistory",
+    "Dispute",
+    "Notification",
+    "NotificationPreference",
+    "Treasury",
+    "TreasuryLog",
 ]

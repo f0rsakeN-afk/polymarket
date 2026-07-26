@@ -27,7 +27,11 @@ export function usePlaceOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: placeOrder,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] })
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
+    },
   })
 }
 
@@ -35,6 +39,10 @@ export function useCancelOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: cancelOrder,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] })
+      qc.invalidateQueries({ queryKey: ["wallet"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
+    },
   })
 }
