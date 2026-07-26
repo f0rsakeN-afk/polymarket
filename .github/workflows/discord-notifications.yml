@@ -12,6 +12,10 @@ jobs:
       - name: Send Discord Notification
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         run: |
           AUTHOR_NAME="${GITHUB_ACTOR}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
@@ -23,13 +27,13 @@ jobs:
             FILES_CHANGED=$(git show --name-only --pretty=format:"" "${GITHUB_SHA}" 2>/dev/null | sed 's/^/  - /' || echo "N/A")
           fi
 
-          if [ ${#FILES_CHANGED} -gt 500 ]; then
-            FILES_CHANGED=$(echo "${FILES_CHANGED}" | head -c 500)...
+          if [ ${#FILES_CHANGED} -gt 1000 ]; then
+            FILES_CHANGED=$(echo "${FILES_CHANGED}" | head -c 1000)
           fi
 
           SHA_SHORT="${GITHUB_SHA:0:7}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          curl -X POST "${DISCORD_WEBHOOK}" \
-            -H "Content-Type: application/json" \
-            -d "{\"embeds\":[{\"title\":\"Code Pushed to ${BRANCH_NAME}\",\"description\":\"**${COMMIT_MSG}**\",\"color\":16747520,\"fields\":[{\"name\":\"Author\",\"value\":\"${AUTHOR_NAME}\",\"inline\":true},{\"name\":\"Branch\",\"value\":\"${BRANCH_NAME}\",\"inline\":true},{\"name\":\"Files Changed\",\"value\":\"\\\`\\\`\\\`diff\\n${FILES_CHANGED}\\n\\\`\\\`\\\`\"}],\"footer\":{\"text\":\"sha: ${SHA_SHORT}\"},\"timestamp\":\"${TIMESTAMP}\"}]}"
+          echo "{\"embeds\":[{\"title\":\"Code Pushed to ${BRANCH_NAME}\",\"description\":\"**${COMMIT_MSG}**\",\"color\":16747520,\"fields\":[{\"name\":\"Author\",\"value\":\"${AUTHOR_NAME}\",\"inline\":true},{\"name\":\"Branch\",\"value\":\"${BRANCH_NAME}\",\"inline\":true},{\"name\":\"Files Changed\",\"value\":\"\\\`\\\`\\\`diff\\n${FILES_CHANGED}\\n\\\`\\\`\\\`\"}],\"footer\":{\"text\":\"sha: ${SHA_SHORT}\"},\"timestamp\":\"${TIMESTAMP}\"}]}" > payload.json
+
+          curl -X POST "${DISCORD_WEBHOOK}" -H "Content-Type: application/json" -d @payload.json
