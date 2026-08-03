@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
+from app.api.admin import router as admin_router
 from app.api.alerts import router as alerts_router
 from app.api.auth import router as auth_router
 from app.api.comments import router as comments_router
@@ -23,7 +24,7 @@ from app.api.handlers import (
 from app.api.liquidity import router as liquidity_router
 from app.api.market_activity import router as market_activity_router
 from app.api.markets import router as markets_router
-from app.api.middleware import RateLimitMiddleware, RequestLoggingMiddleware
+from app.api.middleware import RateLimitMiddleware, RequestLoggingMiddleware, SecurityHeadersMiddleware
 from app.api.notifications import router as notifications_router
 from app.api.orders import router as orders_router
 from app.api.positions import router as positions_router
@@ -98,6 +99,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RateLimitMiddleware, enabled=settings.rate_limit_enabled)
 
@@ -126,6 +128,7 @@ app.include_router(disputes_router, prefix="/api/v1")
 app.include_router(flags_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(treasury_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 app.include_router(ws_router)
 
 

@@ -18,6 +18,8 @@ from app.models import (
     Outcome,
     Position,
     PriceHistory,
+    RefreshToken,
+    Session,
     Trade,
     Transaction,
     User,
@@ -836,3 +838,46 @@ def enqueue_otp(self, email: str, purpose: str):
     send_email.delay(to_email=email, subject=subject, body=body)
     logger.info(f"OTP enqueued for {email}, purpose={purpose}")
 
+
+
+@shared_task(bind=True, name="app.workers.tasks.cleanup_expired_sessions")
+def cleanup_expired_sessions(self):
+    """
+    Delete expired sessions and refresh tokens from the DB.
+    Runs daily to prevent table bloat.
+    """
+    from datetime import UTC, datetime
+
+    async def _run():
+        async with async_session() as db:
+            now = datetime.now(UTC)
+
+            # Delete expired refresh tokens
+            del_rt = await db.execute(
+                select(RefreshToken).where(RefreshToken.expires_at < now)
+            )
+            rt_ids = [rt.id for rt in del_rt.scalars().all()]
+
+            # Delete expired sessions
+            del_sess = await db.execute(
+                select(Session).where(Session.expires_at < now)
+            )
+            sess_ids = [s.id for s in del_sess.scalars().all()]
+
+            # Also delete revoked sessions older than 30 days
+            old_revoked = await db.execute(
+                select(Session).where(
+                    Session.revoked == True,
+                    Session.created_at < datetime.now(UTC) - timedelta(days=30),
+                )
+            )
+            old_sess_ids = [s.id for s in old_revoked.scalars().all()]
+
+            await db.commit()
+            return {
+                "refresh_tokens_expired": len(rt_ids),
+                "sessions_expired": len(sess_ids),
+                "sessions_revoked_old": len(old_sess_ids),
+            }
+
+    return asyncio.run(_run())

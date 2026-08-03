@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ConflictError, UnauthorizedError, ValidationError
+from app.api.exceptions import ConflictError, NotFoundError, UnauthorizedError, ValidationError
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db
@@ -21,7 +21,7 @@ from app.deps import (
     verify_password,
 )
 from app.redis import get_redis, redis_cb
-from app.models.user import RefreshToken, User
+from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Wallet
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -39,8 +39,11 @@ from app.schemas.auth import (
     VerifyEmailRequest,
     VerifyMagicRequest,
 )
+from app.services.audit_service import AuthAuditService
 from app.services.email_service import EmailService
 from app.services.otp_service import OTPService
+from app.services.password_strength_service import PasswordStrengthService
+from app.services.rate_limit_service import RateLimitService
 from app.services.totp_service import TOTPService
 
 logger = logging.getLogger("polymarket")
@@ -52,17 +55,37 @@ _OTP_MAGIC = "magic"
 _OTP_RESET = "resetpwd"
 
 
-def _issue_tokens(response: Response, user_id: str):
-    """Create access + refresh token records, set cookies. Caller commits."""
+def _issue_tokens(
+    response: Response,
+    user_id: str,
+    db: AsyncSession,
+    ip: str | None = None,
+    ua: str | None = None,
+):
+    """Create access + refresh token + session record, set cookies. Caller commits."""
     access_token, jti = create_access_token(str(user_id))
-    refresh_token = str(uuid.uuid4())
+    refresh_token_id = str(uuid.uuid4())
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire)
+
     token_record = RefreshToken(
-        id=refresh_token,
+        id=refresh_token_id,
         user_id=user_id,
-        token_hash=refresh_token,
-        expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
+        token_hash=refresh_token_id,
+        expires_at=expires_at,
+        device_info=ua,
     )
-    return access_token, jti, refresh_token, token_record
+    db.add(token_record)
+
+    session = Session(
+        user_id=user_id,
+        refresh_token_id=refresh_token_id,
+        ip_address=ip,
+        user_agent=ua,
+        expires_at=expires_at,
+    )
+    db.add(session)
+
+    return access_token, jti, refresh_token_id, token_record
 
 
 def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
@@ -79,6 +102,14 @@ def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: 
         if keep_token_hash and token.token_hash == keep_token_hash:
             continue
         token.revoked = True
+
+
+def _get_client_ip(request: Request) -> str:
+    """Get real client IP, accounting for X-Forwarded-For."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _blacklist_access_token(request: Request):
@@ -101,7 +132,7 @@ def _blacklist_access_token(request: Request):
 
 
 @router.post("/register", summary="Register")
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(data: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
     if len(data.username) < 3:
         raise ValidationError("Username must be at least 3 characters")
 
@@ -111,6 +142,9 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     )
     if result.scalar_one_or_none():
         raise ConflictError("User with this email or username already exists")
+
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     user = User(email=data.email, username=data.username, password_hash="", is_email_verified=False)
     db.add(user)
@@ -133,30 +167,41 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
 
-    # Issue OTP and enqueue email via Celery (fire-and-forget)
     code = await OTPService.send_code(data.email, _OTP_VERIFY)
     EmailService.send_verification_code(data.email, code)
+    await AuthAuditService.log_register(db, data.email, str(user.id), ip, ua)
 
     logger.info(f"User registered (unverified): {data.email} ({user.id})")
     return success_response({"id": str(user.id), "email": user.email, "username": user.username})
 
 
 @router.post("/verify-email", summary="Verify email")
-async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
-    # Check already-verified first to avoid unnecessary OTP verification
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+async def verify_email(data: VerifyEmailRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    user_result = await db.execute(select(User).where(User.email == data.email))
+    user = user_result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError("User not found")
     if user.is_email_verified:
         return success_response({"id": str(user.id), "email": user.email, "verified": True})
 
+    ip = _get_client_ip(request)
+    rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
+    if is_slowed and rl_result.retry_after:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
+
     if not await OTPService.verify_code(data.email, _OTP_VERIFY, data.code):
+        await RateLimitService.record_failure(data.email, ip)
         raise UnauthorizedError("Invalid or expired code")
 
+    await RateLimitService.reset_friction(data.email, ip)
     user.is_email_verified = True
     await db.commit()
 
+    await AuthAuditService.log_email_verified(db, data.email, str(user.id), ip, ua)
     logger.info(f"Email verified: {data.email}")
     return success_response({"id": str(user.id), "email": user.email, "verified": True})
 
@@ -181,12 +226,18 @@ async def resend_verification(data: ResendVerificationRequest, db: AsyncSession 
 
 @router.post("/set-password", summary="Set password (requires email verification)")
 async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    if len(data.password) < 8:
-        raise ValidationError("Password must be at least 8 characters")
+    strong, reason = PasswordStrengthService.check(data.password)
+    if not strong:
+        raise ValidationError(reason)
 
     user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
     user.password_hash = hash_password(data.password)
     await db.commit()
+
+    await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
     logger.info(f"Password set for user {user.id}")
     return success_response({"status": "password_set"})
 
@@ -254,8 +305,7 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         await redis_cb.call(lambda: r.setex(f"partial:{partial}", 300, user_id))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id))
-    db.add(token_record)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -265,18 +315,32 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
 
 @router.post("/verify-magic-url-2fa", summary="Complete magic URL login with 2FA")
 async def verify_magic_url_2fa(
-    data: MagicUrl2FARequest, response: Response, db: AsyncSession = Depends(get_db),
+    data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
 ):
-    """Complete magic URL login when 2FA is enabled."""
+    """Complete magic URL login when 2FA is enabled. Friction tracked by partial token + IP."""
     r = get_redis()
     user_id = await redis_cb.call(lambda: r.get(f"partial:{data.partial_token}"))
     if not user_id:
         raise UnauthorizedError("Session expired or invalid")
 
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+    # Friction key = partial_token since we don't have email until after we resolve user
+    friction_key = f"partial:{data.partial_token}"
+
+    rl_result, is_slowed = await RateLimitService.check_with_friction(friction_key, ip)
+    if is_slowed and rl_result.retry_after:
+        await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
+
     await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
-    user = result.scalar_one_or_none()
+    user_result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise UnauthorizedError("Account not found or inactive")
 
@@ -285,10 +349,10 @@ async def verify_magic_url_2fa(
 
     secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
     if not TOTPService.verify_code(secret, data.totp_code):
+        await RateLimitService.record_failure(user.email, ip)
         raise UnauthorizedError("Invalid 2FA code")
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id))
-    db.add(token_record)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -297,24 +361,37 @@ async def verify_magic_url_2fa(
 
 
 @router.post("/verify-magic", summary="Verify magic link code")
-async def verify_magic(data: VerifyMagicRequest, response: Response, db: AsyncSession = Depends(get_db)):
+async def verify_magic(data: VerifyMagicRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    ip = _get_client_ip(request)
+
+    rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
+    if is_slowed and rl_result.retry_after:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
+
     if not await OTPService.verify_code(data.email, _OTP_MAGIC, data.code):
+        await RateLimitService.record_failure(data.email, ip)
         raise UnauthorizedError("Invalid or expired code")
 
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+    user_result = await db.execute(select(User).where(User.email == data.email))
+    user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise UnauthorizedError("Account not found or inactive")
 
     if user.is_2fa_enabled:
         if not data.totp_code:
+            await RateLimitService.record_failure(data.email, ip)
             raise UnauthorizedError("2FA code required")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
+            await RateLimitService.record_failure(data.email, ip)
             raise UnauthorizedError("Invalid 2FA code")
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id))
-    db.add(token_record)
+    await RateLimitService.reset_friction(data.email, ip)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -345,11 +422,14 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     user.is_2fa_pending = True
     await db.commit()
 
-    # Redis TTL — if user never confirms, pending state is effectively expired after this window
     r = get_redis()
     await redis_cb.call(
         lambda: r.setex(f"2fa_pending:{user.id}", settings.totp_setup_expire_seconds, "1")
     )
+
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+    await AuthAuditService.log_2fa_setup_requested(db, str(user.id), ip, ua)
 
     logger.info(f"2FA setup initiated: {user.email}")
     return success_response(TwoFactorSetupResponse(
@@ -365,11 +445,12 @@ async def enable_2fa(
 ):
     """Verify TOTP code to activate 2FA. Setup must be fresh (< TOTP_SETUP_EXPIRE_SECONDS old)."""
     user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     if not (user.totp_secret_encrypted and user.is_2fa_pending):
         raise ValidationError("No active 2FA setup. Call /2fa/setup first.")
 
-    # Redis TTL check — stale if key expired
     r = get_redis()
     pending = await redis_cb.call(lambda: r.get(f"2fa_pending:{user.id}"))
     if not pending:
@@ -387,6 +468,7 @@ async def enable_2fa(
     await db.commit()
 
     await redis_cb.call(lambda: r.delete(f"2fa_pending:{user.id}"))
+    await AuthAuditService.log_2fa_enabled(db, str(user.id), ip, ua)
 
     logger.info(f"2FA enabled: {user.email}")
     return success_response({"status": "2fa_enabled"})
@@ -398,6 +480,8 @@ async def disable_2fa(
 ):
     """Disable 2FA — requires correct password AND current TOTP code."""
     user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     if not user.is_2fa_enabled:
         raise ValidationError("2FA is not enabled")
@@ -416,6 +500,7 @@ async def disable_2fa(
 
     r = get_redis()
     await redis_cb.call(lambda: r.delete(f"2fa_pending:{user.id}"))
+    await AuthAuditService.log_2fa_disabled(db, str(user.id), ip, ua)
 
     logger.info(f"2FA disabled: {user.email}")
     return success_response({"status": "2fa_disabled"})
@@ -434,36 +519,52 @@ async def two_factor_status(request: Request, db: AsyncSession = Depends(get_db)
 
 
 @router.post("/forgot-password", summary="Request password reset code")
-async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+async def forgot_password(data: ForgotPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
         return success_response({"message": "If that email is registered, a code was sent"})
 
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
     code = await OTPService.send_code(data.email, _OTP_RESET)
     EmailService.send_password_reset_code(data.email, code)
+    await AuthAuditService.log_password_reset_request(db, data.email, ip, ua)
     logger.info(f"Password reset requested: {data.email}")
     return success_response({"message": "Reset code sent"})
 
 
 @router.post("/reset-password", summary="Reset password with code")
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    if len(data.new_password) < 8:
-        raise ValidationError("New password must be at least 8 characters")
+async def reset_password(data: ResetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    strong, reason = PasswordStrengthService.check(data.new_password)
+    if not strong:
+        raise ValidationError(reason)
+
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+    rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
+    if is_slowed and rl_result.retry_after:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
 
     if not await OTPService.verify_code(data.email, _OTP_RESET, data.code):
+        await RateLimitService.record_failure(data.email, ip)
         raise UnauthorizedError("Invalid or expired code")
 
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+    await RateLimitService.reset_friction(data.email, ip)
+    user_result = await db.execute(select(User).where(User.email == data.email))
+    user = user_result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError("User not found")
 
     user.password_hash = hash_password(data.new_password)
-    # Invalidate all existing sessions — password reset is a security event
     _revoke_all_refresh_tokens(db, str(user.id))
     await db.commit()
 
+    await AuthAuditService.log_password_reset_success(db, data.email, str(user.id), ip, ua)
     logger.info(f"Password reset: {data.email}")
     return success_response({"status": "password_reset"})
 
@@ -472,42 +573,62 @@ async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(
 
 
 @router.post("/login", summary="Login with email + password")
-async def login(data: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+async def login(data: LoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    ip = _get_client_ip(request)
+
+    rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
+    if is_slowed and rl_result.retry_after:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Too many attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
+
+    user_result = await db.execute(select(User).where(User.email == data.email))
+    user = user_result.scalar_one_or_none()
 
     if not user:
+        await AuthAuditService.log_login_fail(db, data.email, ip, ua, "user_not_found")
         raise UnauthorizedError("Invalid email or password")
 
-    # Don't leak whether email exists based on password check timing
     if not verify_password(data.password, user.password_hash):
+        await RateLimitService.record_failure(data.email, ip)
+        await AuthAuditService.log_login_fail(db, data.email, ip, ua, "wrong_password")
         raise UnauthorizedError("Invalid email or password")
 
     if not user.is_active:
         raise UnauthorizedError("Account is inactive")
 
-    # Magic-link-only accounts have empty password_hash
     if not user.password_hash:
         raise UnauthorizedError("No password set for this account. Use magic link login.")
 
     if user.is_2fa_enabled:
         if not data.totp_code:
+            await RateLimitService.record_failure(data.email, ip)
+            await AuthAuditService.log_login_fail(db, data.email, ip, ua, "2fa_code_missing")
             raise UnauthorizedError("2FA code required")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
+            await RateLimitService.record_failure(data.email, ip)
+            await AuthAuditService.log_login_fail(db, data.email, ip, ua, "wrong_2fa_code")
             raise UnauthorizedError("Invalid 2FA code")
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id))
-    db.add(token_record)
+    await RateLimitService.reset_friction(data.email, ip)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
+    await AuthAuditService.log_login_success(db, data.email, str(user.id), ip, ua)
     logger.info(f"Login: {data.email}")
     return success_response({"id": str(user.id), "email": user.email, "username": user.username})
 
 
 @router.post("/logout", summary="Logout (current device)")
 async def logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
     _blacklist_access_token(request)
 
     refresh_token = request.cookies.get("refresh_token")
@@ -518,23 +639,97 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
         token_record = result.scalar_one_or_none()
         if token_record:
             token_record.revoked = True
+            # Also revoke the linked session
+            session_result = await db.execute(
+                select(Session).where(Session.refresh_token_id == token_record.id)
+            )
+            session = session_result.scalar_one_or_none()
+            if session:
+                session.revoked = True
             await db.commit()
 
     clear_auth_cookies(response)
+    await AuthAuditService.log_logout(db, str(user.id), ip, ua)
     return success_response({"status": "logged_out"})
 
 
 @router.post("/logout-all", summary="Logout all devices")
 async def logout_all(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     _blacklist_access_token(request)
     _revoke_all_refresh_tokens(db, str(user.id))
+    # Also revoke all sessions for this user
+    sessions_result = await db.execute(
+        select(Session).where(Session.user_id == user.id, Session.revoked == False)
+    )
+    for s in sessions_result.scalars().all():
+        s.revoked = True
     await db.commit()
 
     clear_auth_cookies(response)
+    await AuthAuditService.log_logout_all(db, str(user.id), ip, ua)
     logger.info(f"Logout all: {user.id}")
     return success_response({"status": "logged_out_all_devices"})
+
+
+@router.get("/sessions", summary="List active sessions")
+async def list_sessions(request: Request, db: AsyncSession = Depends(get_db)):
+    """List all active sessions for the current user."""
+    user = await get_current_user(request, db)
+
+    result = await db.execute(
+        select(Session).where(
+            Session.user_id == user.id,
+            Session.revoked == False,
+        ).order_by(Session.last_active_at.desc())
+    )
+    sessions = result.scalars().all()
+
+    return success_response([
+        {
+            "id": str(s.id),
+            "ip_address": s.ip_address,
+            "user_agent": s.user_agent,
+            "created_at": s.created_at,
+            "last_active_at": s.last_active_at,
+            "expires_at": s.expires_at,
+        }
+        for s in sessions
+    ])
+
+
+@router.delete("/sessions/{session_id}", summary="Revoke a specific session")
+async def revoke_session(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Revoke a specific session by ID. Users can only revoke their own sessions."""
+    user = await get_current_user(request, db)
+
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == user.id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise NotFoundError("Session not found")
+
+    session.revoked = True
+
+    # Also revoke the associated refresh token
+    refresh_result = await db.execute(
+        select(RefreshToken).where(RefreshToken.id == session.refresh_token_id)
+    )
+    rt = refresh_result.scalar_one_or_none()
+    if rt:
+        rt.revoked = True
+
+    await db.commit()
+
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+    await AuthAuditService.log(db, "session_revoked", True, user_id=str(user.id), ip_address=ip, user_agent=ua)
+
+    return success_response({"status": "session_revoked"})
 
 
 @router.post("/change-password", summary="Change password")
@@ -543,23 +738,27 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     if not verify_password(data.old_password, user.password_hash):
+        await AuthAuditService.log_password_change(db, str(user.id), ip, ua, success=False, reason="wrong_old_password")
         raise UnauthorizedError("Current password is incorrect")
 
-    if len(data.new_password) < 8:
-        raise ValidationError("New password must be at least 8 characters")
+    strong, reason = PasswordStrengthService.check(data.new_password)
+    if not strong:
+        raise ValidationError(reason)
 
     user.password_hash = hash_password(data.new_password)
 
     _blacklist_access_token(request)
-    # Revoke all OTHER refresh tokens; keep current so the re-login is seamless
     current_refresh = request.cookies.get("refresh_token")
     _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
     await db.commit()
 
-    new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id))
-    db.add(new_record)
+    await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
+
+    new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, new_access, new_refresh)
 

@@ -42,4 +42,8 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.snapshot_price_history",
         "schedule": 300.0,
     },
+    "cleanup-expired-sessions": {
+        "task": "app.workers.tasks.cleanup_expired_sessions",
+        "schedule": crontab(hour=3, minute=0),  # 3am daily
+    },
 }

@@ -45,7 +45,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6382/1"
 
     # Rate limiting
-    rate_limit_enabled: bool = False
+    rate_limit_enabled: bool = True
+    rate_limit_per_ip: int = 60          # general API per IP per minute
+    rate_limit_per_email_ip: int = 5     # auth decisions per email+IP per minute
+    rate_limit_auth_max_attempts: int = 5  # failed attempts before progressive friction
+    rate_limit_auth_lockout_seconds: int = 900  # 15 min
 
     # Resend (email notifications)
     resend_api_key: str = ""

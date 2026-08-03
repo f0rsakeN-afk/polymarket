@@ -52,6 +52,7 @@ class Session(Base, UUIDMixin):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     last_active_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User")
     refresh_token = relationship("RefreshToken", back_populates="sessions")
