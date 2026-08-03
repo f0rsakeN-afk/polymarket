@@ -809,5 +809,7 @@ async def me(request: Request, db: AsyncSession = Depends(get_db)):
         "email": user.email,
         "username": user.username,
         "is_email_verified": user.is_email_verified,
+        "is_admin": user.is_admin,
+        "is_2fa_enabled": user.is_2fa_enabled,
         "referral_code": user.referral_code,
     })

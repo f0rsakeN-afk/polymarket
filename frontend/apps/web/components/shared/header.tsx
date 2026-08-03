@@ -7,6 +7,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@workspace/ui/components/sheet"
 import { MenuIcon, SunIcon, MoonIcon } from "lucide-react"
 import { useTheme } from "next-themes"
+import { UserMenu } from "@/components/auth/user-menu"
 
 const navLinks = [
   { href: "/", label: "Markets" },
@@ -103,7 +104,7 @@ function Header() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 font-bold tracking-wide">
           <PolygonIcon />
-          <span>POLYMARKET</span>
+          <span>PredictX</span>
         </Link>
 
         {/* Nav */}
@@ -121,19 +122,7 @@ function Header() {
         {/* Right */}
         <div className="flex items-center gap-2">
           <ThemeToggle />
-
-          <Link
-            href="/portfolio"
-            className="hidden rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted sm:block"
-          >
-            Portfolio
-          </Link>
-          <Link
-            href="/wallet"
-            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Connect Wallet
-          </Link>
+          <UserMenu />
 
           {/* Mobile menu */}
           <Sheet>
@@ -152,14 +141,6 @@ function Header() {
                     isActive={isActive(href)}
                   />
                 ))}
-                <div className="mt-4 pt-4 border-t border-border">
-                  <Link
-                    href="/wallet"
-                    className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 text-center block"
-                  >
-                    Connect Wallet
-                  </Link>
-                </div>
               </nav>
             </SheetContent>
           </Sheet>

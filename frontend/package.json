@@ -27,11 +27,13 @@
     "packages/*"
   ],
   "dependencies": {
-    "@hookform/resolvers": "^5.5.7",
+    "@hookform/resolvers": "^5.7.1",
     "@tanstack/react-query": "^5.101.4",
-    "react-hook-form": "^7.83.0",
+    "react-hook-form": "^7.84.0",
     "react-hot-toast": "^2.6.0",
     "sileo": "^0.1.5",
-    "valibot": "^1.4.2"
+    "valibot": "^1.4.2",
+    "zod": "^4.4.3",
+    "zod-form-data": "^3.0.3"
   }
 }
