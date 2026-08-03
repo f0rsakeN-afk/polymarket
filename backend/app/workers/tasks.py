@@ -737,3 +737,102 @@ def send_email(self, to_email: str, subject: str, body: str):
     except Exception as exc:
         logger.error(f"Failed to send email to {to_email}: {exc}")
         raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True, name="app.workers.tasks.send_auth_email",
+    max_retries=3, default_retry_delay=30,
+)
+def send_auth_email(self, email: str, purpose: str, code: str | None = None, magic_url: str | None = None):
+    """
+    Send an auth-related email. Purpose drives content:
+    - verify    → email verification code
+    - magic     → login code OR magic URL
+    - resetpwd  → password reset code
+    """
+    if purpose == "verify":
+        subject = "Your Polymarket verification code"
+        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+    elif purpose == "magic" and magic_url:
+        subject = "Your Polymarket login link"
+        body = (
+            f"Click this link to sign in: {magic_url}\n\n"
+            f"This link expires in 15 minutes. "
+            f"If you didn't request this, you can safely ignore this email."
+        )
+    elif purpose == "magic":
+        subject = "Your Polymarket login code"
+        body = (
+            f"Your login code is: {code}\n"
+            f"This code expires in 10 minutes. "
+            f"If you didn't request this, you can safely ignore this email."
+        )
+    elif purpose == "resetpwd":
+        subject = "Your Polymarket password reset code"
+        body = (
+            f"Your password reset code is: {code}\n"
+            f"This code expires in 10 minutes. "
+            f"If you didn't request this, your account is safe."
+        )
+    else:
+        subject = "Your Polymarket code"
+        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+
+    self.delay(to_email=email, subject=subject, body=body)
+    logger.info(f"Auth email prepared for {email}, purpose={purpose}")
+
+
+@shared_task(bind=True, name="app.workers.tasks.enqueue_otp")
+def enqueue_otp(self, email: str, purpose: str):
+    """
+    Store OTP in Redis and dispatch the appropriate email via the send_email task.
+    Called by auth routes as a fire-and-forget Celery task.
+    """
+    import hashlib
+    import hmac
+    import random
+
+    CODE_TTL = 600  # 10 minutes
+
+    def _get_secret(e: str, p: str) -> str:
+        import app.config
+        base = f"{app.config.settings.jwt_secret}:{e}:{p}"
+        return hashlib.sha256(base.encode()).hexdigest()[:32]
+
+    def _hash_code(code: str, secret: str) -> str:
+        return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
+
+    def _generate_code() -> str:
+        return str(random.randint(100000, 999999))
+
+    code = _generate_code()
+    secret = _get_secret(email, purpose)
+    key = f"otp:{purpose}:{email}"
+
+    # Store in Redis synchronously inside the task
+    import asyncio
+    async def _store():
+        from app.redis import get_redis, redis_cb
+        r = get_redis()
+        await redis_cb.call(
+            lambda: r.setex(key, CODE_TTL, f"{code}:{_hash_code(code, secret)}")
+        )
+    asyncio.run(_store())
+
+    # Build email content based on purpose
+    if purpose == "verify":
+        subject = "Your Polymarket verification code"
+        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+    elif purpose == "magic":
+        subject = "Your Polymarket login code"
+        body = f"Your login code is: {code}\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email."
+    elif purpose == "resetpwd":
+        subject = "Your Polymarket password reset code"
+        body = f"Your password reset code is: {code}\nThis code expires in 10 minutes. If you didn't request this, your account is safe."
+    else:
+        subject = "Your Polymarket code"
+        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+
+    send_email.delay(to_email=email, subject=subject, body=body)
+    logger.info(f"OTP enqueued for {email}, purpose={purpose}")
+

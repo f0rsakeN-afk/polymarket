@@ -13,11 +13,14 @@ class User(Base, UUIDMixin, TimestampMixin):
     email = Column(String(255), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    is_verified = Column(Boolean, default=False, nullable=False)
+    is_email_verified = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
     is_system = Column(Boolean, default=False, nullable=False)  # system wallets (treasury)
     referral_code = Column(String(32), unique=True, nullable=True)
+    totp_secret_encrypted = Column(String(255), nullable=True)
+    is_2fa_enabled = Column(Boolean, default=False, nullable=False)
+    is_2fa_pending = Column(Boolean, default=False, nullable=False)  # setup in progress, not confirmed
 
     comments = relationship("Comment", back_populates="user")
     referrals_made = relationship("Referral", foreign_keys="Referral.referrer_id", back_populates="referrer")

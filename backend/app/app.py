@@ -86,6 +86,11 @@ app = FastAPI(
 )
 
 origins = [o.strip() for o in settings.cors_origins.split(",")]
+if "*" in origins:
+    raise ValueError(
+        "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
+        "Set explicit origins in CORS_ORIGINS (e.g. CORS_ORIGINS=http://localhost:3000)"
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

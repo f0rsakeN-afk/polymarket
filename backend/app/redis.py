@@ -12,9 +12,22 @@ pool = ConnectionPool.from_url(
     decode_responses=True,
 )
 
+# ponytail: separate pool for Celery workers so async API pool and sync worker pool don't contend
+worker_pool = ConnectionPool.from_url(
+    settings.redis_url,
+    max_connections=settings.celery_worker_redis_max_connections,
+    decode_responses=True,
+)
+
 
 def get_redis() -> redis.Redis:
+    """For async FastAPI routes — shares pool with API server."""
     return redis.Redis(connection_pool=pool)
+
+
+def get_worker_redis() -> redis.Redis:
+    """For sync Celery workers — dedicated pool, avoids contention with API pool."""
+    return redis.Redis(connection_pool=worker_pool)
 
 
 class RedisCircuitBreaker:
