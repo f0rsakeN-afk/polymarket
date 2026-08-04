@@ -5,11 +5,26 @@ logger = logging.getLogger("polymarket")
 
 
 def _send_email_sync(to_email: str, subject: str, body: str):
-    """Send email synchronously via Resend API. Used by Celery worker."""
+    """Send email synchronously. Used as Celery fallback — mirrors tasks.send_email logic."""
     try:
-        import resend
         from app.config import settings
+        import smtplib
+        from email.message import EmailMessage
 
+        if settings.smtp_host:
+            msg = EmailMessage()
+            msg["From"] = settings.smtp_from_email
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg.set_content(body)
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_pass)
+                server.send_message(msg)
+            logger.info(f"[EMAIL] sent via SMTP to {to_email}: {subject}")
+            return
+
+        import resend
         if not settings.resend_api_key:
             logger.warning(f"[EMAIL MOCK] to={to_email} subject={subject}")
             return

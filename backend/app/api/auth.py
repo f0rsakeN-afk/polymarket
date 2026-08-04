@@ -143,11 +143,6 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
 
-    # Check username first — must be unique always
-    username_result = await db.execute(select(User).where(User.username == data.username))
-    if username_result.scalar_one_or_none():
-        raise ConflictError("Username already taken")
-
     # Check email — if verified, tell them to login; if not, resend code silently
     email_result = await db.execute(select(User).where(User.email == data.email))
     existing_user = email_result.scalar_one_or_none()

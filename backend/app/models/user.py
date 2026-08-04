@@ -11,7 +11,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "users"
 
     email = Column(String(255), unique=True, nullable=False, index=True)
-    username = Column(String(100), unique=True, nullable=False, index=True)
+    username = Column(String(100), nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_email_verified = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -38,7 +38,7 @@ class RefreshToken(Base, UUIDMixin):
 
     user = relationship("User")
     sessions = relationship("Session", cascade="all, delete-orphan")
-    current_session = relationship("Session", back_populates="refresh_token", uselist=False)
+    current_session = relationship("Session", back_populates="refresh_token", uselist=False, overlaps="sessions")
 
 
 class Session(Base, UUIDMixin):

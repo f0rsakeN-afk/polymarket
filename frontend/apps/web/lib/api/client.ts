@@ -6,33 +6,41 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
-    public data?: unknown
+    public data?: unknown,
+    public error_code?: string
   ) {
     super(message)
     this.name = "ApiError"
   }
 }
 
-export interface ValidationErrorDetail {
-  detail: string | ValidationErrorItem[]
+interface ApiErrorData {
+  success: false
+  error: string
+  error_code?: string
+  details?: { errors?: { field: string; message: string }[] }
 }
 
-export interface ValidationErrorItem {
-  loc: (string | number)[]
-  msg: string
-  type: string
-}
-
-function extractMessage(data: unknown): string {
-  if (!data || typeof data !== "object") return "An error occurred"
+function extractMessage(data: unknown): { message: string; error_code?: string } {
+  if (!data || typeof data !== "object") return { message: "An error occurred" }
   const d = data as Record<string, unknown>
+
+  // Handle FastAPI ValidationError format (detail array) — e.g. {detail: [{loc, msg, type}]}
   if (Array.isArray(d.detail)) {
-    return (d.detail as ValidationErrorItem[])
-      .map((e) => e.msg || e.loc.join("."))
-      .join("; ")
+    const items = d.detail as { loc: (string | number)[]; msg: string }[]
+    return { message: items.map((e) => e.msg || e.loc.join(".")).join("; ") }
   }
-  if (typeof d.detail === "string") return d.detail
-  return "An error occurred"
+
+  // Handle our backend error_response format — {success: false, error: "...", error_code: "..."}
+  const ad = d as unknown as ApiErrorData
+  if (ad.success === false && ad.error) {
+    return { message: ad.error, error_code: ad.error_code }
+  }
+
+  // Fallback for plain string detail
+  if (typeof d.detail === "string") return { message: d.detail }
+
+  return { message: "An error occurred" }
 }
 
 // ─── Token refresh ───────────────────────────────────────────────────────────
@@ -125,14 +133,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
         if (!retryRes.ok) {
           const data = await retryRes.json().catch(() => ({}))
-          throw new ApiError(extractMessage(data), retryRes.status, data)
+          const { message, error_code } = extractMessage(data)
+          throw new ApiError(message, retryRes.status, data, error_code)
         }
         return retryRes.json() as Promise<T>
       }
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new ApiError(extractMessage(data), res.status, data)
+        const { message, error_code } = extractMessage(data)
+        throw new ApiError(message, res.status, data, error_code)
       }
 
       return res.json() as Promise<T>

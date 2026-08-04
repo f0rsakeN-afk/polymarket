@@ -22,11 +22,17 @@ export function MarketDetailClient() {
         sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`, description: `${result?.data?.shares?.toFixed(2) ?? 0} shares at $${result?.data?.price?.toFixed(4) ?? 0}` })
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error"
-      if (msg.includes("slippage")) {
+      const err = e as { message: string; error_code?: string }
+      const msg = err.message
+      const code = err.error_code
+      if (code === "VALIDATION_ERROR") {
+        sileo.error({ title: "Invalid order", description: msg })
+      } else if (msg.includes("slippage") || code === "SLIPPAGE_EXCEEDED") {
         sileo.error({ title: "Price moved", description: "The price changed more than expected. Please review and try again." })
-      } else if (msg.includes("duplicate") || msg.includes("already placed")) {
+      } else if (msg.includes("duplicate") || msg.includes("already placed") || code === "DUPLICATE_ORDER") {
         sileo.info({ title: "Order already placed" })
+      } else if (code === "INSUFFICIENT_BALANCE") {
+        sileo.error({ title: "Insufficient balance", description: "You don't have enough funds for this order." })
       } else {
         sileo.error({ title: "Trade failed", description: msg })
       }
