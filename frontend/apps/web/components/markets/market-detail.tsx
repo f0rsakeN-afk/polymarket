@@ -55,7 +55,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
     if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
       setRealtimeTrades((prev) => {
-        const next = [{ id: `ws-${Date.now()}`, market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: msg.price!, amount: msg.amount!, executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
+        const next = [{ id: `ws-${Date.now()}`, market_id: "", market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: msg.price!, amount: msg.amount!, executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
         return next.slice(0, 200)
       })
       return

@@ -52,6 +52,7 @@ export interface MarketDetailResponse extends Omit<MarketResponse, "id"> {
 
 export interface Trade {
   id: string
+  market_id: string
   market_slug: string
   market_question: string
   outcome: string

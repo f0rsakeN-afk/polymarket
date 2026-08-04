@@ -155,8 +155,8 @@ export default function PortfolioPage() {
                         {pos.outcome}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{pos.shares.toFixed(0)}</TableCell>
-                    <TableCell className="text-right tabular-nums">${pos.avg_price.toFixed(3)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pos.shares_held.toFixed(0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">${pos.average_price.toFixed(3)}</TableCell>
                     <TableCell
                       className={`text-right tabular-nums ${
                         pos.unrealized_pnl >= 0 ? "text-green-500" : "text-red-500"

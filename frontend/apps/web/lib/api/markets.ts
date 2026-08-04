@@ -145,3 +145,29 @@ export function getGlobalTrades(params?: {
   const query = qs.toString()
   return api.get<TradesResponse>(`/api/v1/trades${query ? `?${query}` : ""}`)
 }
+
+export interface OrderBookEntry {
+  outcome_id: string
+  outcome: string
+  price: number
+  size: number
+}
+
+export interface OrderBook {
+  bids: OrderBookEntry[]
+  asks: OrderBookEntry[]
+}
+
+export function getOrderBook(slug: string) {
+  return api.get<OrderBook>(`/api/v1/markets/${slug}/orderbook`)
+}
+
+export interface ClaimResponse {
+  claimed: number
+}
+
+export function claimWinnings(slug: string) {
+  return api.post<{ success: boolean; data: ClaimResponse }>(
+    `/api/v1/markets/${slug}/claim`
+  )
+}

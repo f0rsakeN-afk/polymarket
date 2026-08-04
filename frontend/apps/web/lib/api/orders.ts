@@ -32,12 +32,32 @@ export function listOrders(params?: {
   return api.get<OrdersResponse>(`/api/v1/orders/${query ? `?${query}` : ""}`)
 }
 
+export interface PlaceOrderResponse {
+  order_id: string
+  status: string
+  side: string
+  outcome: string
+  shares: number
+  price: number
+  price_before: number
+  price_after: number
+  yes_price_after: number
+  no_price_after: number
+  slippage: number
+  fee: number
+  wallet_balance: number
+  duplicate?: boolean
+}
+
 export function getOrder(orderId: string) {
-  return api.get<Order>(`/api/v1/orders/${orderId}`)
+  return api.get<{ success: boolean; data: Order }>(`/api/v1/orders/${orderId}`)
 }
 
 export function placeOrder(order: PlaceOrderPayload) {
-  return api.post<Order>("/api/v1/orders/", placeOrderSchema.parse(order))
+  return api.post<{ success: boolean; data: PlaceOrderResponse }>(
+    "/api/v1/orders/",
+    placeOrderSchema.parse(order)
+  )
 }
 
 export function cancelOrder(orderId: string) {

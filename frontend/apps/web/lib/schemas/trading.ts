@@ -5,13 +5,13 @@ export const placeOrderSchema = z.object({
   outcome: z.string(),
   side: z.enum(["buy", "sell"]),
   order_type: z.enum(["market", "limit", "fill_or_kill"]),
-  amount: z.number().min(0.01),
-  price: z.number().min(0.001).max(0.999).optional(),
+  amount: z.number().gt(0),
+  price: z.number().min(0).max(1).nullable().optional(),
   post_only: z.boolean(),
   expires_at: z.string().optional(),
   client_order_id: z.string().optional(),
-  max_slippage: z.number().min(0.001).max(0.5),
-  min_shares_out: z.number().min(0).optional(),
+  max_slippage: z.number().min(0).max(1).optional(),
+  min_shares_out: z.number().gt(0).optional(),
   quote_id: z.string().optional(),
 })
 

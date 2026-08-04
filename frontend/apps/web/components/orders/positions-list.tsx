@@ -35,7 +35,7 @@ function PositionRow({ position }: { position: Position }) {
             {position.outcome}
           </span>
           <span className="text-[10px]">
-            {position.shares} shares @ ${position.avg_price.toFixed(2)}
+            {position.shares_held} shares @ ${position.average_price.toFixed(2)}
           </span>
         </div>
       </div>
@@ -43,9 +43,6 @@ function PositionRow({ position }: { position: Position }) {
         <span className={`text-xs font-bold ${isProfit ? "text-green-500" : "text-red-500"}`}>
           {isProfit ? "+" : "-"}{formatUSD(pnl)}
         </span>
-        <div className="text-muted-foreground text-[10px]">
-          ${position.current_price.toFixed(2)} now
-        </div>
       </div>
     </div>
   )

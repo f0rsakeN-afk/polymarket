@@ -23,36 +23,43 @@ export interface Order {
   amount: number
   remaining_amount?: number
   status: "pending" | "partial" | "filled" | "cancelled" | "expired"
-  expires_at?: string
-  fees_paid?: number
+  shares_bought?: number | null
+  shares_sold?: number | null
+  fees_paid?: number | null
   created_at: string
+  executed_at?: string | null
 }
 
 export interface OrdersResponse {
   success: boolean
-  data: Order[]
-  page: number
-  page_size: number
-  has_more: boolean
+  data: {
+    orders: Order[]
+    total: number
+    page: number
+    page_size: number
+    has_more: boolean
+  }
 }
 
 export interface Position {
   id: string
   market_id: string
   market_slug: string
-  market_question: string
+  market_question: string | null
   outcome: "yes" | "no"
-  shares: number
-  avg_price: number
+  shares_held: number
+  average_price: number
   realized_pnl: number
   unrealized_pnl: number
-  current_price: number
 }
 
 export interface PositionsResponse {
   success: boolean
-  data: Position[]
-  page: number
-  page_size: number
-  has_more: boolean
+  data: {
+    positions: Position[]
+    total: number
+    page: number
+    page_size: number
+    has_more: boolean
+  }
 }

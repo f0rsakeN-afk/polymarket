@@ -15,10 +15,10 @@ export function useOrders(filters?: {
     queryFn: ({ pageParam }) => listOrders({ page: pageParam, page_size: 20, ...filters }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.has_more ? lastPageParam + 1 : undefined,
+      lastPage.data.has_more ? lastPageParam + 1 : undefined,
     select: (data) => ({
-      orders: data.pages.flatMap((p) => p.data) as Order[],
-      hasMore: data.pages[data.pages.length - 1]?.has_more ?? false,
+      orders: data.pages.flatMap((p) => p.data.orders) as Order[],
+      hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
     }),
   })
 }
