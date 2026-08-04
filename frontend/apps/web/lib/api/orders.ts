@@ -1,5 +1,13 @@
 import { api } from "./client"
+import { z } from "zod"
+import { placeOrderSchema } from "@/lib/schemas/trading"
 import type { OrdersResponse, Order, QuoteResponse } from "../types/api"
+
+export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
+
+export function parseOrder(data: unknown): PlaceOrderPayload {
+  return placeOrderSchema.parse(data)
+}
 
 export function listOrders(params?: {
   page?: number
@@ -28,23 +36,8 @@ export function getOrder(orderId: string) {
   return api.get<Order>(`/api/v1/orders/${orderId}`)
 }
 
-export interface PlaceOrderPayload {
-  market_id: string
-  outcome: string
-  side: "buy" | "sell"
-  order_type?: "market" | "limit" | "fill_or_kill"
-  amount: number
-  price?: number
-  expires_at?: string
-  post_only?: boolean
-  client_order_id?: string
-  max_slippage?: number
-  min_shares_out?: number
-  quote_id?: string
-}
-
 export function placeOrder(order: PlaceOrderPayload) {
-  return api.post<Order>("/api/v1/orders/", order)
+  return api.post<Order>("/api/v1/orders/", placeOrderSchema.parse(order))
 }
 
 export function cancelOrder(orderId: string) {

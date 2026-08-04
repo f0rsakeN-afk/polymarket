@@ -14,12 +14,48 @@ from app.redis import get_redis, redis_cb
 
 ALGORITHM = "HS256"
 
+# ── Response cache helpers ────────────────────────────────────────────────────
+
+
+async def cache_get(key: str) -> dict | list | None:
+    r = get_redis()
+    data = await redis_cb.call(lambda: r.get(f"cache:{key}"))
+    if data:
+        import json
+        return json.loads(data)
+    return None
+
+
+async def cache_set(key: str, data: dict | list, ttl: int = 30):
+    r = get_redis()
+    import json
+    await redis_cb.call(lambda: r.setex(f"cache:{key}", ttl, json.dumps(data)))
+
+
+async def cache_invalidate(key: str):
+    r = get_redis()
+    await redis_cb.call(lambda: r.delete(f"cache:{key}"))
+
+
+async def cache_invalidate_pattern(pattern: str):
+    """Delete all keys matching pattern (uses SCAN to avoid blocking)."""
+    r = get_redis()
+    cursor = 0
+    while True:
+        cursor, keys = await redis_cb.call(lambda: r.scan(cursor, match=f"cache:{pattern}", count=100))
+        if keys:
+            await redis_cb.call(lambda: r.delete(*keys))
+        if cursor == 0:
+            break
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    if not hashed:
+        return False
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 

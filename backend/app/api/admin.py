@@ -12,6 +12,7 @@ from app.deps import get_current_user
 from app.models.audit import AuthAuditEvent
 from app.models.user import User
 from app.services.audit_service import AuthAuditService
+from app.services.liquidity_service import LiquidityService
 
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -185,3 +186,11 @@ async def list_audit_events(
         page_size=page_size,
         has_more=len(events) == page_size,
     )
+
+
+@router.post("/distribute-protocol-fees", summary="Distribute accumulated protocol fees to treasury (admin)")
+async def distribute_protocol_fees(request: Request, db: AsyncSession = Depends(get_db)):
+    """Withdraw protocol fees from all markets to the treasury wallet."""
+    await _get_admin_user(request, db)
+    result = await LiquidityService.distribute_protocol_fees(db)
+    return success_response(result)

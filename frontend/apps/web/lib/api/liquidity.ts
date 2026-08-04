@@ -1,4 +1,6 @@
 import { api } from "./client"
+import { z } from "zod"
+import { addLiquiditySchema } from "@/lib/schemas/liquidity"
 
 export interface LPAnalyticsResponse {
   success: boolean
@@ -27,15 +29,17 @@ export function getLPAnalytics() {
   return api.get<LPAnalyticsResponse>("/api/v1/markets/liquidity/analytics")
 }
 
-export function addLiquidity(marketId: string, amount: number) {
+export function addLiquidity(marketId: string, data: { amount: number }) {
   return api.post<{ success: boolean; data: { lp_tokens: number; pool_yes: number; pool_no: number } }>(
-    `/api/v1/markets/${marketId}/liquidity?amount=${amount}`
+    `/api/v1/markets/${marketId}/liquidity`,
+    addLiquiditySchema.parse(data)
   )
 }
 
-export function removeLiquidity(marketId: string, lpTokens: number) {
+export function removeLiquidity(marketId: string, data: { lp_tokens: number }) {
   return api.delete<{ success: boolean; data: { usdc_returned: number; lp_burned: number } }>(
-    `/api/v1/markets/${marketId}/liquidity?lp_tokens=${lpTokens}`
+    `/api/v1/markets/${marketId}/liquidity`,
+    data
   )
 }
 

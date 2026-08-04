@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
 import CategoryTabs from "@/components/home/category-tabs"
 import { MarketList } from "@/components/markets/market-list"
-import { useMarkets, useGlobalTrades } from "@/hooks/use-markets"
+import { useMarkets, useGlobalTrades, useMarketCategories } from "@/hooks/use-markets"
 import { SkeletonTrendingCarousel, SkeletonMarketGrid, SkeletonTradeFeed } from "@/components/shared/skeletons"
 import { SearchIcon } from "lucide-react"
 
@@ -28,6 +28,7 @@ export default function HomePageContent() {
   }, [search])
 
   const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined })
+  const { data: closingSoonData, isLoading: closingSoonLoading } = useMarkets({ sort: "closing_soon" })
   const { data: tradesData } = useGlobalTrades()
 
   const handleLoadMore = useCallback(() => {
@@ -55,6 +56,19 @@ export default function HomePageContent() {
           <TrendingCarousel markets={trending} />
         )}
       </section>
+
+      {closingSoonData && closingSoonData.markets.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Closing Soon</h2>
+          </div>
+          {closingSoonLoading ? (
+            <SkeletonTrendingCarousel />
+          ) : (
+            <TrendingCarousel markets={closingSoonData.markets.slice(0, 8)} />
+          )}
+        </section>
+      )}
 
       <section>
         <div className="relative mb-4">

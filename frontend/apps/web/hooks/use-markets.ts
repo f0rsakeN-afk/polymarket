@@ -1,12 +1,13 @@
 "use client"
 
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, updateComment, deleteComment, getMarketFAQs, getRelatedMarkets, getPriceHistory, resolveMarket } from "@/lib/api/markets"
+import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, updateComment, deleteComment, getMarketFAQs, getRelatedMarkets, getPriceHistory, resolveMarket, createMarket } from "@/lib/api/markets"
+import { api } from "@/lib/api/client"
 import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade, Comment } from "@/lib/types/api"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
 
-export function useMarkets(params?: { q?: string; category?: string; status?: string }) {
+export function useMarkets(params?: { q?: string; category?: string; status?: string; sort?: string }) {
   return useInfiniteQuery({
     queryKey: ["markets", params] as const,
     queryFn: ({ pageParam = 1 }) => listMarkets({ ...params, page: pageParam, page_size: 20 }),
@@ -126,6 +127,16 @@ export function useRelatedMarkets(slug: string) {
   })
 }
 
+export function useCreateMarket() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: Parameters<typeof createMarket>[0]) => createMarket(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["markets"] })
+    },
+  })
+}
+
 export function useResolveMarket() {
   const qc = useQueryClient()
   return useMutation({
@@ -146,5 +157,12 @@ export function usePriceHistory(slug: string, interval = "5m") {
     queryFn: () => getPriceHistory(slug, { interval }).then((r) => r.data),
     enabled: !!slug,
     refetchInterval: 300_000,
+  })
+}
+
+export function useMarketCategories() {
+  return useQuery<string[]>({
+    queryKey: ["market-categories"],
+    queryFn: () => api.get<{ success: boolean; data: string[] }>("/api/v1/markets/categories").then((r) => r.data),
   })
 }

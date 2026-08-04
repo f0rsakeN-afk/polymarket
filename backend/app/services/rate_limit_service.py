@@ -200,7 +200,7 @@ class RateLimitService:
         Returns (result, was_slowed). Call reset_friction() on success.
         """
         if not settings.rate_limit_enabled:
-            return RateLimitService.check(limit_type, identifier, ip), False
+            return RateLimitResult(allowed=True, limit=999, remaining=999, retry_after=None, is_slowdown=False), False
 
         # Normalize IP for friction key
         normalized_ip = RateLimitService._normalize_ip(ip)

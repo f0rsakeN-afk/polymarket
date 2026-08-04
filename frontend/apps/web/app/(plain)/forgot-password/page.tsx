@@ -7,6 +7,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { forgotPasswordSchema, type ForgotPasswordInput } from "@/lib/schemas/auth";
 import { passwordApi } from "@/lib/api/auth";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
@@ -30,8 +31,7 @@ function PolygonMark({ className }: { className?: string }) {
   );
 }
 
-const schema = z.object({ email: z.string().email("Please enter a valid email address") });
-type Input = z.infer<typeof schema>;
+type Input = ForgotPasswordInput;
 
 export default function ForgotPasswordPage() {
   const searchParams = useSearchParams();
@@ -40,7 +40,7 @@ export default function ForgotPasswordPage() {
   const [submittedEmail, setSubmittedEmail] = useState(emailParam);
 
   const form = useForm<Input>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(forgotPasswordSchema),
     defaultValues: { email: emailParam },
   });
 

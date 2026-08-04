@@ -18,6 +18,7 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.config import settings
+from app.deps import cache_invalidate
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
@@ -552,10 +553,8 @@ class OrderService:
 
         # ── Step 9: Single commit ──
 
-        await db.commit()
-
         tx.reference_id = str(order.id)
-        await db.refresh(order)
+        await db.commit()
 
         # ── Step 10: Post-commit notifications (best-effort) ──
 
@@ -571,6 +570,16 @@ class OrderService:
                 "amount": float(total_shares),
                 "username": user.username,
             })
+            await redis_pubsub.publish_global_trade({
+                "market_id": str(market.id),
+                "outcome": data.outcome,
+                "side": data.side,
+                "price": float(amm_price_val) if amm_price_val > 0 else float(matched_usdc / matched_shares) if matched_shares > 0 else 0,
+                "amount": float(total_shares),
+                "username": user.username,
+            })
+            await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", {})
+            await cache_invalidate(f"markets:orderbook:{market.slug}")
         except Exception:
             pass
 

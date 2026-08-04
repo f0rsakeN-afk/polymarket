@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,8 +96,8 @@ async def get_order(order_id: str, request: Request, db: AsyncSession = Depends(
 @router.get("/", summary="List orders")
 async def list_orders(
     request: Request,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     side: str | None = None,
     order_type: str | None = None,

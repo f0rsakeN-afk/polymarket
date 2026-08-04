@@ -216,6 +216,15 @@ async def edit_comment(
     await db.commit()
     await db.refresh(comment)
 
+    try:
+        await redis_pubsub.publish_market_event(str(market.id), "comment:updated", {
+            "comment_id": str(comment.id),
+            "content": comment.content,
+            "updated_at": comment.updated_at.isoformat(),
+        })
+    except Exception:
+        pass  # non-fatal
+
     return success_response({
         "id": str(comment.id),
         "content": comment.content,
@@ -250,4 +259,11 @@ async def delete_comment(
     await db.commit()
 
     logger.info(f"Comment deleted: {comment_id} by user={user.id}")
+    try:
+        await redis_pubsub.publish_market_event(str(market.id), "comment:deleted", {
+            "comment_id": str(comment_id),
+        })
+    except Exception:
+        pass  # non-fatal
+
     return success_response({"id": str(comment_id), "status": "deleted"})

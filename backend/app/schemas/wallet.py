@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class WalletResponse(BaseModel):
@@ -11,7 +11,7 @@ class WalletResponse(BaseModel):
 
 
 class DepositRequest(BaseModel):
-    amount: float
+    amount: float = Field(..., gt=0)
 
 
 class DepositResponse(BaseModel):
@@ -21,7 +21,7 @@ class DepositResponse(BaseModel):
 
 
 class WithdrawRequest(BaseModel):
-    amount: float
+    amount: float = Field(..., gt=0)
 
 
 class TransactionResponse(BaseModel):

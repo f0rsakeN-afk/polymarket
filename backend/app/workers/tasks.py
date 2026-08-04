@@ -311,6 +311,22 @@ def check_limit_order_execution(self):
                                 "shares": float(order_amount - remaining),
                                 "price": float(amm_price_val) if amm_price_val > 0 else float(order.price),
                             })
+                            # Also dispatch in-app notification
+                            from app.services.notification_service import NotificationService
+                            await NotificationService.dispatch(
+                                db, str(order.user_id), "order_filled",
+                                f"Order filled: {order_side} {float(order_amount - remaining):.2f} shares",
+                                f"Your {order.status} order on {market.slug} has been filled.",
+                                {"order_id": str(order.id), "market_id": str(market.id), "side": order_side}
+                            )
+                            # Publish position:update for real-time UI refresh
+                            await redis_pubsub.publish_notification(str(order.user_id), {
+                                "type": "position:update",
+                                "market_id": str(market.id),
+                                "outcome": outcome.name if outcome else None,
+                                "shares": float(order_amount - remaining),
+                                "side": order_side,
+                            })
                         except Exception:
                             pass
 
@@ -433,10 +449,54 @@ def snapshot_price_history(self):
     return asyncio.run(_run())
 
 
-@shared_task(bind=True, name="app.workers.tasks.check_market_resolution")
-def check_market_resolution(self):
-    """Find markets that have closed but not yet resolved."""
-    logger.info("Running check_market_resolution")
+@shared_task(bind=True, name="app.workers.tasks.check_order_expiration")
+def check_order_expiration(self):
+    """Cancel pending orders that have passed their expiry time."""
+    logger.info("Running check_order_expiration")
+
+    async def _run():
+        async with async_session() as db:
+            now = datetime.now(UTC)
+            result = await db.execute(
+                select(Order).where(
+                    Order.status == "pending",
+                    Order.expires_at.isnot(None),
+                    Order.expires_at <= now,
+                ).with_for_update()
+            )
+            orders = result.scalars().all()
+            if not orders:
+                return "No expired pending orders"
+
+            for order in orders:
+                order.status = "cancelled"
+                order.executed_at = now
+                if order.side == "buy" and order.amount:
+                    wallet_result = await db.execute(
+                        select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
+                    )
+                    wallet = wallet_result.scalar_one_or_none()
+                    if wallet:
+                        wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                logger.info(f"Cancelled expired pending order {order.id}")
+                try:
+                    await redis_pubsub.publish_market_event(
+                        str(order.market_id), "order:cancelled",
+                        {"order_id": str(order.id), "reason": "expired"}
+                    )
+                except Exception:
+                    pass
+
+            await db.commit()
+            return f"Cancelled {len(orders)} expired pending orders"
+
+    return asyncio.run(_run())
+
+
+@shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
+def check_markets_ready_to_resolve(self):
+    """Close markets that have passed their close time but are not yet resolved."""
+    logger.info("Running check_markets_ready_to_resolve")
 
     async def _run():
         async with async_session() as db:
@@ -445,19 +505,19 @@ def check_market_resolution(self):
                 select(Market).where(
                     Market.status == "active",
                     Market.closes_at <= now,
+                    Market.winning_outcome_id.is_(None),
                 )
             )
             markets = result.scalars().all()
-
             if not markets:
-                return "No markets to auto-resolve"
+                return "No markets ready to close"
 
-            # For now, just log - auto-resolution requires oracle/admin input
             for market in markets:
-                logger.warning(f"Market {market.slug} ({market.id}) has closed but not resolved")
-                # In production: trigger resolution workflow or notify admin
+                market.status = "closed"
+                logger.warning(f"Market {market.slug} ({market.id}) closed — awaiting resolution")
 
-            return f"Found {len(markets)} markets needing resolution"
+            await db.commit()
+            return f"Closed {len(markets)} markets"
 
     return asyncio.run(_run())
 
@@ -715,6 +775,18 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                                 "actual_price": price,
                             },
                         )
+                        # Also dispatch in-app notification
+                        from app.services.notification_service import NotificationService
+                        from app.models.market import Market
+                        market_result = await db.execute(select(Market).where(Market.id == market_id))
+                        market = market_result.scalar_one_or_none()
+                        market_slug = market.slug if market else market_id
+                        await NotificationService.dispatch(
+                            db, str(alert.user_id), "alert_triggered",
+                            f"Price alert triggered: {alert.outcome or 'price'} {alert.condition} ${alert.trigger_price:.2f}",
+                            f"Your alert on {market_slug} has been triggered at ${price:.2f}.",
+                            {"alert_id": str(alert.id), "market_id": market_id, "outcome": alert.outcome, "condition": alert.condition}
+                        )
                     except Exception:
                         pass
             await db.commit()
@@ -838,6 +910,20 @@ def enqueue_otp(self, email: str, purpose: str):
     send_email.delay(to_email=email, subject=subject, body=body)
     logger.info(f"OTP enqueued for {email}, purpose={purpose}")
 
+
+
+@shared_task(bind=True, name="app.workers.tasks.distribute_protocol_fees")
+def distribute_protocol_fees(self):
+    """Distribute accumulated protocol fees from all markets to the treasury."""
+    logger.info("Running distribute_protocol_fees")
+
+    async def _run():
+        async with async_session() as db:
+            result = await LiquidityService.distribute_protocol_fees(db)
+            logger.info(f"Protocol fees distributed: {result}")
+            return result
+
+    return asyncio.run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.cleanup_expired_sessions")

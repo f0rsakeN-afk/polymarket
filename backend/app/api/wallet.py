@@ -1,7 +1,7 @@
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,8 +45,6 @@ async def create_deposit(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    if data.amount <= 0:
-        raise ValidationError("Amount must be positive")
     import uuid
     client_secret = f"pi_{uuid.uuid4().hex}_secret"
     logger.info(f"Deposit initiated: user={user.id} amount={data.amount}")
@@ -71,8 +69,8 @@ async def withdraw(
 @router.get("/transactions")
 async def list_transactions(
     request: Request,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
     user = await get_current_user(request, db)

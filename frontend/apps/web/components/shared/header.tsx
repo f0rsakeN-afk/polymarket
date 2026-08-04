@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@workspace/ui/components/shee
 import { MenuIcon, SunIcon, MoonIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { UserMenu } from "@/components/auth/user-menu"
+import { NotificationBell } from "@/components/notifications/notification-bell"
 
 const navLinks = [
   { href: "/", label: "Markets" },
@@ -122,6 +123,7 @@ function Header() {
         {/* Right */}
         <div className="flex items-center gap-2">
           <ThemeToggle />
+          <NotificationBell />
           <UserMenu />
 
           {/* Mobile menu */}

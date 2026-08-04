@@ -575,6 +575,7 @@ async def reset_password(data: ResetPasswordRequest, request: Request, db: Async
 @router.post("/login", summary="Login with email + password")
 async def login(data: LoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
 
     rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
     if is_slowed and rl_result.retry_after:

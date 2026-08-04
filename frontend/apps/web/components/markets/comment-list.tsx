@@ -2,7 +2,8 @@
 
 import { useCallback, memo, useState } from "react"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -15,12 +16,11 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/use-markets"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
-import { object, pipe, string, minLength, maxLength } from "valibot"
 import { getMarketCommentReplies } from "@/lib/api/markets"
 import type { Comment } from "@/lib/types/api"
 
-const CommentSchema = object({
-  content: pipe(string(), minLength(1, "Comment cannot be empty"), maxLength(2000, "Max 2000 characters")),
+const commentSchema = z.object({
+  content: z.string().min(1, "Comment cannot be empty").max(2000, "Max 2000 characters"),
 })
 
 type CommentInput = { content: string }
@@ -218,7 +218,7 @@ function CommentForm({ slug }: { slug: string }) {
   const { mutateAsync: postComment, isPending } = usePostComment(slug)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<CommentInput>({
-    resolver: valibotResolver(CommentSchema),
+    resolver: zodResolver(commentSchema),
   })
 
   const onSubmit = useCallback(async (data: CommentInput) => {

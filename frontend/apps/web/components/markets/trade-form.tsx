@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
-import { InferInput } from "valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -20,11 +20,11 @@ import {
 } from "@workspace/ui/components/field"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { PlaceOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
+import { placeOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
 import { getQuote } from "@/lib/api/orders"
 import type { Outcome, QuoteResponse } from "@/lib/types/api"
 
-type FormInput = InferInput<typeof PlaceOrderSchema>
+type FormInput = z.infer<typeof placeOrderSchema>
 
 interface TradeFormProps {
   marketId: string
@@ -114,7 +114,7 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormInput, unknown, PlaceOrderInput>({
-    resolver: valibotResolver(PlaceOrderSchema),
+    resolver: zodResolver(placeOrderSchema),
     defaultValues: {
       market_id: marketId,
       outcome: "yes",
@@ -124,6 +124,7 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
       price: undefined,
       post_only: false,
       client_order_id: clientOrderId,
+      max_slippage: 0.005,
     },
   })
 
@@ -184,7 +185,6 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
       const payload: PlaceOrderInput = {
         ...data,
         client_order_id: clientOrderId,
-        max_slippage: 0.005,
         quote_id: quote?.quote_id,
       }
       setQuote(null)
@@ -270,6 +270,28 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
         </FieldContent>
       </Field>
 
+      <Field>
+        <FieldLabel htmlFor="max_slippage">
+          Slippage Tolerance — {(watch("max_slippage") ?? 0.005) * 100}%
+        </FieldLabel>
+        <FieldContent>
+          <Input
+            id="max_slippage"
+            type="range"
+            min="0.001"
+            max="0.1"
+            step="0.001"
+            {...register("max_slippage", { valueAsNumber: true })}
+          />
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+            <span>0.1%</span>
+            <span className="font-medium text-foreground">{(watch("max_slippage") ?? 0.005) * 100}%</span>
+            <span>10%</span>
+          </div>
+        </FieldContent>
+        {errors.max_slippage && <FieldError errors={[{ message: errors.max_slippage.message }]} />}
+      </Field>
+
       {(orderType === "limit" || orderType === "fill_or_kill") && (
         <>
           <Field>
@@ -342,6 +364,18 @@ function TradeForm({ marketId, currentYesPrice, currentNoPrice, outcomes, onSubm
           <div className="flex justify-between border-t border-border pt-2">
             <span className="text-muted-foreground">Est. Cost</span>
             <span className="font-bold">${total.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Pool Fee (2%)</span>
+            <span>${(total * 0.02).toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Protocol Fee (1%)</span>
+            <span>${(total * 0.01).toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between border-t border-border pt-2">
+            <span className="text-muted-foreground">Total Fees</span>
+            <span className="font-medium">${(total * 0.03).toFixed(2)} (3%)</span>
           </div>
         </div>
       )}

@@ -118,8 +118,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["Retry-After"] = str(result.retry_after)
 
         if not result.allowed:
-            response.status_code = 429
-            response.body = b""
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=429,

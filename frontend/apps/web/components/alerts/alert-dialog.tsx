@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
-import { object, pipe, number, minValue, maxValue, union, literal } from "valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -18,13 +18,13 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useCreateAlert } from "@/hooks/use-alerts"
 import { sileo } from "sileo"
 
-const AlertSchema = object({
-  outcome: union([literal("yes"), literal("no")]),
-  condition: union([literal("above"), literal("below")]),
-  trigger_price: pipe(number(), minValue(0.01, "Min 0.01"), maxValue(0.99, "Max 0.99")),
+const alertSchema = z.object({
+  outcome: z.enum(["yes", "no"]),
+  condition: z.enum(["above", "below"]),
+  trigger_price: z.number().min(0.01, "Min 0.01").max(0.99, "Max 0.99"),
 })
 
-type AlertInput = { outcome: "yes" | "no"; condition: "above" | "below"; trigger_price: number }
+type AlertInput = z.infer<typeof alertSchema>
 
 function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
   marketId: string
@@ -35,7 +35,7 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
   const { mutateAsync: createAlert, isPending } = useCreateAlert()
 
   const { register, handleSubmit, setValue, watch, formState: { errors }, reset } = useForm<AlertInput>({
-    resolver: valibotResolver(AlertSchema),
+    resolver: zodResolver(alertSchema),
     defaultValues: { outcome: "yes", condition: "above", trigger_price: currentYesPrice },
   })
 

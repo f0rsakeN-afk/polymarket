@@ -15,6 +15,7 @@ export function listMarkets(params?: {
   q?: string
   category?: string
   status?: string
+  sort?: string
   page?: number
   page_size?: number
 }) {
@@ -22,6 +23,7 @@ export function listMarkets(params?: {
   if (params?.q) qs.set("q", params.q)
   if (params?.category) qs.set("category", params.category)
   if (params?.status) qs.set("status", params.status)
+  if (params?.sort) qs.set("sort", params.sort)
   if (params?.page) qs.set("page", String(params.page))
   if (params?.page_size) qs.set("page_size", String(params.page_size))
   const query = qs.toString()
@@ -113,6 +115,22 @@ export function resolveMarket(slug: string, winning_outcome_id: string) {
   return api.post<{ success: boolean; data: { slug: string; winning_outcome_id: string; winning_outcome_name: string } }>(
     `/api/v1/markets/${slug}/resolve`,
     { winning_outcome_id }
+  )
+}
+
+export function createMarket(data: {
+  question: string
+  description?: string
+  category?: string
+  slug: string
+  closes_at: string
+  initial_liquidity?: number
+  initial_probability?: number
+  outcomes_create?: { name: string; outcome_index: number }[]
+}) {
+  return api.post<{ success: boolean; data: { slug: string; id: string } }>(
+    "/api/v1/markets/",
+    data
   )
 }
 

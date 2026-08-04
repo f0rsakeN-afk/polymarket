@@ -76,6 +76,12 @@ export function UserMenu() {
         <DropdownMenuItem>
           <Link href="/settings/sessions" className="w-full">Sessions</Link>
         </DropdownMenuItem>
+        <DropdownMenuItem>
+          <Link href="/settings/referrals" className="w-full">Referrals</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem>
+          <Link href="/settings/notifications" className="w-full">Notifications</Link>
+        </DropdownMenuItem>
 
         {user.is_admin && (
           <>

@@ -7,6 +7,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { resetPasswordSchema, type ResetPasswordInput } from "@/lib/schemas/auth";
 import { passwordApi } from "@/lib/api/auth";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
@@ -31,19 +32,7 @@ function PolygonMark({ className }: { className?: string }) {
   );
 }
 
-const schema = z
-  .object({
-    email: z.string().email("Please enter a valid email address"),
-    code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
-    newPassword: z.string().min(8, "Password must be at least 8 characters"),
-    confirmPassword: z.string(),
-  })
-  .refine((d) => d.newPassword === d.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-
-type Input = z.infer<typeof schema>;
+type Input = ResetPasswordInput;
 
 export default function ResetPasswordPage() {
   const searchParams = useSearchParams();
@@ -53,7 +42,7 @@ export default function ResetPasswordPage() {
   const [code, setCode] = useState(codeParam);
 
   const form = useForm<Input>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(resetPasswordSchema),
     defaultValues: { email: emailParam, code: codeParam, newPassword: "", confirmPassword: "" },
   });
 

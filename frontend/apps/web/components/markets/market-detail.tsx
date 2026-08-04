@@ -91,6 +91,15 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         description: `${(msg as { outcome?: string }).outcome?.toUpperCase()} ${(msg as { condition?: string }).condition} $${(msg as { trigger_price?: number }).trigger_price?.toFixed(2)}`,
       })
     }
+    if (msg.type === "orderbook:update") {
+      queryClient.invalidateQueries({ queryKey: ["orderbook-header", slug] })
+    }
+    if (msg.type === "comment:new" || msg.type === "comment:updated") {
+      queryClient.invalidateQueries({ queryKey: ["comments", slug] })
+    }
+    if (msg.type === "comment:deleted") {
+      queryClient.invalidateQueries({ queryKey: ["comments", slug] })
+    }
   }, [slug, queryClient])
 
   const { status: wsStatus } = useMarketSocket({

@@ -14,7 +14,7 @@ export function AddLiquidityForm({ marketId }: { marketId: string }) {
   const [lpTokens, setLpTokens] = useState("")
 
   const { mutateAsync: add, isPending: isAdding } = useMutation({
-    mutationFn: () => addLiquidity(marketId, parseFloat(amount)),
+    mutationFn: () => addLiquidity(marketId, { amount: parseFloat(amount) }),
     onSuccess: () => {
       sileo.success({ title: "Liquidity added" })
       setAmount("")
@@ -25,7 +25,7 @@ export function AddLiquidityForm({ marketId }: { marketId: string }) {
   })
 
   const { mutateAsync: remove, isPending: isRemoving } = useMutation({
-    mutationFn: () => removeLiquidity(marketId, parseFloat(lpTokens)),
+    mutationFn: () => removeLiquidity(marketId, { lp_tokens: parseFloat(lpTokens) }),
     onSuccess: () => {
       sileo.success({ title: "Liquidity removed" })
       setLpTokens("")
