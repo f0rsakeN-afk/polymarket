@@ -4,7 +4,7 @@ import { useCallback } from "react"
 import { useParams } from "next/navigation"
 import { sileo } from "sileo"
 import { MarketDetail } from "@/components/markets/market-detail"
-import { usePlaceOrder } from "@/hooks/use-orders"
+import { usePlaceOrder } from "@/hooks/api/use-orders"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
 
 export function MarketDetailClient() {

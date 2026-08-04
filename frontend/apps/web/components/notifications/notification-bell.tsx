@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/use-notifications"
+import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/api/use-notifications"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { Bell } from "lucide-react"

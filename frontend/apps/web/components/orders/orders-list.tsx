@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState, memo } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@workspace/ui/components/alert-dialog"
-import { useCancelOrder } from "@/hooks/use-orders"
+import { useCancelOrder } from "@/hooks/api/use-orders"
 import { sileo } from "sileo"
-import type { Order } from "@/lib/types/api"
+import type { Order } from "@/hooks/api/types/order"
 
 interface OrderRowProps {
   order: Order

@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getWallet, deposit, withdraw, listTransactions } from "@/lib/api/wallet"
-import type { Wallet, Transaction } from "@/lib/types/api"
+import type { Wallet, Transaction } from "@/hooks/api/types/wallet"
 
 export function useWallet() {
   return useQuery({

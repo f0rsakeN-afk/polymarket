@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MarketList } from "@/components/markets/market-list"
-import { useMarkets } from "@/hooks/use-markets"
+import { useMarkets } from "@/hooks/api/use-markets"
 import { SkeletonMarketGrid } from "@/components/shared/skeletons"
 import { cn } from "@workspace/ui/lib/utils"
 import { SearchIcon } from "lucide-react"

@@ -1,7 +1,7 @@
 import { api } from "./client"
 import { z } from "zod"
 import { depositSchema, withdrawSchema } from "@/lib/schemas/trading"
-import type { Wallet, TransactionsResponse } from "../types/api"
+import type { Wallet, TransactionsResponse } from "@/hooks/api/types/wallet"
 
 export function getWallet() {
   return api.get<Wallet>("/api/v1/wallet/")

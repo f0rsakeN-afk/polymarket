@@ -2,9 +2,9 @@
 
 import { useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { usePositions } from "@/hooks/use-positions"
-import { useOrders } from "@/hooks/use-orders"
-import { useWallet } from "@/hooks/use-wallet"
+import { usePositions } from "@/hooks/api/use-positions"
+import { useOrders } from "@/hooks/api/use-orders"
+import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { Card, CardContent } from "@workspace/ui/components/card"

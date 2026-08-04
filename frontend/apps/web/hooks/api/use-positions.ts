@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery } from "@tanstack/react-query"
 import { listPositions } from "@/lib/api/positions"
-import type { Position } from "@/lib/types/api"
+import type { Position } from "@/hooks/api/types/order"
 
 export function usePositions() {
   return useInfiniteQuery({

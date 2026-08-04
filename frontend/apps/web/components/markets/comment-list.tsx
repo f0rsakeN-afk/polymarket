@@ -13,11 +13,11 @@ import {
   FieldError,
 } from "@workspace/ui/components/field"
 import { cn } from "@workspace/ui/lib/utils"
-import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/use-markets"
+import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/api/use-comments"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
 import { getMarketCommentReplies } from "@/lib/api/markets"
-import type { Comment } from "@/lib/types/api"
+import type { Comment } from "@/hooks/api/types/comment"
 
 const commentSchema = z.object({
   content: z.string().min(1, "Comment cannot be empty").max(2000, "Max 2000 characters"),

@@ -6,7 +6,7 @@ import { useMarketSocket } from "@/hooks/use-market-socket"
 import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
-import type { MarketResponse } from "@/lib/types/api"
+import type { MarketResponse } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
 
 interface TrendingCarouselItemProps {

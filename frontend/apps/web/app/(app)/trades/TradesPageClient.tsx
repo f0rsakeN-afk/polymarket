@@ -2,10 +2,10 @@
 
 import { useState, useCallback } from "react"
 import { TradeFeed } from "@/components/trades/trade-feed"
-import { useGlobalTrades } from "@/hooks/use-markets"
+import { useGlobalTrades } from "@/hooks/api/use-markets"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
-import type { Trade } from "@/lib/types/api"
+import type { Trade } from "@/hooks/api/types/market"
 
 export function TradesPageClient() {
   const { data, isLoading, fetchNextPage, hasNextPage } = useGlobalTrades()

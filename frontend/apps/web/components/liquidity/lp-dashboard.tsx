@@ -1,7 +1,7 @@
 "use client"
 
 import { Spinner } from "@workspace/ui/components/spinner"
-import { useLPAnalytics } from "@/hooks/use-liquidity"
+import { useLPAnalytics } from "@/hooks/api/use-liquidity"
 
 function formatCurrency(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 })

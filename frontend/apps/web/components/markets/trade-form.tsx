@@ -22,7 +22,8 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { placeOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
 import { getQuote } from "@/lib/api/orders"
-import type { Outcome, QuoteResponse } from "@/lib/types/api"
+import type { Outcome } from "@/hooks/api/types/market"
+import type { QuoteResponse } from "@/hooks/api/types/order"
 
 type FormInput = z.infer<typeof placeOrderSchema>
 

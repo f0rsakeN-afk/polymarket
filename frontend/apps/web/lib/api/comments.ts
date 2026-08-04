@@ -1,5 +1,5 @@
 import { api } from "./client"
-import type { CommentsResponse, Comment } from "../types/api"
+import type { CommentsResponse, Comment } from "@/hooks/api/types/comment"
 
 export function getMarketComments(
   slug: string,

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, memo } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
-import type { Position } from "@/lib/types/api"
+import type { Position } from "@/hooks/api/types/order"
 
 function formatUSD(n: number) {
   return new Intl.NumberFormat("en-US", {

@@ -2,7 +2,7 @@
 
 import { memo } from "react"
 import Link from "next/link"
-import type { MarketResponse, Outcome } from "@/lib/types/api"
+import type { MarketResponse, Outcome } from "@/hooks/api/types/market"
 
 function formatVolume(v: number) {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`

@@ -4,12 +4,11 @@ import type {
   MarketDetailResponse,
   TradesResponse,
   MarketActivity,
-  CommentsResponse,
-  Comment,
   FAQ,
   MarketResponse,
   PriceHistoryPoint,
-} from "../types/api"
+} from "@/hooks/api/types/market"
+import type { Comment, CommentsResponse } from "@/hooks/api/types/comment"
 
 export function listMarkets(params?: {
   q?: string

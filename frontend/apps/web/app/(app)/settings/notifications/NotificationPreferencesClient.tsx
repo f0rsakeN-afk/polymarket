@@ -1,6 +1,6 @@
 "use client"
 
-import { useNotificationPreferences, useUpdateNotificationPreferences } from "@/hooks/use-notifications"
+import { useNotificationPreferences, useUpdateNotificationPreferences } from "@/hooks/api/use-notifications"
 import { Switch } from "@workspace/ui/components/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Button } from "@workspace/ui/components/button"

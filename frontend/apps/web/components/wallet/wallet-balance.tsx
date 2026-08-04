@@ -1,7 +1,7 @@
 "use client"
 
 import { Spinner } from "@workspace/ui/components/spinner"
-import type { Wallet } from "@/lib/types/api"
+import type { Wallet } from "@/hooks/api/types/wallet"
 
 function formatUSD(n: number) {
   return new Intl.NumberFormat("en-US", {

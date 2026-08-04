@@ -1,6 +1,6 @@
 "use client"
 
-import { useTransactions } from "@/hooks/use-wallet"
+import { useTransactions } from "@/hooks/api/use-wallet"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
 

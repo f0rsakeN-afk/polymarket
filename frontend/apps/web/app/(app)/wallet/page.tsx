@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useWallet, useDeposit, useWithdraw } from "@/hooks/use-wallet"
+import { useWallet, useDeposit, useWithdraw } from "@/hooks/api/use-wallet"
 import { WalletBalance } from "@/components/wallet/wallet-balance"
 import { Button } from "@workspace/ui/components/button"
 import { Dialog, DialogContent, DialogTitle } from "@workspace/ui/components/dialog"

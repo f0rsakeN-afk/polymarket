@@ -3,7 +3,7 @@
 import { useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Card } from "@workspace/ui/components/card"
-import { usePositions } from "@/hooks/use-positions"
+import { usePositions } from "@/hooks/api/use-positions"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { PositionsList } from "@/components/orders/positions-list"

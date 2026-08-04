@@ -1,6 +1,6 @@
 import { api } from "./client"
 import { createAlertSchema } from "@/lib/schemas/alerts"
-import type { Alert } from "../types/api"
+import type { Alert } from "@/hooks/api/types/alert"
 
 export function createAlert(data: Parameters<typeof createAlertSchema.parse>[0]) {
   return api.post<{ success: boolean; data: Alert }>(

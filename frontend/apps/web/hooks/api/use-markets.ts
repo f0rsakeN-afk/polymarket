@@ -3,7 +3,8 @@
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, updateComment, deleteComment, getMarketFAQs, getRelatedMarkets, getPriceHistory, resolveMarket, createMarket } from "@/lib/api/markets"
 import { api } from "@/lib/api/client"
-import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade, Comment } from "@/lib/types/api"
+import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade } from "@/hooks/api/types/market"
+import type { Comment } from "@/hooks/api/types/comment"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
 
@@ -163,6 +164,9 @@ export function usePriceHistory(slug: string, interval = "5m") {
 export function useMarketCategories() {
   return useQuery<string[]>({
     queryKey: ["market-categories"],
-    queryFn: () => api.get<{ success: boolean; data: string[] }>("/api/v1/markets/categories").then((r) => r.data),
+    queryFn: () =>
+      api.get<{ success: boolean; data: { categories: string[] } }>("/api/v1/markets/categories").then(
+        (r) => r.data?.categories ?? []
+      ),
   })
 }

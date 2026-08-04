@@ -15,7 +15,7 @@ import {
   DialogTrigger,
 } from "@workspace/ui/components/dialog"
 import { cn } from "@workspace/ui/lib/utils"
-import { useCreateAlert } from "@/hooks/use-alerts"
+import { useCreateAlert } from "@/hooks/api/use-alerts"
 import { sileo } from "sileo"
 
 const alertSchema = z.object({

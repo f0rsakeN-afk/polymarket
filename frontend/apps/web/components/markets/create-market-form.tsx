@@ -13,7 +13,7 @@ import {
   FieldError,
 } from "@workspace/ui/components/field"
 import { cn } from "@workspace/ui/lib/utils"
-import { useCreateMarket } from "@/hooks/use-markets"
+import { useCreateMarket } from "@/hooks/api/use-markets"
 import { sileo } from "sileo"
 
 const createMarketSchema = z.object({

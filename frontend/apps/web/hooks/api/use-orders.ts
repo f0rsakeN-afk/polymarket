@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { listOrders, placeOrder, cancelOrder } from "@/lib/api/orders"
-import type { Order } from "@/lib/types/api"
+import type { Order } from "@/hooks/api/types/order"
 
 export function useOrders(filters?: {
   status?: string

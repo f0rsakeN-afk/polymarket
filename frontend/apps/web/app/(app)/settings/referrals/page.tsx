@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback } from "react"
-import { useReferralCode, useReferralStats } from "@/hooks/use-referrals"
+import { useReferralCode, useReferralStats } from "@/hooks/api/use-referrals"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Button } from "@workspace/ui/components/button"
 import { Spinner } from "@workspace/ui/components/spinner"
