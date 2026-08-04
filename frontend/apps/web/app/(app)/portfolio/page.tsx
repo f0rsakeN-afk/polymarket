@@ -68,13 +68,13 @@ export default function PortfolioPage() {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-muted-foreground">Available</p>
-                <p className="text-2xl font-bold">${wallet.available.toFixed(2)}</p>
+                <p className="text-2xl font-bold">${wallet.available_balance.toFixed(2)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-muted-foreground">Locked</p>
-                <p className="text-2xl font-bold">${wallet.locked.toFixed(2)}</p>
+                <p className="text-2xl font-bold">${wallet.locked_balance.toFixed(2)}</p>
               </CardContent>
             </Card>
             <Card>

@@ -1,10 +1,10 @@
 import { api } from "./client"
 import { z } from "zod"
 import { depositSchema, withdrawSchema } from "@/lib/schemas/trading"
-import type { Wallet, TransactionsResponse } from "@/hooks/api/types/wallet"
+import type { Wallet, Transaction, TransactionsResponse } from "@/hooks/api/types/wallet"
 
 export function getWallet() {
-  return api.get<Wallet>("/api/v1/wallet/")
+  return api.get<{ success: boolean; data: Wallet }>("/api/v1/wallet/")
 }
 
 export function deposit(data: z.infer<typeof depositSchema>) {

@@ -79,8 +79,8 @@ async def list_notifications(
                 title=n.title,
                 body=n.body,
                 data=n.data,
-                read_at=n.read_at,
-                created_at=n.created_at,
+                read_at=n.read_at.isoformat() if n.read_at else None,
+                created_at=n.created_at.isoformat() if n.created_at else None,
             )
             for n in notifications
         ],

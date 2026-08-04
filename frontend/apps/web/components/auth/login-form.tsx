@@ -92,6 +92,7 @@ export function LoginForm() {
   const [resendTimer, setResendTimer] = useState(0);
   const [globalError, setGlobalError] = useState("");
   const [totp2faCode, setTotp2faCode] = useState("");
+  const [magicPartialToken, setMagicPartialToken] = useState("");
 
   const passwordForm = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -157,6 +158,13 @@ export function LoginForm() {
       window.location.href = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid or expired code";
+      if (msg.startsWith("2FA code required:")) {
+        const partial = msg.split(":")[1] ?? "";
+        setMagicPartialToken(partial);
+        setStep("totp2fa");
+        setIsLoading(false);
+        return;
+      }
       if (msg === "2FA code required") {
         setStep("totp2fa");
         setIsLoading(false);
@@ -174,14 +182,20 @@ export function LoginForm() {
       setGlobalError("");
       setIsLoading(true);
       try {
-        await magicLinkApi.verifyCode(email, otp, totpCode);
+        if (magicPartialToken) {
+          // Magic code was already verified, use partial token flow
+          await magicLinkApi.verifyMagic2fa(magicPartialToken, totpCode);
+        } else {
+          // Magic URL 2FA flow (original URL-based flow)
+          await magicLinkApi.verifyUrl2fa(otp, totpCode);
+        }
         window.location.href = next;
       } catch (err) {
         setGlobalError(err instanceof Error ? err.message : "Invalid 2FA code");
         setIsLoading(false);
       }
     },
-    [email, otp, next]
+    [magicPartialToken, otp, next] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ── Resend ───────────────────────────────────────────────────────────────

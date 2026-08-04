@@ -176,5 +176,6 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
 
 
 def clear_auth_cookies(response: Response):
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
+    is_prod = not settings.debug
+    response.delete_cookie("access_token", path="/", secure=is_prod)
+    response.delete_cookie("refresh_token", path="/", secure=is_prod)

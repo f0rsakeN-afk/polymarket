@@ -203,7 +203,7 @@ function TradeForm({
   const total = amount && displayPrice ? amount * displayPrice : 0
 
   const isMarketOpen = marketStatus !== BLOCKED_STATUS
-  const availableBalance = wallet?.available ?? 0
+  const availableBalance = wallet?.available_balance ?? 0
   const hasInsufficientBalance = side === "buy" && total > availableBalance
 
   // ── Quote fetching ──────────────────────────────────────────────────────────

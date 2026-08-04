@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     notifications_from_email: str = "noreply@polymarket.example.com"
 
+    # Mailtrap SMTP (dev fallback — set smtp_host to use instead of Resend)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from_email: str = "noreply@polymarket.example.com"
+
     # Referral
     referral_reward_amount: float = 1.0
 

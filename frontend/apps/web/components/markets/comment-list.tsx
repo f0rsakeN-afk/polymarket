@@ -60,8 +60,11 @@ const CommentRow = memo(function CommentRow({
     try {
       const res = await getMarketCommentReplies(slug, comment.id)
       setReplies(res.data.replies)
-    } catch { /* ignore */ }
-    setLoadingReplies(false)
+    } catch {
+      sileo.error({ title: "Failed to load replies" })
+    } finally {
+      setLoadingReplies(false)
+    }
   }, [slug, comment.id])
 
   const toggleReplies = useCallback(async () => {
@@ -77,7 +80,10 @@ const CommentRow = memo(function CommentRow({
       setShowReplyForm(false)
       await loadReplies()
       setShowReplies(true)
-    } catch { /* ignore */ }
+      sileo.success({ title: "Reply posted" })
+    } catch {
+      sileo.error({ title: "Failed to post reply" })
+    }
   }, [comment.id, postReply, loadReplies])
 
   const handleEdit = useCallback(async () => {
@@ -85,13 +91,19 @@ const CommentRow = memo(function CommentRow({
     try {
       await editComment({ commentId: comment.id, content: editValue.trim() })
       setEditing(false)
-    } catch { /* ignore */ }
+      sileo.success({ title: "Comment updated" })
+    } catch {
+      sileo.error({ title: "Failed to update comment" })
+    }
   }, [comment.id, editValue, editComment])
 
   const handleDelete = useCallback(async () => {
     try {
       await removeComment({ commentId: comment.id })
-    } catch { /* ignore */ }
+      sileo.success({ title: "Comment deleted" })
+    } catch {
+      sileo.error({ title: "Failed to delete comment" })
+    }
   }, [comment.id, removeComment])
 
   if (comment.is_deleted) return null

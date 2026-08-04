@@ -49,8 +49,26 @@ export interface PlaceOrderResponse {
   duplicate?: boolean
 }
 
+export interface SingleOrderResponse {
+  id: string
+  market_id: string
+  market_slug: string
+  outcome: string
+  side: string
+  order_type: string
+  amount: number
+  remaining_amount: number
+  price: number
+  status: string
+  shares_bought: number | null
+  shares_sold: number | null
+  fees_paid: number | null
+  created_at: string
+  executed_at: string | null
+}
+
 export function getOrder(orderId: string) {
-  return api.get<{ success: boolean; data: Order }>(`/api/v1/orders/${orderId}`)
+  return api.get<{ success: boolean; data: SingleOrderResponse }>(`/api/v1/orders/${orderId}`)
 }
 
 export function placeOrder(order: PlaceOrderPayload) {

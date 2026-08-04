@@ -74,7 +74,7 @@ export function SignupForm() {
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
-  const [globalError, setGlobalError] = useState("");
+  const [otpError, setOtpError] = useState("");
 
   const refParam = useSearchParams().get("ref") ?? undefined;
 
@@ -103,7 +103,6 @@ export function SignupForm() {
 
   const onSubmit = useCallback(
     async (data: RegisterInput) => {
-      setGlobalError("");
       setIsLoading(true);
       try {
         await registerApi.register(data.email, data.username, data.password, data.referral_code || undefined);
@@ -111,7 +110,7 @@ export function SignupForm() {
         setStep("otp");
         setResendTimer(RESEND_COOLDOWN);
       } catch (err) {
-        setGlobalError(err instanceof Error ? err.message : "Registration failed");
+        sileo.error({ title: err instanceof Error ? err.message : "Registration failed" });
       } finally {
         setIsLoading(false);
       }
@@ -121,14 +120,14 @@ export function SignupForm() {
 
   const handleVerifyOtp = useCallback(async () => {
     if (otp.length !== 6) return;
-    setGlobalError("");
     setIsLoading(true);
     try {
       await registerApi.verifyEmail(email, otp);
       sileo.success({ title: "Email verified!" });
       window.location.href = "/login";
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Invalid or expired code");
+      sileo.error({ title: err instanceof Error ? err.message : "Invalid or expired code" });
+      setOtpError(err instanceof Error ? err.message : "Invalid or expired code");
       setOtp("");
     } finally {
       setIsLoading(false);
@@ -139,9 +138,10 @@ export function SignupForm() {
     try {
       await registerApi.resendVerification(email);
       setResendTimer(RESEND_COOLDOWN);
+      setOtpError("");
       sileo.success({ title: "Code resent" });
-    } catch {
-      sileo.error({ title: "Failed to resend" });
+    } catch (err) {
+      sileo.error({ title: err instanceof Error ? err.message : "Failed to resend code" });
     }
   }, [email]);
 
@@ -168,13 +168,6 @@ export function SignupForm() {
                 : `Code sent to ${email}`}
             </p>
             </div>
-
-          {/* Error */}
-          {globalError && (
-            <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {globalError}
-            </div>
-          )}
 
           <StepContent step={step}>
             {/* ── Details step ── */}
@@ -272,7 +265,7 @@ export function SignupForm() {
             {/* ── OTP step ── */}
             {step === "otp" && (
               <div className="space-y-4">
-                <OtpInput value={otp} onChange={(v) => setOtp(v)} error={!!globalError} />
+                <OtpInput value={otp} onChange={(v) => setOtp(v)} error={!!otpError} />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <button
                     onClick={() => { setStep("details"); setOtp(""); }}

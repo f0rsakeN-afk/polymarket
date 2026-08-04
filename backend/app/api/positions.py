@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import success_response
@@ -24,6 +24,12 @@ async def list_positions(
     db: AsyncSession = Depends(get_db_replica),
 ):
     user = await get_current_user(request, db)
+
+    # Count total for has_more
+    count_result = await db.execute(
+        select(func.count()).select_from(Position).where(Position.user_id == user.id, Position.shares_held > 0)
+    )
+    total = count_result.scalar() or 0
 
     result = await db.execute(
         select(Position)
@@ -64,4 +70,4 @@ async def list_positions(
             unrealized_pnl=unrealized_pnl,
         ))
 
-    return success_response({"positions": response, "page": page, "page_size": page_size})
+    return success_response({"positions": response, "total": total, "page": page, "page_size": page_size, "has_more": (page * page_size) < total})

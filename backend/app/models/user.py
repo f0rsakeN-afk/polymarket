@@ -38,6 +38,7 @@ class RefreshToken(Base, UUIDMixin):
 
     user = relationship("User")
     sessions = relationship("Session", cascade="all, delete-orphan")
+    current_session = relationship("Session", back_populates="refresh_token", uselist=False)
 
 
 class Session(Base, UUIDMixin):
@@ -55,4 +56,4 @@ class Session(Base, UUIDMixin):
     revoked = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User")
-    refresh_token = relationship("RefreshToken", back_populates="sessions")
+    refresh_token = relationship("RefreshToken", back_populates="current_session")

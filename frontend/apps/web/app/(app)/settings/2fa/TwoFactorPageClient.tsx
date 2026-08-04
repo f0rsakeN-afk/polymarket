@@ -5,8 +5,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { QRCodeSVG } from "qrcode.react";
 import { twoFactorApi } from "@/lib/api/auth";
-import { accountApi } from "@/lib/api/auth";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import {
@@ -17,7 +17,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@workspace/ui/components/form";
-import { Alert, AlertDescription } from "@workspace/ui/components/alert";
 import {
   Card,
   CardContent,
@@ -217,15 +216,13 @@ export function TwoFactorPageClient() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col items-center gap-3">
-              <div className="w-32 h-32 bg-muted rounded-lg flex items-center justify-center mx-auto">
-                <span className="text-xs text-muted-foreground text-center px-2">
-                  Scan QR with\nauthenticator app
-                </span>
+              <div className="p-2 bg-white rounded-lg">
+                <QRCodeSVG value={setupData.uri} size={128} level="M" />
               </div>
               <p className="text-xs text-muted-foreground">
-                Can&apos;t scan? Secret:{" "}
-                <code className="font-mono text-xs bg-muted px-1 rounded">
-                  {setupData.secret.slice(0, 16)}...
+                Can&apos;t scan? Enter this secret manually:{" "}
+                <code className="font-mono text-xs bg-muted px-1 rounded break-all">
+                  {setupData.secret}
                 </code>
               </p>
             </div>

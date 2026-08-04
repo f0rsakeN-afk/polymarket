@@ -93,6 +93,12 @@ export const magicLinkApi = {
       token,
       totp_code: totpCode,
     }),
+
+  verifyMagic2fa: (partialToken: string, totpCode: string) =>
+    api.post<{ success: boolean }>("/api/v1/auth/verify-magic-2fa", {
+      partial_token: partialToken,
+      totp_code: totpCode,
+    }),
 };
 
 // ─── Password reset ────────────────────────────────────────────────────────────

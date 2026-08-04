@@ -797,17 +797,33 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
 
 @shared_task(bind=True, name="app.workers.tasks.send_email", max_retries=3, default_retry_delay=60)
 def send_email(self, to_email: str, subject: str, body: str):
-    """Send transactional email via Resend."""
+    """Send transactional email via Resend or Mailtrap SMTP."""
     try:
-        import resend
-        resend.api_key = settings.resend_api_key
-        resend.Emails.send({
-            "from": settings.notifications_from_email,
-            "to": [to_email],
-            "subject": subject,
-            "text": body,
-        })
-        logger.info(f"Email sent to {to_email}: {subject}")
+        if settings.smtp_host:
+            # Mailtrap / SMTP fallback
+            import smtplib
+            from email.message import EmailMessage
+            msg = EmailMessage()
+            msg["From"] = settings.smtp_from_email
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg.set_content(body)
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_pass)
+                server.send_message(msg)
+            logger.info(f"Email sent via SMTP to {to_email}: {subject}")
+        else:
+            # Resend
+            import resend
+            resend.api_key = settings.resend_api_key
+            resend.Emails.send({
+                "from": settings.notifications_from_email,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            })
+            logger.info(f"Email sent via Resend to {to_email}: {subject}")
     except Exception as exc:
         logger.error(f"Failed to send email to {to_email}: {exc}")
         raise self.retry(exc=exc)

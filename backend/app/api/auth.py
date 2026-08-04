@@ -136,17 +136,36 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if len(data.username) < 3:
         raise ValidationError("Username must be at least 3 characters")
 
-    # Duplicate check
-    result = await db.execute(
-        select(User).where((User.email == data.email) | (User.username == data.username))
-    )
-    if result.scalar_one_or_none():
-        raise ConflictError("User with this email or username already exists")
+    strong, reason = PasswordStrengthService.check(data.password)
+    if not strong:
+        raise ValidationError(reason)
 
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
 
-    user = User(email=data.email, username=data.username, password_hash="", is_email_verified=False)
+    # Check username first — must be unique always
+    username_result = await db.execute(select(User).where(User.username == data.username))
+    if username_result.scalar_one_or_none():
+        raise ConflictError("Username already taken")
+
+    # Check email — if verified, tell them to login; if not, resend code silently
+    email_result = await db.execute(select(User).where(User.email == data.email))
+    existing_user = email_result.scalar_one_or_none()
+    if existing_user:
+        if existing_user.is_email_verified:
+            raise ConflictError("An account with this email already exists. Please sign in.")
+        # Unverified — resend code so they can complete verification
+        code = await OTPService.send_code(data.email, _OTP_VERIFY)
+        EmailService.send_verification_code(data.email, code)
+        await AuthAuditService.log_register(db, data.email, str(existing_user.id), ip, ua)
+        return success_response({
+            "id": str(existing_user.id),
+            "email": existing_user.email,
+            "username": existing_user.username,
+            "email_resent": True,
+        })
+
+    user = User(email=data.email, username=data.username, password_hash=hash_password(data.password), is_email_verified=False)
     db.add(user)
     await db.flush()
 
@@ -305,7 +324,7 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         await redis_cb.call(lambda: r.setex(f"partial:{partial}", 300, user_id))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -337,8 +356,6 @@ async def verify_magic_url_2fa(
         from fastapi import HTTPException
         raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
 
-    await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
-
     user_result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
     user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
@@ -349,8 +366,12 @@ async def verify_magic_url_2fa(
 
     secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
     if not TOTPService.verify_code(secret, data.totp_code):
+        await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
         await RateLimitService.record_failure(user.email, ip)
         raise UnauthorizedError("Invalid 2FA code")
+
+    # Delete partial token only after successful 2FA — allows retry on TOTP failure
+    await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
 
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
@@ -383,19 +404,57 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
 
     if user.is_2fa_enabled:
         if not data.totp_code:
-            await RateLimitService.record_failure(data.email, ip)
-            raise UnauthorizedError("2FA code required")
+            # Issue partial token so frontend can complete with TOTP without re-sending magic code
+            r = get_redis()
+            partial = str(uuid.uuid4())
+            await redis_cb.call(lambda: r.setex(f"magic_partial:{partial}", 300, f"{user.id}:{data.email}"))
+            raise UnauthorizedError(f"2FA code required:{partial}")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
             await RateLimitService.record_failure(data.email, ip)
             raise UnauthorizedError("Invalid 2FA code")
 
     await RateLimitService.reset_friction(data.email, ip)
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
     logger.info(f"Magic login: {data.email}")
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+
+
+@router.post("/verify-magic-2fa", summary="Complete magic link login with 2FA using partial token")
+async def verify_magic_2fa(
+    data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
+):
+    """Complete magic link login when 2FA is enabled and magic code was already verified."""
+    r = get_redis()
+    stored = await redis_cb.call(lambda: r.get(f"magic_partial:{data.partial_token}"))
+    if not stored:
+        raise UnauthorizedError("Session expired. Please sign in again.")
+
+    user_id, email = stored.split(":", 1)
+    user_result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = user_result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise UnauthorizedError("Account not found or inactive")
+
+    if not (user.is_2fa_enabled and user.totp_secret_encrypted):
+        raise UnauthorizedError("2FA not enabled for this account")
+
+    secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
+    if not TOTPService.verify_code(secret, data.totp_code):
+        await redis_cb.call(lambda: r.delete(f"magic_partial:{data.partial_token}"))
+        await RateLimitService.record_failure(email, _get_client_ip(request))
+        raise UnauthorizedError("Invalid 2FA code")
+
+    await redis_cb.call(lambda: r.delete(f"magic_partial:{data.partial_token}"))
+    ip = _get_client_ip(request)
+    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
+    await db.commit()
+    set_auth_cookies(response, access_token, refresh_token)
+
+    logger.info(f"Magic + 2FA login: {email}")
     return success_response({"id": str(user.id), "email": user.email, "username": user.username})
 
 
@@ -786,6 +845,10 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
 
     user_id = str(token_record.user_id)
     token_record.revoked = True
+
+    # Update last_active_at on the linked session
+    if token_record.current_session:
+        token_record.current_session.last_active_at = datetime.now(UTC)
 
     new_refresh = str(uuid.uuid4())
     new_record = RefreshToken(

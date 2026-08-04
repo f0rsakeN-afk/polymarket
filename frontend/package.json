@@ -29,6 +29,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.7.1",
     "@tanstack/react-query": "^5.101.4",
+    "qrcode.react": "^4.2.0",
     "react-hook-form": "^7.84.0",
     "react-hot-toast": "^2.6.0",
     "sileo": "^0.1.5",

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authApi } from "@/lib/api/auth";
 import { Button } from "@workspace/ui/components/button";
@@ -52,6 +53,7 @@ function parseUA(ua: string | null): { browser: string; os: string } {
 }
 
 export function SessionsPageClient() {
+  const router = useRouter();
   const queryClient = useQueryClient();
 
   const { data: sessions, isLoading } = useQuery({
@@ -74,9 +76,10 @@ export function SessionsPageClient() {
   const revokeAllMutation = useMutation({
     mutationFn: () => authApi.logoutAll(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      queryClient.invalidateQueries({ queryKey: ["me"] });
+      queryClient.removeQueries({ queryKey: ["sessions"] });
+      queryClient.removeQueries({ queryKey: ["me"] });
       sileo.success({ title: "All other sessions revoked" });
+      router.push("/");
     },
     onError: () => {
       sileo.error({ title: "Failed to revoke sessions" });

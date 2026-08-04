@@ -30,7 +30,7 @@ export function OtpInput({
         disabled={disabled}
         render={({ slots }) => (
           <InputOTPGroup>
-            {slots.map((slot, index) => (
+            {(slots ?? []).map((slot, index) => (
               <InputOTPSlot
                 key={index}
                 index={index}

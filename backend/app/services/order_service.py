@@ -257,20 +257,6 @@ class OrderService:
         price_before = amm.price(data.outcome)
         limit_price = Decimal(str(data.price)) if data.price is not None else None
 
-        if data.post_only:
-            if data.order_type in ("limit", "fill_or_kill"):
-                amm_price_f = float(price_before)
-                limit_price_f = float(limit_price) if limit_price else 0
-                if data.side == "buy":
-                    would_execute = amm_price_f <= limit_price_f
-                else:
-                    would_execute = amm_price_f >= limit_price_f
-                if would_execute:
-                    raise ValidationError(
-                        f"Post-only order would execute immediately. "
-                        f"Current price: {amm_price_f:.4f}, limit: {limit_price_f:.4f}"
-                    )
-
         matched_shares, matched_usdc, match_details = await MatchingEngine.match_order_against_book(
             db, market, outcome, data.side, amount, limit_price, str(user.id),
         )
@@ -285,10 +271,24 @@ class OrderService:
         amm_fee = Decimal(0)
         amm_slippage = Decimal(0)
         sell_proceeds_amm = Decimal(0)
-        Decimal(0)
 
         if remaining > 0:
             if data.order_type in ("limit", "fill_or_kill"):
+                # Check post_only BEFORE AMM touches remaining — post_only means don't cross the spread
+                if data.post_only and limit_price is not None:
+                    current_amm_price = float(amm.price(data.outcome))
+                    limit_price_f = float(limit_price)
+                    if data.side == "buy" and current_amm_price > limit_price_f:
+                        raise ValidationError(
+                            f"Post-only order would cross the spread. "
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                        )
+                    if data.side == "sell" and current_amm_price < limit_price_f:
+                        raise ValidationError(
+                            f"Post-only order would cross the spread. "
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                        )
+
                 amm_price_f = float(price_before)
                 limit_price_f = float(limit_price) if limit_price else 0
                 if data.side == "buy":
