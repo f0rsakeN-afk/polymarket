@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { registerApi } from "@/lib/api/auth";
@@ -67,6 +68,7 @@ function StepContent({ step, children }: { step: string; children: React.ReactNo
 const RESEND_COOLDOWN = 60;
 
 export function SignupForm() {
+  const router = useRouter();
   const [step, setStep] = useState<"details" | "otp">("details");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -74,9 +76,11 @@ export function SignupForm() {
   const [resendTimer, setResendTimer] = useState(0);
   const [globalError, setGlobalError] = useState("");
 
+  const refParam = useSearchParams().get("ref") ?? undefined;
+
   const form = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { email: "", username: "", password: "" },
+    defaultValues: { email: "", username: "", password: "", referral_code: "" },
   });
 
   useEffect(() => {
@@ -90,12 +94,19 @@ export function SignupForm() {
     if (step === "otp" && otp.length === 6) handleVerifyOtp();
   }, [otp, step]);
 
+  // Pre-fill referral code from ?ref= URL param
+  useEffect(() => {
+    if (refParam) {
+      form.setValue("referral_code", refParam);
+    }
+  }, [refParam, form]);
+
   const onSubmit = useCallback(
     async (data: RegisterInput) => {
       setGlobalError("");
       setIsLoading(true);
       try {
-        await registerApi.register(data.email, data.username, data.password);
+        await registerApi.register(data.email, data.username, data.password, data.referral_code || undefined);
         setEmail(data.email);
         setStep("otp");
         setResendTimer(RESEND_COOLDOWN);
@@ -224,6 +235,26 @@ export function SignupForm() {
                             type="password"
                             placeholder="Min. 8 characters"
                             autoComplete="new-password"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="referral_code"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Referral Code <span className="text-muted-foreground/50">(optional)</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="FRIEND123"
+                            autoComplete="off"
                             {...field}
                           />
                         </FormControl>

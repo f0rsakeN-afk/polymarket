@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/componen
 import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/api/use-markets"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket } from "@/hooks/use-market-socket"
+import { claimWinnings, getOrderBook } from "@/lib/api/markets"
 import { api } from "@/lib/api/client"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -41,10 +42,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const { data: orderbookData } = useQuery({
     queryKey: ["orderbook-header", slug] as const,
-    queryFn: () => api.get<{ success: boolean; data: { bids: { price: number; depth: number }[]; asks: { price: number; depth: number }[] } }>(`/api/v1/markets/${slug}/orderbook`),
+    queryFn: () => getOrderBook(slug),
     enabled: !!slug,
     refetchInterval: 5000,
-    select: (res) => res.data,
   })
 
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
@@ -282,7 +282,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
                       <div className="text-lg font-bold text-green-500">${market.yes_price.toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.bids?.[0] ? `${orderbookData.bids[0].depth.toFixed(0)} shares` : ""}
+                        {orderbookData?.bids?.[0] ? `${orderbookData.bids[0].size.toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
@@ -290,7 +290,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
                       <div className="text-lg font-bold text-red-500">${market.no_price.toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.asks?.[0] ? `${orderbookData.asks[0].depth.toFixed(0)} shares` : ""}
+                        {orderbookData?.asks?.[0] ? `${orderbookData.asks[0].size.toFixed(0)} shares` : ""}
                       </div>
                     </div>
                   </>
@@ -435,6 +435,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             currentYesPrice={market.yes_price}
             currentNoPrice={market.no_price}
             outcomes={outcomes}
+            marketStatus={market.status}
             onSubmit={handleTrade}
           />
           <AlertDialog
@@ -447,7 +448,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         {/* Liquidity */}
         <section aria-labelledby="liquidity-heading" className="rounded-xl border border-border bg-card p-5">
           <h2 id="liquidity-heading" className="mb-3 text-sm font-semibold text-foreground">Liquidity</h2>
-          <AddLiquidityForm marketId={market.id} />
+          <AddLiquidityForm marketId={market.id} marketStatus={market.status} />
         </section>
 
         {/* Market Info */}
@@ -533,10 +534,11 @@ const ClaimWinnings = memo(function ClaimWinnings({ slug }: { slug: string }) {
   const handleClaim = useCallback(async () => {
     setClaiming(true)
     try {
-      await api.post(`/api/v1/markets/${slug}/claim`)
+      await claimWinnings(slug)
       setClaimed(true)
       qc.invalidateQueries({ queryKey: ["wallet"] })
       qc.invalidateQueries({ queryKey: ["transactions"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
       sileo.success({ title: "Winnings claimed!" })
     } catch (e) {
       sileo.error({ title: "Claim failed", description: e instanceof Error ? e.message : "Unknown error" })

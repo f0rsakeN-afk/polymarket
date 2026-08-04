@@ -16,7 +16,9 @@ import {
 } from "@workspace/ui/components/dialog"
 import { cn } from "@workspace/ui/lib/utils"
 import { useCreateAlert } from "@/hooks/api/use-alerts"
+import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
+import Link from "next/link"
 
 const alertSchema = z.object({
   outcome: z.enum(["yes", "no"]),
@@ -31,6 +33,7 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
   currentYesPrice: number
   currentNoPrice: number
 }) {
+  const { data: currentUser } = useCurrentUser()
   const [open, setOpen] = useState(false)
   const { mutateAsync: createAlert, isPending } = useCreateAlert()
 
@@ -59,13 +62,25 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger>
         <Button variant="outline" size="sm" className="w-full mt-3">
-          Create Price Alert
+          {currentUser ? "Create Price Alert" : "Sign in for Price Alerts"}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[380px]">
         <DialogHeader>
           <DialogTitle className="text-sm">Create Price Alert</DialogTitle>
         </DialogHeader>
+
+        {!currentUser ? (
+          <div className="py-4 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">Sign in to create price alerts</p>
+            <Link
+              href="/login"
+              className="block w-full rounded-md border border-primary bg-primary px-4 py-2 text-sm font-medium text-center text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Sign In
+            </Link>
+          </div>
+        ) : (
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Outcome */}
@@ -152,6 +167,7 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
             {isPending ? <Spinner className="size-4" /> : "Create Alert"}
           </Button>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   )

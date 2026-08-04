@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, memo, useState } from "react"
+import Link from "next/link"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -215,6 +216,7 @@ function ReplyForm({ onReply, isPending, onCancel }: {
 }
 
 function CommentForm({ slug }: { slug: string }) {
+  const { data: currentUser } = useCurrentUser()
   const { mutateAsync: postComment, isPending } = usePostComment(slug)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<CommentInput>({
@@ -230,6 +232,14 @@ function CommentForm({ slug }: { slug: string }) {
       sileo.error({ title: "Failed to post", description: e instanceof Error ? e.message : "Unknown error" })
     }
   }, [postComment, reset])
+
+  if (!currentUser) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        <Link href="/login" className="underline underline-offset-2 hover:text-foreground">Sign in</Link> to comment
+      </p>
+    )
+  }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2" aria-label="Post a comment">

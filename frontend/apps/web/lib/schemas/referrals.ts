@@ -14,7 +14,7 @@ export const referralStatsSchema = z.object({
   total_referrals: z.number(),
   completed_referrals: z.number(),
   total_rewards_earned: z.number(),
-  referrals: z.array(referralSchema),
+  referrals: z.array(referralSchema).optional(),
 })
 
 export const referralCodeSchema = z.object({

@@ -1,47 +1,54 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/api/use-notifications"
+import {
+  useNotifications,
+  useMarkNotificationRead,
+  useMarkAllNotificationsRead,
+} from "@/hooks/api/use-notifications"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import type { Notification } from "@/lib/schemas/notifications"
 import { Bell } from "lucide-react"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Spinner } from "@workspace/ui/components/spinner"
 
-interface NotificationItem {
-  id: string
-  type: string
-  title: string
-  body: string | null
-  data: Record<string, unknown> | null
-  read_at: string | null
-  created_at: string
-}
-
 export function NotificationBell() {
   const [open, setOpen] = useState(false)
-  const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const qc = useQueryClient()
   const { data: user } = useCurrentUser()
-  const { data, isLoading, refetch } = useNotifications({ page_size: 20 })
+  const { data: notifData = [], isLoading } = useNotifications({ page_size: 20 })
   const { mutate: markRead } = useMarkNotificationRead()
   const { mutate: markAllRead } = useMarkAllNotificationsRead()
 
-  // Initialize notifications from REST API
-  useEffect(() => {
-    if (data) {
-      setNotifications(data)
-    }
-  }, [data])
+  // Optimistic overlay for real-time prepends and read updates.
+  // WebSocket pushes are prepended here; REST data is the fallback.
+  const [overlay, setOverlay] = useState<{
+    prepends: Notification[]
+    readIds: Set<string>
+  }>({ prepends: [], readIds: new Set() })
 
-  // Real-time WebSocket updates
-  const handleWsMessage = useCallback((msg: unknown) => {
-    const message = msg as { type?: string; notification?: NotificationItem }
-    if (message.type === "notification" && message.notification) {
-      setNotifications(prev => [message.notification!, ...prev])
-    }
-  }, [])
+  // Merge REST data with optimistic overlay
+  const notifications = [...overlay.prepends, ...notifData].filter(
+    (n) => !overlay.readIds.has(n.id)
+  )
+
+  const unreadCount = notifications.filter((n) => !n.read_at).length
+
+  const handleWsMessage = useCallback(
+    (msg: unknown) => {
+      const message = msg as { type?: string; notification?: Notification }
+      if (message.type === "notification" && message.notification) {
+        setOverlay((prev) => ({
+          ...prev,
+          prepends: [message.notification!, ...prev.prepends],
+        }))
+        qc.invalidateQueries({ queryKey: ["notifications"] })
+      }
+    },
+    [qc]
+  )
 
   const { status } = useUserSocket({
     userId: user?.id ?? "",
@@ -49,18 +56,31 @@ export function NotificationBell() {
     enabled: !!user?.id,
   })
 
-  const unreadCount = notifications.filter(n => !n.read_at).length
+  const handleMarkRead = useCallback(
+    (id: string) => {
+      setOverlay((prev) => ({ ...prev, readIds: new Set([...prev.readIds, id]) }))
+      markRead(id)
+    },
+    [markRead]
+  )
 
   const handleMarkAllRead = useCallback(() => {
+    setOverlay((prev) => {
+      const allIds = new Set(prev.readIds)
+      notifications.forEach((n) => allIds.add(n.id))
+      return { ...prev, readIds: allIds }
+    })
     markAllRead()
-    setNotifications(prev => prev.map(n => ({ ...n, read_at: new Date().toISOString() })))
   }, [markAllRead])
+
+  if (!user) return null
 
   return (
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
         className="relative p-2 hover:bg-muted rounded-lg transition-colors"
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
       >
         <Bell className="size-5" />
         {unreadCount > 0 && (
@@ -88,17 +108,33 @@ export function NotificationBell() {
               </div>
               <div className="max-h-80 overflow-y-auto">
                 {isLoading ? (
-                  <div className="flex justify-center p-4"><Spinner className="size-5" /></div>
+                  <div className="flex justify-center p-4">
+                    <Spinner className="size-5" />
+                  </div>
                 ) : notifications.length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4 text-center">No notifications</p>
+                  <p className="text-sm text-muted-foreground p-4 text-center">
+                    No notifications
+                  </p>
                 ) : (
-                  notifications.map(n => (
+                  notifications.map((n) => (
                     <div
                       key={n.id}
-                      className={`p-3 border-b last:border-0 ${!n.read_at ? "bg-muted/50" : ""}`}
+                      className={`p-3 border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors ${
+                        !n.read_at ? "bg-muted/30" : ""
+                      }`}
+                      onClick={() => !n.read_at && handleMarkRead(n.id)}
                     >
-                      <p className="text-sm font-medium">{n.title}</p>
-                      {n.body && <p className="text-xs text-muted-foreground mt-1">{n.body}</p>}
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-medium leading-tight">{n.title}</p>
+                        {!n.read_at && (
+                          <span className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
+                        )}
+                      </div>
+                      {n.body && (
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                          {n.body}
+                        </p>
+                      )}
                       <p className="text-[10px] text-muted-foreground mt-1">
                         {new Date(n.created_at).toLocaleDateString()}
                       </p>

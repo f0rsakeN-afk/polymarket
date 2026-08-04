@@ -1,39 +1,44 @@
-"use client";
+"use client"
 
-import React, { createContext, useContext, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { authApi, MeResponse } from "@/lib/api/auth";
+import React, { createContext, useContext, useCallback } from "react"
+import { useRouter } from "next/navigation"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { authApi, MeResponse } from "@/lib/api/auth"
+import { useCurrentUser } from "./use-auth"
 
 interface AuthContextValue {
-  user: MeResponse | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  logout: () => Promise<void>;
+  user: MeResponse | null | undefined
+  isLoading: boolean
+  isAuthenticated: boolean
+  logout: () => Promise<void>
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const queryClient = useQueryClient();
-  const router = useRouter();
-
-  const { data: user, isLoading } = useQuery({
-    queryKey: ["me"] as const,
-    queryFn: () => authApi.me().then((r) => r.data),
-    retry: false,
-    staleTime: 60_000,
-  });
+  const queryClient = useQueryClient()
+  const router = useRouter()
+  const { data: user, isLoading } = useCurrentUser()
 
   const logoutMutation = useMutation({
     mutationFn: () => authApi.logout(),
-  });
+    onSuccess: () => {
+      // Clear all auth-related queries
+      queryClient.removeQueries({ queryKey: ["me"] })
+      queryClient.clear()
+      router.push("/")
+    },
+    onError: () => {
+      // Even if server logout fails, clear local state
+      queryClient.removeQueries({ queryKey: ["me"] })
+      queryClient.clear()
+      router.push("/")
+    },
+  })
 
   const logout = useCallback(async () => {
-    await logoutMutation.mutateAsync();
-    await queryClient.invalidateQueries({ queryKey: ["me"] });
-    router.push("/");
-  }, [logoutMutation, queryClient, router]);
+    await logoutMutation.mutateAsync()
+  }, [logoutMutation])
 
   return (
     <AuthContext.Provider
@@ -46,11 +51,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     >
       {children}
     </AuthContext.Provider>
-  );
+  )
 }
 
 export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
-  return ctx;
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error("useAuth must be used within <AuthProvider>")
+  return ctx
 }
