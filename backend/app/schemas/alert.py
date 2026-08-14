@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_serializer
@@ -17,10 +18,14 @@ class AlertResponse(BaseModel):
     condition: str
     trigger_price: float
     triggered: bool
-    triggered_at: str | None
+    triggered_at: datetime | None
 
     @field_serializer("id", "market_id")
     def serialize_uuid(self, v: str | UUID) -> str:
         return str(v)
+
+    @field_serializer("triggered_at")
+    def serialize_datetime(self, v: datetime | None) -> str | None:
+        return v.isoformat() if v else None
 
     model_config = {"from_attributes": True}

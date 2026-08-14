@@ -91,7 +91,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         method = request.method
 
         # Skip rate limiting for health/read-only endpoints
-        if method == "GET" or path in ("/health", "/", "/docs", "/openapi.json", "/redoc"):
+        if method == "GET" or path in ("/health", "/health/ready", "/", "/docs", "/openapi.json", "/redoc"):
             return await call_next(request)
 
         ip = _get_client_ip(request)

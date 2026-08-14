@@ -47,10 +47,10 @@ class LiquidityService:
 
         available = wallet.balance - wallet.locked_balance
         if amount > available:
-            raise ValidationError({
-                "available": float(available),
-                "requested": float(amount),
-            })
+            raise ValidationError(
+                f"Insufficient balance: available={float(available)}, requested={float(amount)}",
+                details={"available": float(available), "requested": float(amount)},
+            )
 
         if float(pool.lp_token_supply) > 0:
             pool_total = pool.yes_shares + pool.no_shares

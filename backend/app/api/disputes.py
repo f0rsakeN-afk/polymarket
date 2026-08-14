@@ -163,8 +163,9 @@ async def adjudicate_dispute(
                 f"Your dispute for market {market.slug} has been upheld. The market is now resolved.",
             )
 
+    actual_market_status = market.status if (req.ruling == "upheld" and market) else None
     return success_response({
         "dispute_id": str(dispute.id),
         "ruling": req.ruling,
-        "market_status": dispute.status,
+        "market_status": actual_market_status,
     })

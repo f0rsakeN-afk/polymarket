@@ -33,7 +33,7 @@ class RefreshToken(Base, UUIDMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     token_hash = Column(String(255), unique=True, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
-    revoked = Column(Boolean, default=False, nullable=False)
+    revoked = Column(Boolean, default=False, nullable=False, index=True)
     device_info = Column(Text)
 
     user = relationship("User")
@@ -44,7 +44,7 @@ class RefreshToken(Base, UUIDMixin):
 class Session(Base, UUIDMixin):
     __tablename__ = "sessions"
 
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     refresh_token_id = Column(
         UUID(as_uuid=True), ForeignKey("refresh_tokens.id", ondelete="CASCADE"), nullable=False
     )
@@ -53,7 +53,7 @@ class Session(Base, UUIDMixin):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     last_active_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
-    revoked = Column(Boolean, default=False, nullable=False)
+    revoked = Column(Boolean, default=False, nullable=False, index=True)
 
     user = relationship("User")
     refresh_token = relationship("RefreshToken", back_populates="current_session", overlaps="sessions")

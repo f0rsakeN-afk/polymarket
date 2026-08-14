@@ -288,7 +288,7 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
 
     token = str(uuid.uuid4())
     r = get_redis()
-    await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user_id), ex=900))
+    await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user.id), ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
@@ -320,6 +320,7 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         await redis_cb.call(lambda: r.set(f"partial:{partial}", user_id, ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
+    ip = _get_client_ip(request)
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
