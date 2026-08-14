@@ -294,6 +294,7 @@ async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_m
 
 @pytest.mark.asyncio
 async def test_get_disputes_for_market(client: AsyncClient, test_user, test_market):
+    client.cookies.set("access_token", _token(test_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -384,7 +385,8 @@ async def test_get_treasury(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_treasury_logs(client: AsyncClient):
+async def test_get_treasury_logs(client: AsyncClient, test_user):
+    client.cookies.set("access_token", _token(test_user.id))
     resp = await client.get("/api/v1/treasury/logs")
     assert resp.status_code == 200
     assert resp.json()["success"] is True

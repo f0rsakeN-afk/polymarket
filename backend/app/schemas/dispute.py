@@ -1,23 +1,23 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class CreateDisputeRequest(BaseModel):
-    market_id: str
-    evidence: str
-    evidence_url: str | None = None
+    market_id: str = Field(..., min_length=1)
+    evidence: str = Field(..., min_length=10, max_length=5000)
+    evidence_url: str | None = Field(default=None, max_length=1000)
 
 
 class ProposeResolutionRequest(BaseModel):
-    market_id: str
-    outcome_id: str
-    resolution_source: str
+    market_id: str = Field(..., min_length=1)
+    outcome_id: str = Field(..., min_length=1)
+    resolution_source: str = Field(..., min_length=10, max_length=1000)
 
 
 class AdjudicateDisputeRequest(BaseModel):
-    ruling: str
-    admin_note: str | None = None
+    ruling: str = Field(..., pattern="^(upheld|dismissed)$")
+    admin_note: str | None = Field(default=None, max_length=2000)
 
 
 class DisputeResponse(BaseModel):

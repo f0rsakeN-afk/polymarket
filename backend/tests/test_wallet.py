@@ -233,7 +233,7 @@ async def test_withdraw_exact_balance(client: AsyncClient, test_user):
     # Get current balance
     wallet_resp = await client.get("/api/v1/wallet/")
     balance = wallet_resp.json()["data"]["available_balance"]
-    if balance <= 0:
+    if Decimal(str(balance)) <= 0:
         # Skip if no balance to begin with
         pytest.skip("No available balance to test exact-balance withdrawal")
     resp = await client.post("/api/v1/wallet/withdraw", json={"amount": balance})

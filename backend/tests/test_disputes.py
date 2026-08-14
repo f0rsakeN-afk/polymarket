@@ -63,7 +63,7 @@ async def test_create_dispute_unauthenticated(client: AsyncClient, test_market):
     """Unauthenticated users cannot file disputes."""
     resp = await client.post("/api/v1/disputes", json={
         "market_id": str(test_market.id),
-        "evidence": "Unauthorized",
+        "evidence": "Unauthorized access",
     })
     assert resp.status_code == 401
 
@@ -146,7 +146,7 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
     client.cookies.set("access_token", _token(test_user.id))
     d_resp = await client.post("/api/v1/disputes", json={
         "market_id": str(test_market.id),
-        "evidence": "Evidence",
+        "evidence": "Evidence is valid here",
     })
     dispute_id = d_resp.json()["data"]["id"]
 
@@ -236,7 +236,7 @@ async def test_adjudicate_dispute_invalid_ruling(client: AsyncClient, admin_user
     client.cookies.set("access_token", _token(test_user.id))
     d_resp = await client.post("/api/v1/disputes", json={
         "market_id": str(test_market.id),
-        "evidence": "Evidence",
+        "evidence": "Evidence is valid here",
     })
     dispute_id = d_resp.json()["data"]["id"]
 

@@ -168,7 +168,7 @@ async def test_stripe_webhook_invalid_signature(client: AsyncClient, db_session)
             json=payload,
             headers={"stripe-signature": "bad_sig"},
         )
-    assert resp.status_code == 422
+    assert resp.status_code == 401
 
 
 @pytest.mark.asyncio

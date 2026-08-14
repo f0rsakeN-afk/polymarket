@@ -1,34 +1,38 @@
-from pydantic import BaseModel, Field
+from decimal import Decimal
+
+from pydantic import BaseModel
+
+from app.schemas.base import MoneyField, NonNegativeMoney, PositiveMoney
 
 
 class WalletResponse(BaseModel):
-    balance: float
-    locked_balance: float
-    available_balance: float
+    balance: MoneyField
+    locked_balance: MoneyField
+    available_balance: MoneyField
     currency: str
 
     model_config = {"from_attributes": True}
 
 
 class DepositRequest(BaseModel):
-    amount: float = Field(..., gt=0)
+    amount: PositiveMoney
 
 
 class DepositResponse(BaseModel):
     client_secret: str
-    amount: float
+    amount: MoneyField
     currency: str
 
 
 class WithdrawRequest(BaseModel):
-    amount: float = Field(..., gt=0)
+    amount: PositiveMoney
 
 
 class TransactionResponse(BaseModel):
     id: str
     type: str
-    amount: float
-    balance_after: float
+    amount: MoneyField
+    balance_after: MoneyField
     status: str
     created_at: str
 

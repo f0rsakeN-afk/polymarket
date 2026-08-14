@@ -97,9 +97,21 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    from sqlalchemy import select
+    from app.models.notification import Notification
+    # Verify ownership before marking as read
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    notification = result.scalar_one_or_none()
+    if not notification:
+        from app.api.exceptions import NotFoundError
+        raise NotFoundError("Notification not found")
     ok = await NotificationService.mark_read(db, current_user.id, notification_id)
     if not ok:
-        from app.api.exceptions import NotFoundError
         raise NotFoundError("Notification not found")
     return success_response({"message": "Marked as read"})
 

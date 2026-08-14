@@ -503,7 +503,7 @@ class OrderService:
             )
             db.add(t)
 
-        trade_amount = -float(total_usdc_spent) if data.side == "buy" else float(total_usdc_received)
+        trade_amount = -total_usdc_spent if data.side == "buy" else total_usdc_received
         tx = Transaction(
             user_id=user.id,
             wallet_id=wallet.id,
@@ -541,7 +541,7 @@ class OrderService:
                         user_id=referral.referrer_id,
                         wallet_id=ref_wallet.id,
                         type="referral_reward",
-                        amount=float(reward),
+                        amount=reward,
                         balance_after=ref_wallet.balance,
                         reference_id=str(referral.id),
                         reference_type="referral",

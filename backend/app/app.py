@@ -35,7 +35,7 @@ from app.api.treasury import router as treasury_router
 from app.api.wallet import router as wallet_router
 from app.api.webhooks import router as webhook_router
 from app.config import settings
-from app.database import _get_engine
+from app.database import _get_engine, _get_replica_engine
 from app.models import Base
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
@@ -72,8 +72,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down...")
     await redis_pubsub.close()
-    await engine.dispose()
-    await replica_engine.dispose()
+    await _get_engine().dispose()
+    await _get_replica_engine().dispose()
 
 
 app = FastAPI(

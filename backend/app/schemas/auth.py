@@ -4,22 +4,22 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterRequest(BaseModel):
     email: EmailStr
     username: str = Field(..., min_length=3, max_length=30, pattern=r"^[a-zA-Z0-9_-]+$")
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     referral_code: str | None = None
 
 
 class SetPasswordRequest(BaseModel):
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class VerifyEmailRequest(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(..., min_length=6, max_length=6)
 
 
 class ResendVerificationRequest(BaseModel):
@@ -32,13 +32,13 @@ class MagicLinkRequest(BaseModel):
 
 class VerifyMagicRequest(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(..., min_length=6, max_length=6)
     totp_code: str | None = None  # optional 2FA after magic login
 
 
 class MagicUrl2FARequest(BaseModel):
-    partial_token: str
-    totp_code: str
+    partial_token: str = Field(..., min_length=1)
+    totp_code: str = Field(..., min_length=6, max_length=6)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -47,13 +47,13 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
-    code: str
-    new_password: str
+    code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1)
     totp_code: str | None = None  # required if 2FA enabled
 
 
@@ -70,7 +70,7 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ─── 2FA schemas ───────────────────────────────────────────────────────────────
+# ─── 2FA schemas ─────────────────────────────────────────────────────────────
 
 class TwoFactorSetupResponse(BaseModel):
     secret: str
@@ -79,9 +79,9 @@ class TwoFactorSetupResponse(BaseModel):
 
 
 class TwoFactorEnableRequest(BaseModel):
-    code: str
+    code: str = Field(..., min_length=6, max_length=6)
 
 
 class TwoFactorDisableRequest(BaseModel):
-    code: str
-    password: str
+    code: str = Field(..., min_length=6, max_length=6)
+    password: str = Field(..., min_length=1)

@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models.dispute import Dispute
 from app.models.market import Market
+from app.models.user import User
 from app.schemas.dispute import (
     AdjudicateDisputeRequest,
     CreateDisputeRequest,
@@ -102,23 +103,32 @@ async def propose_resolution(
 @router.get("/market/{market_id}")
 async def get_disputes_for_market(
     market_id: str,
+    page: int = 1,
+    page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Dispute).where(Dispute.market_id == market_id).order_by(Dispute.created_at.desc())
+        select(Dispute, User.username)
+        .join(User, Dispute.user_id == User.id)
+        .where(Dispute.market_id == market_id)
+        .order_by(Dispute.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-    disputes = result.scalars().all()
+    rows = result.all()
     return success_response([
-        DisputeResponse(
-            id=str(d.id),
-            market_id=str(d.market_id),
-            user_id=str(d.user_id),
-            evidence=d.evidence,
-            evidence_url=d.evidence_url,
-            status=d.status,
-            created_at=d.created_at,
-        )
-        for d in disputes
+        {
+            "id": str(d.id),
+            "market_id": str(d.market_id),
+            "user_id": str(d.user_id),
+            "username": username,
+            "evidence": d.evidence,
+            "evidence_url": d.evidence_url,
+            "status": d.status,
+            "created_at": d.created_at,
+        }
+        for d, username in rows
     ])
 
 

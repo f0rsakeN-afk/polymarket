@@ -2,6 +2,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from decimal import Decimal
+
+from app.schemas.base import MoneyField, NonNegativeMoney
+
 
 class OutcomeResponse(BaseModel):
     id: str
@@ -18,10 +22,10 @@ class MarketResponse(BaseModel):
     description: str | None
     category: str | None
     status: str
-    total_liquidity: float
-    total_volume: float
-    yes_price: float
-    no_price: float
+    total_liquidity: MoneyField
+    total_volume: MoneyField
+    yes_price: MoneyField
+    no_price: MoneyField
     closes_at: datetime
     winning_outcome_id: str | None = None
     winning_outcome_name: str | None = None
@@ -32,7 +36,7 @@ class MarketResponse(BaseModel):
 
 class MarketDetailResponse(MarketResponse):
     outcomes: list[OutcomeResponse]
-    spread: float
+    spread: MoneyField
     created_at: datetime
 
 
@@ -47,8 +51,8 @@ class CreateMarketRequest(BaseModel):
     category: str | None = Field(None, max_length=100)
     slug: str = Field(..., min_length=3, max_length=255)
     closes_at: datetime
-    initial_liquidity: float = Field(default=0, ge=0)
-    initial_probability: float | None = Field(default=None, ge=0.01, le=0.99)
+    initial_liquidity: NonNegativeMoney = Field(default=Decimal("0"))
+    initial_probability: NonNegativeMoney | None = Field(default=None, ge=0.01, le=0.99)
     outcomes_create: list[MarketOutcomeCreate] | None = None
 
 

@@ -1,6 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
+from app.schemas.base import NonNegativeMoney
 from pydantic import BaseModel, Field, field_serializer
 
 
@@ -8,7 +9,7 @@ class AlertCreate(BaseModel):
     market_id: str
     outcome: str | None = None  # "yes", "no", or None for either
     condition: str = Field(..., pattern="^(above|below)$")
-    trigger_price: float = Field(..., gt=0, lt=1)
+    trigger_price: NonNegativeMoney = Field(..., gt=0, lt=1)
 
 
 class AlertResponse(BaseModel):
@@ -16,7 +17,7 @@ class AlertResponse(BaseModel):
     market_id: str | UUID
     outcome: str | None
     condition: str
-    trigger_price: float
+    trigger_price: NonNegativeMoney
     triggered: bool
     triggered_at: datetime | None
 

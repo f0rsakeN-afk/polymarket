@@ -46,6 +46,7 @@ async def get_treasury_logs(
     page_size: int = Query(20, ge=1, le=100),
     event: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
     treasury = await _get_or_create_treasury(db)
 
@@ -92,24 +93,26 @@ async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) 
 
 @router.post("/distribute")
 async def distribute_fees(
-    amount: float,
-    request: Request,
+    amount: float = Query(..., gt=0, description="Amount to distribute (must be positive)"),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
+    from decimal import Decimal
     current_user = await _get_admin_user(request, db)
 
     treasury = await _get_or_create_treasury(db)
-    if treasury.balance < amount:
+    amount_dec = Decimal(str(amount))
+    if treasury.balance < amount_dec:
         from app.api.exceptions import ValidationError
         raise ValidationError("Insufficient treasury balance")
 
-    treasury.balance -= amount
-    treasury.total_fees_distributed += amount
+    treasury.balance -= amount_dec
+    treasury.total_fees_distributed += amount_dec
 
     log = TreasuryLog(
         treasury_id=treasury.id,
         event="distribution",
-        amount=amount,
+        amount=amount_dec,
         reference_type="manual",
     )
     db.add(log)

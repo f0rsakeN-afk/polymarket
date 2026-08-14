@@ -1,19 +1,21 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.base import MoneyField, NonNegativeMoney, PositiveMoney
+
 
 class AddLiquidityRequest(BaseModel):
-    amount: float = Field(..., gt=0)
+    amount: PositiveMoney
 
 
 class RemoveLiquidityRequest(BaseModel):
-    lp_tokens: float = Field(..., gt=0)
+    lp_tokens: PositiveMoney
 
 
 class LiquidityPositionResponse(BaseModel):
-    lp_tokens: float
-    collateral_deposited: float
-    pool_lp_token_supply: float
-    pool_yes_shares: float
-    pool_no_shares: float
+    lp_tokens: MoneyField
+    collateral_deposited: MoneyField
+    pool_lp_token_supply: MoneyField
+    pool_yes_shares: MoneyField
+    pool_no_shares: MoneyField
 
     model_config = {"from_attributes": True}

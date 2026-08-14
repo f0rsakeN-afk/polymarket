@@ -13,7 +13,7 @@ class CommentResponse(BaseModel):
     market_id: str
     user_id: str
     username: str
-    parent_id: str | None
+    parent_id: str | None = None
     content: str
     depth: int
     is_deleted: bool

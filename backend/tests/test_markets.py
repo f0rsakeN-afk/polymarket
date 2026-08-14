@@ -316,7 +316,7 @@ async def test_get_market_zero_volume(client: AsyncClient, admin_user, db_sessio
 
     resp = await client.get(f"/api/v1/markets/{m.slug}")
     assert resp.status_code == 200
-    assert resp.json()["data"]["total_volume"] == 0
+    assert Decimal(resp.json()["data"]["total_volume"]) == 0
 
 
 # ── Edge cases: get_orderbook ───────────────────────────────────────────────────

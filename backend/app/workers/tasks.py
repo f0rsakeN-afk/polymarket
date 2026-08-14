@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.amm.engine import BinaryAMM
@@ -610,6 +610,13 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 )
                 db.add(treasury_user)
                 await db.flush()
+
+            # Get or create treasury wallet
+            treasury_wallet_result = await db.execute(
+                select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+            )
+            treasury_wallet = treasury_wallet_result.scalar_one_or_none()
+            if not treasury_wallet:
                 treasury_wallet = Wallet(
                     user_id=treasury_user.id,
                     balance=Decimal(0),
@@ -617,6 +624,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     currency="USDC",
                 )
                 db.add(treasury_wallet)
+                await db.flush()
 
             # Get YES outcome for LP redemption
             yes_outcome_result = await db.execute(
@@ -948,7 +956,7 @@ def cleanup_expired_sessions(self):
     Delete expired sessions and refresh tokens from the DB.
     Runs daily to prevent table bloat.
     """
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     async def _run():
         async with async_session() as db:
@@ -956,30 +964,30 @@ def cleanup_expired_sessions(self):
 
             # Delete expired refresh tokens
             del_rt = await db.execute(
-                select(RefreshToken).where(RefreshToken.expires_at < now)
+                delete(RefreshToken).where(RefreshToken.expires_at < now)
             )
-            rt_ids = [rt.id for rt in del_rt.scalars().all()]
+            rt_count = del_rt.rowcount
 
             # Delete expired sessions
             del_sess = await db.execute(
-                select(Session).where(Session.expires_at < now)
+                delete(Session).where(Session.expires_at < now)
             )
-            sess_ids = [s.id for s in del_sess.scalars().all()]
+            sess_count = del_sess.rowcount
 
             # Also delete revoked sessions older than 30 days
-            old_revoked = await db.execute(
-                select(Session).where(
+            del_old = await db.execute(
+                delete(Session).where(
                     Session.revoked == True,
                     Session.created_at < datetime.now(UTC) - timedelta(days=30),
                 )
             )
-            old_sess_ids = [s.id for s in old_revoked.scalars().all()]
+            old_count = del_old.rowcount
 
             await db.commit()
             return {
-                "refresh_tokens_expired": len(rt_ids),
-                "sessions_expired": len(sess_ids),
-                "sessions_revoked_old": len(old_sess_ids),
+                "refresh_tokens_expired": rt_count,
+                "sessions_expired": sess_count,
+                "sessions_revoked_old": old_count,
             }
 
     return asyncio.run(_run())

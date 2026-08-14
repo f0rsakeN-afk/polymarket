@@ -40,14 +40,27 @@ async def list_positions(
     )
     positions = result.scalars().all()
 
+    if not positions:
+        return success_response({"positions": [], "total": total, "page": page, "page_size": page_size, "has_more": False})
+
+    # Batch fetch all related data to avoid N+1 queries
+    market_ids = list({str(pos.market_id) for pos in positions})
+    outcome_ids = list({str(pos.outcome_id) for pos in positions})
+
+    markets_result = await db.execute(select(Market).where(Market.id.in_(market_ids)))
+    markets = {str(m.id): m for m in markets_result.scalars().all()}
+
+    outcomes_result = await db.execute(select(Outcome).where(Outcome.id.in_(outcome_ids)))
+    outcomes = {str(o.id): o for o in outcomes_result.scalars().all()}
+
+    pools_result = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id.in_(market_ids)))
+    pools = {str(p.market_id): p for p in pools_result.scalars().all()}
+
     response = []
     for pos in positions:
-        market_result = await db.execute(select(Market).where(Market.id == pos.market_id))
-        market = market_result.scalar_one_or_none()
-        outcome_result = await db.execute(select(Outcome).where(Outcome.id == pos.outcome_id))
-        outcome = outcome_result.scalar_one_or_none()
-        pool_result = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id == pos.market_id))
-        pool = pool_result.scalar_one_or_none()
+        market = markets.get(str(pos.market_id))
+        outcome = outcomes.get(str(pos.outcome_id))
+        pool = pools.get(str(pos.market_id))
 
         if pool and float(pool.yes_shares) + float(pool.no_shares) > 0:
             current_yes = float(pool.yes_shares) / (float(pool.yes_shares) + float(pool.no_shares))

@@ -36,7 +36,7 @@ async def get_referral_code(
 @router.get("/stats", summary="Referral stats", description="Get referral statistics for the current user.")
 async def get_referral_stats(
     request: Request,
-    db: AsyncSession = Depends(get_db_replica),
+    db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
 

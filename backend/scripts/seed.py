@@ -8,9 +8,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from random import choice, randint, uniform
 
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.orm import selectinload
 
-from app.database import async_session_maker
+from app.database import _get_async_session_maker
 from app.deps import hash_password
 from app.models.alert import Alert
 from app.models.comment import Comment
@@ -25,10 +26,9 @@ from app.models.position import Position
 from app.models.price_history import PriceHistory
 from app.models.referral import Referral
 from app.models.trade import Trade
+from app.models.treasury import Treasury, TreasuryLog
 from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Transaction, Wallet
-from app.models.treasury import Treasury, TreasuryLog
-from app.models.alert import Alert
 
 # Test users
 TEST_USERS = [
@@ -102,7 +102,8 @@ FAQ_QUESTIONS = [
 
 
 async def seed():
-    async with async_session_maker() as db:
+    async_session = _get_async_session_maker()
+    async with async_session() as db:
         print("Seeding database...")
 
         now = datetime.now(UTC)
@@ -111,44 +112,31 @@ async def seed():
         one_month_ago = now - timedelta(days=30)
         three_months_ago = now - timedelta(days=90)
 
-        # Create test users with wallets (skip if exists)
+        # Get or create test users with wallets
         print("Creating users...")
         users = []
         for user_data in TEST_USERS:
-            result = await db.execute(
-                text("SELECT id FROM users WHERE email = :email LIMIT 1"),
-                {"email": user_data["email"]},
-            )
-            existing = result.fetchone()
-            if existing:
-                user = User(id=existing[0])
-                users.append(user)
-            else:
+            result = await db.execute(select(User).where(User.email == user_data["email"]))
+            user = result.scalar_one_or_none()
+            if not user:
                 user = User(
                     id=uuid.uuid4(),
                     email=user_data["email"],
                     username=user_data["username"],
                     password_hash=hash_password(TEST_PASSWORD),
-                    is_verified=True,
+                    is_email_verified=True,
                     is_active=True,
                 )
                 db.add(user)
-                users.append(user)
-
-        await db.flush()
+                await db.flush()
+            users.append(user)
 
         # Create wallets with balances
         print("Creating wallets...")
-        wallets = []
         for user in users:
-            result = await db.execute(
-                text("SELECT id FROM wallets WHERE user_id = :user_id LIMIT 1"),
-                {"user_id": str(user.id)},
-            )
-            existing = result.fetchone()
-            if existing:
-                wallets.append(Wallet(id=existing[0], user_id=user.id))
-            else:
+            result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+            wallet = result.scalar_one_or_none()
+            if not wallet:
                 wallet = Wallet(
                     id=uuid.uuid4(),
                     user_id=user.id,
@@ -157,18 +145,15 @@ async def seed():
                     currency="USDC",
                 )
                 db.add(wallet)
-                wallets.append(wallet)
 
         await db.flush()
 
         # Create notification preferences
         print("Creating notification preferences...")
         for user in users:
-            result = await db.execute(
-                text("SELECT id FROM notification_preferences WHERE user_id = :user_id LIMIT 1"),
-                {"user_id": str(user.id)},
-            )
-            if not result.fetchone():
+            result = await db.execute(select(NotificationPreference).where(NotificationPreference.user_id == user.id))
+            pref = result.scalar_one_or_none()
+            if not pref:
                 pref = NotificationPreference(
                     id=uuid.uuid4(),
                     user_id=user.id,
@@ -184,50 +169,36 @@ async def seed():
 
         await db.flush()
 
-        # Create markets (skip if exists)
+        # Get or create markets
         print("Creating markets...")
         markets = []
         for market_data in MARKETS_DATA:
-            result = await db.execute(
-                text("SELECT id FROM markets WHERE slug = :slug LIMIT 1"),
-                {"slug": market_data["slug"]},
-            )
-            existing = result.fetchone()
-            if existing:
-                market = Market(id=existing[0])
-                markets.append(market)
-                continue
+            result = await db.execute(select(Market).where(Market.slug == market_data["slug"]))
+            market = result.scalar_one_or_none()
+            if not market:
+                closes_at = now + timedelta(days=market_data["closing_days"])
+                opens_at = now - timedelta(days=randint(1, 60))
 
-            closes_at = now + timedelta(days=market_data["closing_days"])
-            opens_at = now - timedelta(days=randint(1, 60))
+                market = Market(
+                    id=uuid.uuid4(),
+                    slug=market_data["slug"],
+                    question=market_data["question"],
+                    description=f"Detailed analysis and tracking for: {market_data['question']}",
+                    category=market_data["category"],
+                    subcategory=market_data.get("subcategory"),
+                    status="active",
+                    resolution_criteria=f"This market resolves based on official public sources regarding {market_data['question']}.",
+                    resolution_source=f"https://example.com/resolution/{market_data['slug']}",
+                    opens_at=opens_at,
+                    closes_at=closes_at,
+                    total_volume=Decimal(str(market_data["volume"])),
+                    total_liquidity=Decimal(str(market_data["liquidity"])),
+                    num_trades=randint(100, 5000),
+                )
+                db.add(market)
+                await db.flush()
 
-            market = Market(
-                id=uuid.uuid4(),
-                slug=market_data["slug"],
-                question=market_data["question"],
-                description=f"Detailed analysis and tracking for: {market_data['question']}",
-                category=market_data["category"],
-                subcategory=market_data.get("subcategory"),
-                status=choice(["active", "active", "active", "closed"]),
-                resolution_criteria=f"This market resolves based on official public sources regarding {market_data['question']}.",
-                resolution_source=f"https://example.com/resolution/{market_data['slug']}",
-                opens_at=opens_at,
-                closes_at=closes_at,
-                total_volume=Decimal(str(market_data["volume"])),
-                total_liquidity=Decimal(str(market_data["liquidity"])),
-                num_trades=randint(100, 5000),
-            )
-            db.add(market)
-            markets.append(market)
-
-            await db.flush()
-
-            # Create outcomes
-            result = await db.execute(
-                text("SELECT id FROM outcomes WHERE market_id = :market_id LIMIT 1"),
-                {"market_id": str(market.id)},
-            )
-            if not result.fetchone():
+                # Create outcomes
                 if market_data.get("multi_outcome"):
                     for idx, outcome_name in enumerate(market_data["outcomes"]):
                         outcome = Outcome(
@@ -238,49 +209,37 @@ async def seed():
                         )
                         db.add(outcome)
                 else:
-                    yes_outcome = Outcome(
-                        id=uuid.uuid4(),
-                        market_id=market.id,
-                        name="Yes",
-                        outcome_index=0,
-                    )
-                    no_outcome = Outcome(
-                        id=uuid.uuid4(),
-                        market_id=market.id,
-                        name="No",
-                        outcome_index=1,
-                    )
-                    db.add(yes_outcome)
-                    db.add(no_outcome)
+                    for idx, name in enumerate(["Yes", "No"]):
+                        outcome = Outcome(
+                            id=uuid.uuid4(),
+                            market_id=market.id,
+                            name=name,
+                            outcome_index=idx,
+                        )
+                        db.add(outcome)
 
-            await db.flush()
+                await db.flush()
 
-            # Create liquidity pool
-            result = await db.execute(
-                text(f"SELECT id FROM liquidity_pools WHERE market_id = '{market.id}' LIMIT 1")
-            )
-            if not result.fetchone():
+                # Create liquidity pool
                 yes_price = market_data["yes_price"]
                 no_price = 1 - yes_price
                 total_liquidity = market_data["liquidity"]
 
-                yes_shares = total_liquidity * no_price
-                no_shares = total_liquidity * yes_price
-
                 pool = LiquidityPool(
                     id=uuid.uuid4(),
                     market_id=market.id,
-                    yes_shares=Decimal(str(yes_shares)),
-                    no_shares=Decimal(str(no_shares)),
+                    yes_shares=Decimal(str(total_liquidity * no_price)),
+                    no_shares=Decimal(str(total_liquidity * yes_price)),
                     collateral=Decimal(str(total_liquidity)),
                     fee_rate=Decimal("0.02"),
                     lp_token_supply=Decimal(str(total_liquidity)),
                     protocol_fees=Decimal(str(round(total_liquidity * uniform(0.005, 0.02), 8))),
                 )
                 db.add(pool)
+                await db.flush()
 
-                # Create LP shares for different users
-                for i, user in enumerate(users[:5]):
+                # Create LP shares for this pool
+                for user in users[:5]:
                     lp_share = LPShare(
                         id=uuid.uuid4(),
                         pool_id=pool.id,
@@ -290,13 +249,7 @@ async def seed():
                     )
                     db.add(lp_share)
 
-            await db.flush()
-
-            # Create FAQs
-            result = await db.execute(
-                text(f"SELECT id FROM market_faqs WHERE market_id = '{market.id}' LIMIT 1")
-            )
-            if not result.fetchone():
+                # Create FAQs
                 for idx, (question, answer) in enumerate(FAQ_QUESTIONS):
                     faq = MarketFAQ(
                         id=uuid.uuid4(),
@@ -307,34 +260,63 @@ async def seed():
                     )
                     db.add(faq)
 
+            markets.append(market)
+
+        await db.flush()
+
+        # Create LP shares for existing pools (that don't have LP shares yet)
+        print("Creating LP shares...")
+        for market in markets:
+            result = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id == market.id))
+            pool = result.scalar_one_or_none()
+            if pool:
+                result = await db.execute(select(LPShare).where(LPShare.pool_id == pool.id))
+                existing_shares = result.scalars().all()
+                if len(existing_shares) < 5:
+                    for user in users[:5]:
+                        result = await db.execute(
+                            select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id)
+                        )
+                        existing = result.scalar_one_or_none()
+                        if not existing:
+                            lp_share = LPShare(
+                                id=uuid.uuid4(),
+                                pool_id=pool.id,
+                                user_id=user.id,
+                                lp_tokens=Decimal(str(uniform(100, 10000))),
+                                collateral_deposited=Decimal(str(uniform(50, 5000))),
+                            )
+                            db.add(lp_share)
+
         await db.flush()
 
         # Create refresh tokens and sessions
         print("Creating auth tokens...")
         for user in users:
-            refresh_token = RefreshToken(
-                id=uuid.uuid4(),
-                user_id=user.id,
-                token_hash=str(uuid.uuid4()),
-                expires_at=now + timedelta(days=30),
-                revoked=False,
-                device_info=f"Chrome on {choice(['Mac', 'Windows', 'Linux'])}",
-            )
-            db.add(refresh_token)
+            result = await db.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))
+            if not result.scalar_one_or_none():
+                refresh_token = RefreshToken(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    token_hash=str(uuid.uuid4()),
+                    expires_at=now + timedelta(days=30),
+                    revoked=False,
+                    device_info=f"Chrome on {choice(['Mac', 'Windows', 'Linux'])}",
+                )
+                db.add(refresh_token)
+                await db.flush()
 
-            await db.flush()
-
-            session = Session(
-                id=uuid.uuid4(),
-                user_id=user.id,
-                refresh_token_id=refresh_token.id,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                ip_address=f"192.168.{randint(1, 255)}.{randint(1, 255)}",
-                created_at=two_weeks_ago,
-                last_active_at=now - timedelta(hours=randint(1, 24)),
-                expires_at=now + timedelta(days=7),
-            )
-            db.add(session)
+                session = Session(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    refresh_token_id=refresh_token.id,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    ip_address=f"192.168.{randint(1, 255)}.{randint(1, 255)}",
+                    created_at=two_weeks_ago,
+                    last_active_at=now - timedelta(hours=randint(1, 24)),
+                    expires_at=now + timedelta(days=7),
+                )
+                db.add(session)
 
         await db.flush()
 
@@ -343,10 +325,9 @@ async def seed():
         referrer = users[0]  # Alice is the main referrer
         for user in users[1:5]:
             result = await db.execute(
-                text("SELECT id FROM referrals WHERE referrer_id = :referrer_id AND referred_id = :referred_id LIMIT 1"),
-                {"referrer_id": str(referrer.id), "referred_id": str(user.id)},
+                select(Referral).where(Referral.referrer_id == referrer.id, Referral.referred_id == user.id)
             )
-            if not result.fetchone():
+            if not result.scalar_one_or_none():
                 referral = Referral(
                     id=uuid.uuid4(),
                     referrer_id=referrer.id,
@@ -360,10 +341,13 @@ async def seed():
 
         await db.flush()
 
+        # Get active markets for disputes
+        result = await db.execute(select(Market).where(Market.status == "active"))
+        active_markets = list(result.scalars().all())
+
         # Create disputes
         print("Creating disputes...")
-        active_markets = [m for m in markets if m.status == "active"]
-        for market in active_markets[:5]:
+        for market in active_markets[:8]:
             user = choice(users)
             dispute = Dispute(
                 id=uuid.uuid4(),
@@ -379,35 +363,36 @@ async def seed():
 
         # Create market flags
         print("Creating market flags...")
-        for market in markets[:3]:
+        for market in markets[:5]:
             user = choice(users)
-            flag = MarketFlag(
-                id=uuid.uuid4(),
-                market_id=market.id,
-                user_id=user.id,
-                reason=choice(["Misleading information", "Invalid resolution criteria", "Duplicate market"]),
-                status=choice(["open", "reviewed"]),
+            result = await db.execute(
+                select(MarketFlag).where(MarketFlag.market_id == market.id, MarketFlag.user_id == user.id)
             )
-            db.add(flag)
+            if not result.scalar_one_or_none():
+                flag = MarketFlag(
+                    id=uuid.uuid4(),
+                    market_id=market.id,
+                    user_id=user.id,
+                    reason=choice(["Misleading information", "Invalid resolution criteria", "Duplicate market"]),
+                    status=choice(["open", "reviewed"]),
+                )
+                db.add(flag)
 
         await db.flush()
 
-        # Create trades
+        # Create trades (skip if exists)
         print("Creating trades...")
         trade_count = 0
         for market in markets:
-            result = await db.execute(
-                text(f"SELECT id FROM trades WHERE market_id = '{market.id}' LIMIT 1")
-            )
-            if result.fetchone():
+            # Get outcomes for this market
+            result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
+            outcomes = list(result.scalars().all())
+            if not outcomes:
                 continue
 
-            outcomes_result = await db.execute(
-                text(f"SELECT * FROM outcomes WHERE market_id = '{market.id}' ORDER BY outcome_index")
-            )
-            outcomes = list(outcomes_result.fetchall())
-
-            if not outcomes:
+            # Check if trades exist
+            result = await db.execute(select(Trade).where(Trade.market_id == market.id).limit(1))
+            if result.scalar_one_or_none():
                 continue
 
             num_trades = randint(30, 150)
@@ -432,12 +417,17 @@ async def seed():
         # Create price history
         print("Creating price history...")
         for market in markets:
-            outcomes_result = await db.execute(
-                text(f"SELECT * FROM outcomes WHERE market_id = '{market.id}' ORDER BY outcome_index")
-            )
-            outcomes = list(outcomes_result.fetchall())
+            result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
+            outcomes = list(result.scalars().all())
 
             for outcome in outcomes[:2]:  # Yes and No outcomes
+                # Check if price history exists
+                result = await db.execute(
+                    select(PriceHistory).where(PriceHistory.outcome_id == outcome.id).limit(1)
+                )
+                if result.scalar_one_or_none():
+                    continue
+
                 for day in range(30):
                     snapshot = PriceHistory(
                         id=uuid.uuid4(),
@@ -454,24 +444,30 @@ async def seed():
         # Create transactions
         print("Creating transactions...")
         tx_count = 0
-        for wallet in wallets:
-            wallet_balance = wallet.balance or Decimal(0)
+        for user in users:
+            result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+            wallet = result.scalar_one_or_none()
+            if not wallet:
+                continue
+
+            wallet_balance = Decimal(0)
+
             for _ in range(randint(5, 20)):
                 tx_type = choice(["deposit", "trade_buy", "trade_sell", "liquidity_add", "liquidity_remove", "settlement_win"])
                 if tx_type == "deposit":
                     amount = Decimal(str(uniform(100, 10000)))
-                    balance_after = wallet_balance + amount
+                    wallet_balance += amount
                 else:
                     amount = Decimal(str(uniform(10, 5000)))
-                    balance_after = wallet_balance - amount
+                    wallet_balance -= amount
 
                 tx = Transaction(
                     id=uuid.uuid4(),
-                    user_id=wallet.user_id,
+                    user_id=user.id,
                     wallet_id=wallet.id,
                     type=tx_type,
                     amount=amount,
-                    balance_after=balance_after,
+                    balance_after=wallet_balance,
                     reference_id=str(uuid.uuid4()),
                     reference_type=choice(["order", "liquidity_pool", "market_settlement"]),
                     status="completed",
@@ -480,12 +476,16 @@ async def seed():
                 db.add(tx)
                 tx_count += 1
 
+            # Update wallet balance
+            wallet.balance = wallet_balance
+
         await db.flush()
 
         # Create treasury and treasury logs
         print("Creating treasury...")
-        result = await db.execute(text("SELECT id FROM treasury LIMIT 1"))
-        if not result.fetchone():
+        result = await db.execute(select(Treasury).limit(1))
+        treasury = result.scalar_one_or_none()
+        if not treasury:
             treasury = Treasury(
                 id=uuid.uuid4(),
                 balance=Decimal("500000.00"),
@@ -531,6 +531,12 @@ async def seed():
         print("Creating alerts...")
         for user in users[:5]:
             for market in markets[:5]:
+                result = await db.execute(
+                    select(Alert).where(Alert.user_id == user.id, Alert.market_id == market.id).limit(1)
+                )
+                if result.scalar_one_or_none():
+                    continue
+
                 alert = Alert(
                     id=uuid.uuid4(),
                     user_id=user.id,
@@ -539,7 +545,7 @@ async def seed():
                     condition=choice(["above", "below"]),
                     trigger_price=Decimal(str(uniform(0.2, 0.8))),
                     triggered=choice([True, False]),
-                    triggered_at=choice([None, (now - timedelta(days=randint(1, 10))).isoformat()]),
+                    triggered_at=choice([None, now - timedelta(days=randint(1, 10))]),
                 )
                 db.add(alert)
 
@@ -549,10 +555,9 @@ async def seed():
         print("Creating comments...")
         comment_count = 0
         for market in markets[:10]:
-            result = await db.execute(
-                text(f"SELECT id FROM comments WHERE market_id = '{market.id}' LIMIT 1")
-            )
-            if result.fetchone():
+            # Check if comments exist
+            result = await db.execute(select(Comment).where(Comment.market_id == market.id).limit(1))
+            if result.scalar_one_or_none():
                 continue
 
             num_comments = randint(3, 12)
@@ -590,54 +595,52 @@ async def seed():
         print("Creating positions...")
         position_count = 0
         for market in markets[:8]:
-            result = await db.execute(
-                text(f"SELECT id FROM positions WHERE market_id = '{market.id}' LIMIT 1")
-            )
-            if result.fetchone():
+            # Get outcomes
+            result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
+            outcomes = list(result.scalars().all())
+            if not outcomes:
                 continue
 
-            outcomes_result = await db.execute(
-                text(f"SELECT * FROM outcomes WHERE market_id = '{market.id}' ORDER BY outcome_index")
-            )
-            outcomes = list(outcomes_result.fetchall())
+            # Check if positions exist
+            result = await db.execute(select(Position).where(Position.market_id == market.id).limit(1))
+            if result.scalar_one_or_none():
+                continue
 
             for user in users[:4]:
-                if outcomes:
-                    outcome = choice(outcomes)
-                    position = Position(
-                        id=uuid.uuid4(),
-                        user_id=user.id,
-                        market_id=market.id,
-                        outcome_id=outcome.id,
-                        shares_held=Decimal(str(uniform(50, 2000))),
-                        average_price=Decimal(str(uniform(0.1, 0.9))),
-                        realized_pnl=Decimal(str(uniform(-500, 2000))),
-                    )
-                    db.add(position)
-                    position_count += 1
+                outcome = choice(outcomes)
+                position = Position(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    market_id=market.id,
+                    outcome_id=outcome.id,
+                    shares_held=Decimal(str(uniform(50, 2000))),
+                    average_price=Decimal(str(uniform(0.1, 0.9))),
+                    realized_pnl=Decimal(str(uniform(-500, 2000))),
+                )
+                db.add(position)
+                position_count += 1
 
         await db.flush()
 
-        # Create orders
+        # Create pending orders
         print("Creating pending orders...")
         order_count = 0
         for market in markets:
-            result = await db.execute(
-                text(f"SELECT id FROM orders WHERE market_id = '{market.id}' AND status = 'pending' LIMIT 1")
-            )
-            if result.fetchone():
+            # Get outcomes
+            result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
+            outcomes = list(result.scalars().all())
+            if not outcomes:
                 continue
 
-            outcomes_result = await db.execute(
-                text(f"SELECT * FROM outcomes WHERE market_id = '{market.id}' ORDER BY outcome_index")
+            # Check if pending orders exist
+            result = await db.execute(
+                select(Order).where(Order.market_id == market.id, Order.status == "pending").limit(1)
             )
-            outcomes = list(outcomes_result.fetchall())
-            if not outcomes:
+            if result.scalar_one_or_none():
                 continue
 
             for user in users[:3]:
                 outcome = choice(outcomes)
-                price = Decimal(str(uniform(0.05, 0.95)))
                 order = Order(
                     id=uuid.uuid4(),
                     user_id=user.id,
@@ -646,7 +649,7 @@ async def seed():
                     side=choice(["buy", "sell"]),
                     order_type=choice(["limit", "fill_or_kill"]),
                     amount=Decimal(str(uniform(50, 500))),
-                    price=price,
+                    price=Decimal(str(uniform(0.05, 0.95))),
                     remaining_amount=Decimal(str(uniform(50, 500))),
                     status="pending",
                     client_order_id=str(uuid.uuid4()),
@@ -657,51 +660,35 @@ async def seed():
 
         await db.commit()
 
-        # Count and print summary
-        markets_count = len(markets)
-
         # Get counts from database
-        trades_result = await db.execute(text("SELECT COUNT(*) FROM trades"))
-        trades_count = trades_result.scalar()
-
-        comments_result = await db.execute(text("SELECT COUNT(*) FROM comments"))
-        comments_count = comments_result.scalar()
-
-        positions_result = await db.execute(text("SELECT COUNT(*) FROM positions"))
-        positions_count = positions_result.scalar()
-
-        orders_result = await db.execute(text("SELECT COUNT(*) FROM orders WHERE status = 'pending'"))
-        orders_count = orders_result.scalar()
-
-        transactions_result = await db.execute(text("SELECT COUNT(*) FROM transactions"))
-        transactions_count = transactions_result.scalar()
-
-        disputes_result = await db.execute(text("SELECT COUNT(*) FROM disputes"))
-        disputes_count = disputes_result.scalar()
-
-        alerts_result = await db.execute(text("SELECT COUNT(*) FROM alerts"))
-        alerts_count = alerts_result.scalar()
-
-        notifications_result = await db.execute(text("SELECT COUNT(*) FROM notifications"))
-        notifications_count = notifications_result.scalar()
-
-        referrals_result = await db.execute(text("SELECT COUNT(*) FROM referrals"))
-        referrals_count = referrals_result.scalar()
-
         print("\n=== Seeding Complete! ===")
-        print(f"  Users: {len(users)}")
-        print(f"  Markets: {markets_count}")
-        print(f"  Trades: {trades_count}")
-        print(f"  Comments: {comments_count}")
-        print(f"  Positions: {positions_count}")
-        print(f"  Pending Orders: {orders_count}")
-        print(f"  Transactions: {transactions_count}")
-        print(f"  Disputes: {disputes_count}")
-        print(f"  Alerts: {alerts_count}")
-        print(f"  Notifications: {notifications_count}")
-        print(f"  Referrals: {referrals_count}")
-        print(f"  LP Shares: {len(users) * 5}")  # 5 LP shares per user per pool
-        print(f"  Referral Codes: {len(users) - 1}")
+        tables = [
+            ("Users", "users"),
+            ("Wallets", "wallets"),
+            ("Markets", "markets"),
+            ("Outcomes", "outcomes"),
+            ("Liquidity Pools", "liquidity_pools"),
+            ("LP Shares", "lp_shares"),
+            ("Orders (pending)", "orders"),
+            ("Positions", "positions"),
+            ("Trades", "trades"),
+            ("Comments", "comments"),
+            ("Disputes", "disputes"),
+            ("Alerts", "alerts"),
+            ("Notifications", "notifications"),
+            ("Referrals", "referrals"),
+            ("Transactions", "transactions"),
+            ("Market Flags", "market_flags"),
+            ("Treasury", "treasury"),
+            ("Treasury Logs", "treasury_logs"),
+            ("Refresh Tokens", "refresh_tokens"),
+            ("Sessions", "sessions"),
+        ]
+
+        for name, table in tables:
+            result = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
+            count = result.scalar()
+            print(f"  {name}: {count}")
 
 
 if __name__ == "__main__":
