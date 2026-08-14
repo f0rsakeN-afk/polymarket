@@ -1,9 +1,7 @@
 import asyncio
 import time
-from typing import Optional
 
 import redis.asyncio as redis
-from redis.asyncio import ConnectionPool
 
 from app.config import settings
 

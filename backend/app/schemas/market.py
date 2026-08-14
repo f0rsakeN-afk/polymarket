@@ -1,8 +1,7 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
-
-from decimal import Decimal
 
 from app.schemas.base import MoneyField, NonNegativeMoney
 
@@ -51,7 +50,7 @@ class CreateMarketRequest(BaseModel):
     category: str | None = Field(None, max_length=100)
     slug: str = Field(..., min_length=3, max_length=255)
     closes_at: datetime
-    initial_liquidity: NonNegativeMoney = Field(default=Decimal("0"))
+    initial_liquidity: NonNegativeMoney = Field(default=Decimal(0))
     initial_probability: NonNegativeMoney | None = Field(default=None, ge=0.01, le=0.99)
     outcomes_create: list[MarketOutcomeCreate] | None = None
 

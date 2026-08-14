@@ -65,7 +65,6 @@ class BinaryAMM:
         fee = collateral * self.fee_rate
         collateral_net = collateral - fee
         k = self._k()
-        before_total = self.yes_shares + self.no_shares
 
         if outcome == "yes":
             new_yes = self.yes_shares + collateral_net
@@ -104,7 +103,6 @@ class BinaryAMM:
     ) -> AMMQuote:
         """Core sell logic — mutates pool state and returns quote."""
         k = self._k()
-        before_total = self.yes_shares + self.no_shares
 
         if outcome == "yes":
             if shares > self.yes_shares:

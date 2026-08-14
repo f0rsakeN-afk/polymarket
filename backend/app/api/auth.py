@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ConflictError, NotFoundError, UnauthorizedError, ValidationError
+from app.api.exceptions import (
+    ConflictError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db
@@ -20,9 +25,9 @@ from app.deps import (
     set_auth_cookies,
     verify_password,
 )
-from app.redis import get_redis, redis_cb
 from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Wallet
+from app.redis import get_redis, redis_cb
 from app.schemas.auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
@@ -30,8 +35,8 @@ from app.schemas.auth import (
     MagicLinkRequest,
     MagicUrl2FARequest,
     RegisterRequest,
-    ResetPasswordRequest,
     ResendVerificationRequest,
+    ResetPasswordRequest,
     SetPasswordRequest,
     TwoFactorDisableRequest,
     TwoFactorEnableRequest,
@@ -720,7 +725,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     _revoke_all_refresh_tokens(db, str(user.id))
     # Also revoke all sessions for this user
     sessions_result = await db.execute(
-        select(Session).where(Session.user_id == user.id, Session.revoked == False)
+        select(Session).where(Session.user_id == user.id, not Session.revoked)
     )
     for s in sessions_result.scalars().all():
         s.revoked = True
@@ -740,7 +745,7 @@ async def list_sessions(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Session).where(
             Session.user_id == user.id,
-            Session.revoked == False,
+            not Session.revoked,
         ).order_by(Session.last_active_at.desc())
     )
     sessions = result.scalars().all()

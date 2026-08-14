@@ -185,7 +185,7 @@ class LiquidityService:
             return {"markets": [], "total_distributed": 0.0}
 
         # Get or create system treasury user
-        treasury_result = await db.execute(select(User).where(User.is_system == True).limit(1))
+        treasury_result = await db.execute(select(User).where(User.is_system.is_(True)).limit(1))
         treasury_user = treasury_result.scalar_one_or_none()
         if not treasury_user:
             treasury_user = User(

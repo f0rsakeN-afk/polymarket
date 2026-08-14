@@ -24,7 +24,11 @@ from app.api.handlers import (
 from app.api.liquidity import router as liquidity_router
 from app.api.market_activity import router as market_activity_router
 from app.api.markets import router as markets_router
-from app.api.middleware import RateLimitMiddleware, RequestLoggingMiddleware, SecurityHeadersMiddleware
+from app.api.middleware import (
+    RateLimitMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.api.notifications import router as notifications_router
 from app.api.orders import router as orders_router
 from app.api.positions import router as positions_router

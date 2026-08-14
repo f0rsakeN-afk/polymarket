@@ -7,9 +7,10 @@ logger = logging.getLogger("polymarket")
 def _send_email_sync(to_email: str, subject: str, body: str):
     """Send email synchronously. Used as Celery fallback — mirrors tasks.send_email logic."""
     try:
-        from app.config import settings
         import smtplib
         from email.message import EmailMessage
+
+        from app.config import settings
 
         if settings.smtp_host:
             msg = EmailMessage()
@@ -85,7 +86,14 @@ class EmailService:
         t.start()
 
     # Convenience wrappers
-    send_verification_code = lambda e, c: EmailService.send_auth_email(e, "verify", code=c)
-    send_magic_code = lambda e, c: EmailService.send_auth_email(e, "magic", code=c)
-    send_magic_url = lambda e, u: EmailService.send_auth_email(e, "magic", magic_url=u)
-    send_password_reset_code = lambda e, c: EmailService.send_auth_email(e, "resetpwd", code=c)
+    def send_verification_code(e: str, c: str) -> None:  # noqa: N805
+        EmailService.send_auth_email(e, "verify", code=c)
+
+    def send_magic_code(e: str, c: str) -> None:  # noqa: N805
+        EmailService.send_auth_email(e, "magic", code=c)
+
+    def send_magic_url(e: str, u: str) -> None:  # noqa: N805
+        EmailService.send_auth_email(e, "magic", magic_url=u)
+
+    def send_password_reset_code(e: str, c: str) -> None:  # noqa: N805
+        EmailService.send_auth_email(e, "resetpwd", code=c)

@@ -25,7 +25,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         details = {}
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(message, error_code, details if details else None),
+        content=error_response(message, error_code, details or None),
     )
 
 
@@ -33,7 +33,7 @@ async def app_exception_handler(request: Request, exc: AppException):
     logger.warning(f"{exc.error_code}: {exc.message} | path={request.url.path} details={exc.details}")
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(exc.message, exc.error_code, exc.details if exc.details else None),
+        content=error_response(exc.message, exc.error_code, exc.details or None),
     )
 
 

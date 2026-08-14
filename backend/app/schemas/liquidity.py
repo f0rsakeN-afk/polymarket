@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.schemas.base import MoneyField, NonNegativeMoney, PositiveMoney
+from app.schemas.base import MoneyField, PositiveMoney
 
 
 class AddLiquidityRequest(BaseModel):

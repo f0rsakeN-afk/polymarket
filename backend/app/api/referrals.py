@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import success_response
-from app.database import get_db, get_db_replica
+from app.database import get_db
 from app.deps import get_current_user
 from app.models.referral import Referral
 

@@ -25,6 +25,7 @@ from app.models import (
     User,
     Wallet,
 )
+from app.services.liquidity_service import LiquidityService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 
@@ -312,7 +313,9 @@ def check_limit_order_execution(self):
                                 "price": float(amm_price_val) if amm_price_val > 0 else float(order.price),
                             })
                             # Also dispatch in-app notification
-                            from app.services.notification_service import NotificationService
+                            from app.services.notification_service import (
+                                NotificationService,
+                            )
                             await NotificationService.dispatch(
                                 db, str(order.user_id), "order_filled",
                                 f"Order filled: {order_side} {float(order_amount - remaining):.2f} shares",
@@ -784,8 +787,10 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                             },
                         )
                         # Also dispatch in-app notification
-                        from app.services.notification_service import NotificationService
                         from app.models.market import Market
+                        from app.services.notification_service import (
+                            NotificationService,
+                        )
                         market_result = await db.execute(select(Market).where(Market.id == market_id))
                         market = market_result.scalar_one_or_none()
                         market_slug = market.slug if market else market_id
@@ -890,8 +895,6 @@ def enqueue_otp(self, email: str, purpose: str):
     import hmac
     import random
 
-    CODE_TTL = 600  # 10 minutes
-
     def _get_secret(e: str, p: str) -> str:
         import app.config
         base = f"{app.config.settings.jwt_secret}:{e}:{p}"
@@ -913,7 +916,7 @@ def enqueue_otp(self, email: str, purpose: str):
         from app.redis import get_redis, redis_cb
         r = get_redis()
         await redis_cb.call(
-            lambda: r.setex(key, CODE_TTL, f"{code}:{_hash_code(code, secret)}")
+            lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
         )
     asyncio.run(_store())
 
@@ -977,7 +980,7 @@ def cleanup_expired_sessions(self):
             # Also delete revoked sessions older than 30 days
             del_old = await db.execute(
                 delete(Session).where(
-                    Session.revoked == True,
+                    Session.revoked.is_(True),
                     Session.created_at < datetime.now(UTC) - timedelta(days=30),
                 )
             )

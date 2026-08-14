@@ -218,7 +218,7 @@ class RateLimitService:
                     friction_key, max_attempts, lockout, now,
                 )
             )
-            attempts, delay, is_locked = int(result[0]), float(result[1]), int(result[2])
+            _, delay, is_locked = int(result[0]), float(result[1]), int(result[2])
         except Exception as e:
             logger.warning(f"Rate limit Redis error (friction): {e}")
             return RateLimitResult(allowed=True, limit=5, remaining=5, retry_after=None, is_slowdown=False), False

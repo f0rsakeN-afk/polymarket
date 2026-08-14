@@ -98,7 +98,7 @@ async def distribute_fees(
     db: AsyncSession = Depends(get_db),
 ):
     from decimal import Decimal
-    current_user = await _get_admin_user(request, db)
+    await _get_admin_user(request, db)
 
     treasury = await _get_or_create_treasury(db)
     amount_dec = Decimal(str(amount))

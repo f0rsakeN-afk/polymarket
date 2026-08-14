@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -9,12 +9,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
-from app.deps import cache_get, cache_invalidate, cache_invalidate_pattern, cache_set, get_current_user
+from app.deps import (
+    cache_get,
+    cache_invalidate,
+    cache_invalidate_pattern,
+    cache_set,
+    get_current_user,
+)
 from app.models.faq import MarketFAQ
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.position import Position
 from app.models.wallet import Transaction, Wallet
+from app.redis import get_redis
 from app.schemas.faq import FAQResponse
 from app.schemas.market import (
     CreateMarketRequest,
@@ -23,7 +30,6 @@ from app.schemas.market import (
     OutcomeResponse,
     ResolveMarketRequest,
 )
-from app.redis import get_redis
 from app.services.market_service import MarketService
 from app.workers.tasks import resolve_market
 
@@ -248,7 +254,7 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     if not user.is_admin:
         raise ForbiddenError("Only admins can create markets")
 
-    if data.closes_at <= datetime.now(timezone.utc):
+    if data.closes_at <= datetime.now(UTC):
         raise ValidationError("closes_at must be in the future")
 
     if data.initial_probability is not None and data.initial_liquidity <= 0:
@@ -503,7 +509,7 @@ async def claim_winnings(
     payout = Decimal(str(winning_pos.shares_held))
     wallet.balance += payout
     winning_pos.realized_pnl += payout
-    winning_pos.shares_held = Decimal("0")
+    winning_pos.shares_held = Decimal(0)
 
     tx = Transaction(
         user_id=user.id,

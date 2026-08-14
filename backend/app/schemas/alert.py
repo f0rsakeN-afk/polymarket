@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.base import NonNegativeMoney
 from pydantic import BaseModel, Field, field_serializer
+
+from app.schemas.base import NonNegativeMoney
 
 
 class AlertCreate(BaseModel):

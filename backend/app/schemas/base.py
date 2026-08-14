@@ -1,10 +1,10 @@
 """
 Shared Pydantic types for the API.
 """
-from annotated_types import Ge, Gt, Le
 from decimal import Decimal
 from typing import Annotated
 
+from annotated_types import Ge, Gt, Le
 from pydantic import GetJsonSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 

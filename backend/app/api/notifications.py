@@ -98,6 +98,7 @@ async def mark_read(
     current_user = Depends(get_current_user),
 ):
     from sqlalchemy import select
+
     from app.models.notification import Notification
     # Verify ownership before marking as read
     result = await db.execute(
