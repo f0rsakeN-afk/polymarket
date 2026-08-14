@@ -19,7 +19,7 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
   const [lpTokens, setLpTokens] = useState("")
 
   const isMarketActive = marketStatus === "active"
-  const availableBalance = wallet?.available_balance ?? 0
+  const availableBalance = Number(wallet?.available_balance ?? 0)
   const parsedAmount = parseFloat(amount) || 0
   const hasInsufficientBalance = parsedAmount > availableBalance
 

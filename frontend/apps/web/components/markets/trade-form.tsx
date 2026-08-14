@@ -173,7 +173,7 @@ function TradeForm({
       outcome: "yes",
       side: "buy",
       order_type: "market",
-      amount: undefined,
+      amount: 0,
       price: undefined,
       post_only: false,
       client_order_id: clientOrderId,
@@ -200,10 +200,10 @@ function TradeForm({
       ? price ?? quote?.price ?? effectivePrice
       : quote?.price ?? effectivePrice
 
-  const total = amount && displayPrice ? amount * displayPrice : 0
+  const total = amount && displayPrice ? amount * Number(displayPrice) : 0
 
   const isMarketOpen = marketStatus !== BLOCKED_STATUS
-  const availableBalance = wallet?.available_balance ?? 0
+  const availableBalance = Number(wallet?.available_balance ?? 0)
   const hasInsufficientBalance = side === "buy" && total > availableBalance
 
   // ── Quote fetching ──────────────────────────────────────────────────────────
@@ -425,7 +425,7 @@ function TradeForm({
           <div className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Price</span>
-              <span>${displayPrice.toFixed(4)}</span>
+              <span>${Number(displayPrice).toFixed(4)}</span>
             </div>
             {quote && (
               <div className="flex justify-between">
@@ -433,10 +433,10 @@ function TradeForm({
                 <span
                   className={cn(
                     "font-medium",
-                    quote.slippage > 0.01 ? "text-yellow-500" : "text-green-500"
+                    Number(quote.slippage) > 0.01 ? "text-yellow-500" : "text-green-500"
                   )}
                 >
-                  {(quote.slippage * 100).toFixed(2)}%
+                  {(Number(quote.slippage) * 100).toFixed(2)}%
                 </span>
               </div>
             )}

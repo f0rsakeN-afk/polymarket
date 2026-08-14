@@ -1,6 +1,6 @@
 import { api } from "./client"
 import { z } from "zod"
-import { depositSchema, withdrawSchema } from "@/lib/schemas/trading"
+import { depositSchema, withdrawSchema } from "@/lib/schemas/wallet"
 import type { Wallet, Transaction, TransactionsResponse } from "@/hooks/api/types/wallet"
 
 export function getWallet() {

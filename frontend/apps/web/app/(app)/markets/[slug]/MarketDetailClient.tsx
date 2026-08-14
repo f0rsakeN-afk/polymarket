@@ -14,12 +14,12 @@ export function MarketDetailClient() {
 
   const handleTrade = useCallback(async (order: PlaceOrderInput) => {
     try {
-      const result = await placeOrder(order) as { success?: boolean; data?: { status?: string; shares?: number; price?: number; duplicate?: boolean } }
+      const result = await placeOrder(order) as { success?: boolean; data?: { status?: string; shares?: string; price?: string; duplicate?: boolean } }
       const status = result?.data?.status
       if (status === "duplicate" || result?.data?.duplicate) {
-        sileo.info({ title: "Order already placed", description: `View in orders (${result?.data?.shares?.toFixed(2) ?? 0} shares at $${result?.data?.price?.toFixed(4) ?? 0})` })
+        sileo.info({ title: "Order already placed", description: `View in orders (${parseFloat(result?.data?.shares ?? "0").toFixed(2) ?? 0} shares at $${parseFloat(result?.data?.price ?? "0").toFixed(4) ?? 0})` })
       } else {
-        sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`, description: `${result?.data?.shares?.toFixed(2) ?? 0} shares at $${result?.data?.price?.toFixed(4) ?? 0}` })
+        sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`, description: `${parseFloat(result?.data?.shares ?? "0").toFixed(2) ?? 0} shares at $${parseFloat(result?.data?.price ?? "0").toFixed(4) ?? 0}` })
       }
     } catch (e) {
       const err = e as { message: string; error_code?: string }

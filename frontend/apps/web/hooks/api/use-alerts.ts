@@ -18,10 +18,6 @@ export function useCreateAlert() {
     mutationFn: createAlert,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["alerts"] })
-      sileo.success({ title: "Alert created" })
-    },
-    onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to create alert" })
     },
   })
 }

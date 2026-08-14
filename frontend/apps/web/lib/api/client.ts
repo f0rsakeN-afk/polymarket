@@ -25,19 +25,18 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
   if (!data || typeof data !== "object") return { message: "An error occurred" }
   const d = data as Record<string, unknown>
 
-  // Handle FastAPI ValidationError format (detail array) — e.g. {detail: [{loc, msg, type}]}
+  // Handle FastAPI ValidationError format (detail array)
   if (Array.isArray(d.detail)) {
     const items = d.detail as { loc: (string | number)[]; msg: string }[]
     return { message: items.map((e) => e.msg || e.loc.join(".")).join("; ") }
   }
 
-  // Handle our backend error_response format — {success: false, error: "...", error_code: "..."}
+  // Handle our backend error_response format
   const ad = d as unknown as ApiErrorData
   if (ad.success === false && ad.error) {
     return { message: ad.error, error_code: ad.error_code }
   }
 
-  // Fallback for plain string detail
   if (typeof d.detail === "string") return { message: d.detail }
 
   return { message: "An error occurred" }
@@ -46,31 +45,46 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
 // ─── Token refresh ───────────────────────────────────────────────────────────
 
 let isRefreshing = false
-let refreshSubscribers: Array<(token: string) => void> = []
+let refreshSubscribers: Array<(token: string | null) => void> = []
 
-function subscribeRefresh(cb: (token: string) => void) {
+function subscribeRefresh(cb: (token: string | null) => void) {
   refreshSubscribers.push(cb)
 }
 
-function onRefreshDone(token: string) {
+function onRefreshDone(token: string | null) {
   refreshSubscribers.forEach((cb) => cb(token))
   refreshSubscribers = []
 }
 
-async function doRefresh(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-    method: "POST",
-    credentials: "include",
-  })
-  if (!res.ok) {
+async function doRefresh(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    })
+    if (!res.ok) {
+      isRefreshing = false
+      onRefreshDone(null)
+      return null
+    }
     isRefreshing = false
-    // Refresh failed — clear all subscribers with empty string to trigger logout
-    onRefreshDone("")
-    throw new Error("Session expired")
+    onRefreshDone("refreshed")
+    return "refreshed"
+  } catch {
+    isRefreshing = false
+    onRefreshDone(null)
+    return null
   }
-  isRefreshing = false
-  onRefreshDone("refreshed")
-  return "refreshed"
+}
+
+function redirectToLogin() {
+  if (
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/login") &&
+    !window.location.pathname.startsWith("/signup")
+  ) {
+    window.location.href = "/login"
+  }
 }
 
 // ─── Pending request deduplication ──────────────────────────────────────────
@@ -101,27 +115,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       })
 
       if (res.status === 401 && !(options.headers as Record<string, string>)?.["Authorization"]) {
-        // Token expired — try refresh
         if (!isRefreshing) {
           isRefreshing = true
-          doRefresh().catch(() => {
-            // ponytail: redirect to login only if not already on an auth page (avoid redirect loops)
-            if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/signup")) {
-              window.location.href = "/login"
-            }
+          doRefresh().then((token) => {
+            // If refresh failed (null), redirect to login
+            if (!token) redirectToLogin()
           })
         }
 
-        // Wait for refresh to complete (or fail)
-        const token = await new Promise<string>((resolve) => {
+        const token = await new Promise<string | null>((resolve) => {
           subscribeRefresh(resolve)
         })
 
         if (!token) {
+          // Refresh failed — redirect already fired, do not throw
           throw new ApiError("Session expired. Please sign in again.", 401)
         }
 
-        // Retry with new token
         const retryRes = await fetch(`${API_BASE}${path}`, {
           credentials: "include",
           headers: {

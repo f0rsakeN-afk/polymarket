@@ -35,7 +35,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
 
   useEffect(() => {
     const now = Math.floor(Date.now() / 1000)
-    const seed = market.yes_price
+    const seed = Number(market.yes_price)
     setPriceHistory([
       { time: now - 300, value: seed * 0.97 },
       { time: now - 240, value: seed * 1.01 },
@@ -46,7 +46,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
     ])
   }, [market.yes_price])
 
-  const prob = Math.round(market.yes_price * 100)
+  const prob = Math.round(Number(market.yes_price) * 100)
   const statusColor = status === "connected" ? "bg-green-500" : status === "connecting" ? "bg-yellow-500 animate-pulse" : "bg-muted"
 
   return (
@@ -69,7 +69,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       <div className="h-28 mb-3 overflow-hidden rounded-md" aria-hidden="true">
         <LiveLineChart
           data={priceHistory}
-          value={priceHistory.at(-1)?.value ?? market.yes_price}
+          value={priceHistory.at(-1)?.value ?? Number(market.yes_price)}
           window={300}
           numXTicks={3}
           height={112}
@@ -90,7 +90,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
         </div>
         <div className="text-right">
           <div className="text-[9px] text-muted-foreground">Volume</div>
-          <div className="text-xs font-medium">${(market.total_volume / 1_000_000).toFixed(1)}M</div>
+          <div className="text-xs font-medium">${(Number(market.total_volume) / 1_000_000).toFixed(1)}M</div>
         </div>
       </div>
     </Link>

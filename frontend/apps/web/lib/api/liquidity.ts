@@ -9,19 +9,19 @@ export interface LPAnalyticsResponse {
       market_id: string
       market_slug: string
       market_question: string
-      lp_tokens: number
-      collateral_deposited: number
-      position_value: number
-      share_pct: number
-      fees_earned: number
-      net_pnl: number
-      estimated_apr: number
-      pool_yes_price: number
-      pool_no_price: number
+      lp_tokens: string
+      collateral_deposited: string
+      position_value: string
+      share_pct: string
+      fees_earned: string
+      net_pnl: string
+      estimated_apr: string
+      pool_yes_price: string
+      pool_no_price: string
     }[]
-    total_value: number
-    total_deposited: number
-    total_pnl: number
+    total_value: string
+    total_deposited: string
+    total_pnl: string
   }
 }
 
@@ -30,21 +30,21 @@ export function getLPAnalytics() {
 }
 
 export function addLiquidity(marketId: string, data: { amount: number }) {
-  return api.post<{ success: boolean; data: { lp_tokens: number; pool_yes: number; pool_no: number } }>(
+  return api.post<{ success: boolean; data: { lp_tokens: string; pool_yes: string; pool_no: string } }>(
     `/api/v1/markets/${marketId}/liquidity`,
     addLiquiditySchema.parse(data)
   )
 }
 
 export function removeLiquidity(marketId: string, data: { lp_tokens: number }) {
-  return api.delete<{ success: boolean; data: { usdc_returned: number; lp_burned: number } }>(
+  return api.delete<{ success: boolean; data: { usdc_returned: string; lp_burned: string } }>(
     `/api/v1/markets/${marketId}/liquidity`,
     data
   )
 }
 
 export function getLPPosition(marketId: string) {
-  return api.get<{ success: boolean; data: { lp_tokens: number; collateral_deposited: number; pool_lp_token_supply: number; pool_yes_shares: number; pool_no_shares: number } }>(
+  return api.get<{ success: boolean; data: { lp_tokens: string; collateral_deposited: string; pool_lp_token_supply: string; pool_yes_shares: string; pool_no_shares: string } }>(
     `/api/v1/markets/${marketId}/liquidity`
   )
 }

@@ -774,10 +774,10 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                     alert.triggered_at = datetime.now(UTC)
                     triggered_count += 1
                     try:
-                        await redis_pubsub.publish_market_event(
+                        await redis_pubsub.publish_notification(
                             str(alert.user_id),
-                            "alert:triggered",
                             {
+                                "type": "alert:triggered",
                                 "alert_id": str(alert.id),
                                 "market_id": market_id,
                                 "outcome": alert.outcome or "any",

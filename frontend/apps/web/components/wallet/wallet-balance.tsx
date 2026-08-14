@@ -3,11 +3,11 @@
 import { Spinner } from "@workspace/ui/components/spinner"
 import type { Wallet } from "@/hooks/api/types/wallet"
 
-function formatUSD(n: number) {
+function formatUSD(n: string | number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-  }).format(n)
+  }).format(Number(n))
 }
 
 interface WalletBalanceProps {

@@ -77,3 +77,6 @@ export { useCurrentUser } from "./use-auth"
 export { useMarketSocket } from "./use-market-socket"
 export { useUserSocket } from "./use-user-socket"
 export { useCarouselScroll } from "./use-carousel-scroll"
+
+// Split / Merge
+export { useSplit, useMerge } from "./api/use-split-merge"

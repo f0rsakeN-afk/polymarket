@@ -4,10 +4,11 @@ import { memo } from "react"
 import Link from "next/link"
 import type { MarketResponse, Outcome } from "@/hooks/api/types/market"
 
-function formatVolume(v: number) {
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
-  if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`
-  return `$${v.toFixed(2)}`
+function formatVolume(v: string | number) {
+  const n = Number(v)
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`
+  return `$${n.toFixed(2)}`
 }
 
 interface MarketCardProps {
@@ -46,7 +47,7 @@ const OutcomeGrid = memo(function OutcomeGrid({
   max = 4,
   isBinary,
 }: {
-  outcomes: { id: string; name: string; price: number; outcome_index: number }[]
+  outcomes: { id: string; name: string; price: string; outcome_index: number }[]
   marketSlug: string
   max?: number
   isBinary?: boolean
@@ -69,7 +70,7 @@ const OutcomeGrid = memo(function OutcomeGrid({
             <div className="truncate text-[11px] font-medium text-foreground mb-1 group-hover:underline">
               {o.name}
             </div>
-            <ProbabilityBar prob={o.price} color={color} label={o.name} />
+            <ProbabilityBar prob={Number(o.price)} color={color} label={o.name} />
           </Link>
         )
       })}
@@ -89,8 +90,8 @@ const OutcomeGrid = memo(function OutcomeGrid({
 function MarketCard({ market }: MarketCardProps) {
   const isMulti = market.outcomes && market.outcomes.length > 2
 
-  const displayOutcomes: { id: string; name: string; price: number; outcome_index: number }[] = isMulti
-    ? market.outcomes!.map((o) => ({ id: o.id, name: o.name, price: 1 / market.outcomes!.length, outcome_index: o.outcome_index }))
+  const displayOutcomes: { id: string; name: string; price: string; outcome_index: number }[] = isMulti
+    ? market.outcomes!.map((o) => ({ id: o.id, name: o.name, price: String(1 / market.outcomes!.length), outcome_index: o.outcome_index }))
     : [
         { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
         { id: "no", name: "No", price: market.no_price, outcome_index: 1 },

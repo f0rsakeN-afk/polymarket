@@ -1,15 +1,15 @@
 export interface Wallet {
-  balance: number
-  locked_balance: number
-  available_balance: number
+  balance: string
+  locked_balance: string
+  available_balance: string
   currency: string
 }
 
 export interface Transaction {
   id: string
   type: "deposit" | "withdrawal" | "trade" | "refund"
-  amount: number
-  balance_after: number
+  amount: string
+  balance_after: string
   status: "pending" | "completed" | "failed"
   created_at: string
 }

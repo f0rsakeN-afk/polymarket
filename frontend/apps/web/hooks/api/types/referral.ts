@@ -4,6 +4,6 @@ export interface ReferralCode {
 
 export interface ReferralStats {
   total_referrals: number
-  total_earned: number
-  pending_rewards: number
+  total_earned: string
+  pending_rewards: string
 }

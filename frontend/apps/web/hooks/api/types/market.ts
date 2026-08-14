@@ -5,10 +5,10 @@ export interface MarketResponse {
   description: string | null
   category: string | null
   status: string
-  total_liquidity: number
-  total_volume: number
-  yes_price: number
-  no_price: number
+  total_liquidity: string
+  total_volume: string
+  yes_price: string
+  no_price: string
   closes_at: string
   winning_outcome_id?: string
   winning_outcome_name?: string
@@ -38,15 +38,15 @@ export interface FAQ {
 
 export interface PriceHistoryPoint {
   timestamp: string
-  outcomes: { id: string; name: string; price: number }[]
-  total_volume: number
+  outcomes: { id: string; name: string; price: string }[]
+  total_volume: string
 }
 
 export interface MarketDetailResponse extends Omit<MarketResponse, "id"> {
   id: string
   outcomes: Outcome[]
   faqs?: FAQ[]
-  spread: number
+  spread: string
   created_at: string
 }
 
@@ -57,11 +57,11 @@ export interface Trade {
   market_question: string
   outcome: string
   side: "buy" | "sell"
-  price: number
-  amount: number
+  price: string
+  amount: string
   executed_at: string
   username: string
-  total?: number
+  total?: string
 }
 
 export interface TradesResponse {
@@ -77,30 +77,30 @@ export interface MarketTrade {
   id: string
   outcome: string
   side: "buy" | "sell"
-  price: number
-  amount: number
+  price: string
+  amount: string
   timestamp: string
   username: string
 }
 
 export interface MarketStats {
-  total_volume: number
-  total_liquidity: number
+  total_volume: string
+  total_liquidity: string
   num_trades: number
-  yes_price: number
-  no_price: number
-  spread: number
-  yes_liquidity: number
-  no_liquidity: number
+  yes_price: string
+  no_price: string
+  spread: string
+  yes_liquidity: string
+  no_liquidity: string
   status: string
 }
 
 export interface Holder {
   user_id: string
   username: string
-  shares_held: number
-  average_price: number
-  realized_pnl: number
+  shares_held: string
+  average_price: string
+  realized_pnl: string
 }
 
 export interface CommentActivity {

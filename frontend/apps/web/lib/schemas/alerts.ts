@@ -4,7 +4,7 @@ export const createAlertSchema = z.object({
   market_id: z.string(),
   outcome: z.enum(["yes", "no"]).optional(),
   condition: z.enum(["above", "below"]),
-  trigger_price: z.number().min(0.01, "Min 0.01").max(0.99, "Max 0.99"),
+  trigger_price: z.string(), // ponytail: string — Decimal serialized from backend
 })
 
 export type CreateAlertInput = z.infer<typeof createAlertSchema>

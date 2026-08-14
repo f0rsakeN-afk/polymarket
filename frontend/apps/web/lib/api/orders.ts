@@ -37,15 +37,15 @@ export interface PlaceOrderResponse {
   status: string
   side: string
   outcome: string
-  shares: number
-  price: number
-  price_before: number
-  price_after: number
-  yes_price_after: number
-  no_price_after: number
-  slippage: number
-  fee: number
-  wallet_balance: number
+  shares: string
+  price: string
+  price_before: string
+  price_after: string
+  yes_price_after: string
+  no_price_after: string
+  slippage: string
+  fee: string
+  wallet_balance: string
   duplicate?: boolean
 }
 
@@ -56,13 +56,13 @@ export interface SingleOrderResponse {
   outcome: string
   side: string
   order_type: string
-  amount: number
-  remaining_amount: number
-  price: number
+  amount: string
+  remaining_amount: string
+  price: string
   status: string
-  shares_bought: number | null
-  shares_sold: number | null
-  fees_paid: number | null
+  shares_bought: string | null
+  shares_sold: string | null
+  fees_paid: string | null
   created_at: string
   executed_at: string | null
 }

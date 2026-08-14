@@ -7,8 +7,8 @@ export const tradeSchema = z.object({
   market_question: z.string(),
   outcome: z.string(),
   side: z.string(),
-  price: z.number(),
-  amount: z.number(),
+  price: z.string(), // ponytail: string — Decimal serialized from backend
+  amount: z.string(), // ponytail: string — Decimal serialized from backend
   executed_at: z.string().datetime(),
   username: z.string(),
 })

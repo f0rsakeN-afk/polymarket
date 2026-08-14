@@ -149,8 +149,8 @@ export function getGlobalTrades(params?: {
 export interface OrderBookEntry {
   outcome_id: string
   outcome: string
-  price: number
-  size: number
+  price: string
+  size: string
 }
 
 export interface OrderBook {
@@ -163,7 +163,7 @@ export function getOrderBook(slug: string) {
 }
 
 export interface ClaimResponse {
-  claimed: number
+  claimed: string
 }
 
 export function claimWinnings(slug: string) {

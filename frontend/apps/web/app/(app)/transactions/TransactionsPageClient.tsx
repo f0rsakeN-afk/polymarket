@@ -4,11 +4,11 @@ import { useTransactions } from "@/hooks/api/use-wallet"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
 
-function formatUSD(n: number) {
+function formatUSD(n: string | number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-  }).format(n)
+  }).format(Number(n))
 }
 
 function formatDate(iso: string) {

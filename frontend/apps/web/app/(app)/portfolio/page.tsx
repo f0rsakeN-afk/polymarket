@@ -1,12 +1,14 @@
 "use client"
 
 import { useCallback } from "react"
+import { sileo } from "sileo"
 import { useQueryClient } from "@tanstack/react-query"
 import { usePositions } from "@/hooks/api/use-positions"
 import { useOrders } from "@/hooks/api/use-orders"
 import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { SplitMergeForm } from "@/components/liquidity/split-merge-form"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@workspace/ui/components/table"
@@ -14,6 +16,12 @@ import { Spinner } from "@workspace/ui/components/spinner"
 function formatPnL(pnl: number) {
   const sign = pnl >= 0 ? "+" : ""
   return `${sign}$${pnl.toFixed(2)}`
+}
+
+function n(v: string | number | null | undefined, fallback = 0): number {
+  if (v == null) return fallback
+  const n = Number(v)
+  return isNaN(n) ? fallback : n
 }
 
 function formatTime(iso: string) {
@@ -35,8 +43,20 @@ export default function PortfolioPage() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
-      const message = msg as { type?: string; notification?: { type?: string } }
-      if (message.type === "position:update" || message.notification?.type === "order_filled") {
+      const message = msg as { type?: string; notification?: { type?: string }; title?: string; body?: string; alert_id?: string; outcome?: string; condition?: string; trigger_price?: number }
+      if (message.type === "notification") {
+        sileo.info({ title: message.title ?? "Notification", description: message.body ?? "" })
+        qc.invalidateQueries({ queryKey: ["notifications"] })
+        return
+      }
+      if (message.type === "alert:triggered") {
+        sileo.success({
+          title: "Price Alert!",
+          description: `${(message.outcome ?? "price").toUpperCase()} ${message.condition} $${message.trigger_price?.toFixed(2)}`,
+        })
+        return
+      }
+      if (message.type === "order:fill" || message.notification?.type === "order_filled" || message.type === "position:update") {
         qc.invalidateQueries({ queryKey: ["positions"] })
         qc.invalidateQueries({ queryKey: ["orders"] })
       }
@@ -68,19 +88,19 @@ export default function PortfolioPage() {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-muted-foreground">Available</p>
-                <p className="text-2xl font-bold">${wallet.available_balance.toFixed(2)}</p>
+                <p className="text-2xl font-bold">${n(wallet.available_balance).toFixed(2)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-muted-foreground">Locked</p>
-                <p className="text-2xl font-bold">${wallet.locked_balance.toFixed(2)}</p>
+                <p className="text-2xl font-bold">${n(wallet.locked_balance).toFixed(2)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-muted-foreground">Balance</p>
-                <p className="text-2xl font-bold">${wallet.balance.toFixed(2)}</p>
+                <p className="text-2xl font-bold">${n(wallet.balance).toFixed(2)}</p>
               </CardContent>
             </Card>
           </div>
@@ -94,8 +114,8 @@ export default function PortfolioPage() {
         <section>
           <h2 className="text-lg font-semibold mb-4">Positions</h2>
           {(() => {
-            const totalUnrealized = positions.positions.reduce((s, p) => s + p.unrealized_pnl, 0)
-            const totalRealized = positions.positions.reduce((s, p) => s + p.realized_pnl, 0)
+            const totalUnrealized = positions.positions.reduce((s, p) => s + n(p.unrealized_pnl), 0)
+            const totalRealized = positions.positions.reduce((s, p) => s + n(p.realized_pnl), 0)
             const totalPnL = totalUnrealized + totalRealized
             const pnlColor = (v: number) => (v >= 0 ? "text-green-500" : "text-red-500")
             return (
@@ -155,21 +175,21 @@ export default function PortfolioPage() {
                         {pos.outcome}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{pos.shares_held.toFixed(0)}</TableCell>
-                    <TableCell className="text-right tabular-nums">${pos.average_price.toFixed(3)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{n(pos.shares_held).toFixed(0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">${n(pos.average_price).toFixed(3)}</TableCell>
                     <TableCell
                       className={`text-right tabular-nums ${
-                        pos.unrealized_pnl >= 0 ? "text-green-500" : "text-red-500"
+                        n(pos.unrealized_pnl) >= 0 ? "text-green-500" : "text-red-500"
                       }`}
                     >
-                      {formatPnL(pos.unrealized_pnl)}
+                      {formatPnL(n(pos.unrealized_pnl))}
                     </TableCell>
                     <TableCell
                       className={`text-right tabular-nums ${
-                        pos.realized_pnl >= 0 ? "text-green-500" : "text-red-500"
+                        n(pos.realized_pnl) >= 0 ? "text-green-500" : "text-red-500"
                       }`}
                     >
-                      {formatPnL(pos.realized_pnl)}
+                      {formatPnL(n(pos.realized_pnl))}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -177,6 +197,16 @@ export default function PortfolioPage() {
             </Table>
           </Card>
         )}
+      </section>
+
+      {/* Split / Merge */}
+      <section>
+        <h2 className="text-lg font-semibold mb-4">Split / Merge</h2>
+        <Card>
+          <CardContent className="pt-6">
+            <SplitMergeForm />
+          </CardContent>
+        </Card>
       </section>
 
       {/* Recent Orders */}
@@ -219,8 +249,8 @@ export default function PortfolioPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="capitalize">{order.order_type.replace("_", " ")}</TableCell>
-                    <TableCell className="text-right tabular-nums">${order.price.toFixed(3)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{order.amount.toFixed(0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">${n(order.price).toFixed(3)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{n(order.amount).toFixed(0)}</TableCell>
                     <TableCell>
                       <Badge
                         variant={

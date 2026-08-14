@@ -9,8 +9,8 @@ import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { depositSchema, withdrawSchema } from "@/lib/schemas/trading"
-import type { DepositInput, WithdrawInput } from "@/lib/schemas/trading"
+import { depositSchema, withdrawSchema } from "@/lib/schemas/wallet"
+import type { DepositInput, WithdrawInput } from "@/lib/schemas/wallet"
 import { sileo } from "sileo"
 
 function AmountForm({
