@@ -30,7 +30,7 @@ class TOTPService:
         """
         if not code.isdigit() or len(code) != 6:
             return False
-        totp = pyotp.TOTP(secret, valid_window=valid_window)
+        totp = pyotp.TOTP(secret)
         return totp.verify(code, valid_window=valid_window)
 
     @staticmethod

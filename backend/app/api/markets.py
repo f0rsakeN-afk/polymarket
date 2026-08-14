@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -55,12 +55,12 @@ def market_to_response(market: Market, yes_price: float = 0.5, no_price: float =
     return resp
 
 
-@router.get("/", response_model=MarketListResponse)
+@router.get("/")
 async def list_markets(
     q: str | None = None,
     category: str | None = None,
     status: str | None = None,
-    sort: str = Query("volume", regex="^(volume|newest|closing_soon|liquidity)$"),
+    sort: str = Query("volume", pattern="^(volume|newest|closing_soon|liquidity)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
@@ -109,7 +109,7 @@ async def list_markets(
     pipe = redis.pipeline()
     for m in page_markets:
         pipe.hgetall(f"market:{m.id}:price")
-    price_data = pipe.execute()
+    price_data = await pipe.execute()
 
     market_responses = []
     for i, (market, pool) in enumerate(rows):
@@ -144,7 +144,7 @@ async def list_markets(
         has_more=has_more,
     )
     await cache_set(cache_key, resp.model_dump(), ttl=30)
-    return resp
+    return resp.model_dump()
 
 
 @router.get("/categories")
@@ -248,7 +248,7 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     if not user.is_admin:
         raise ForbiddenError("Only admins can create markets")
 
-    if data.closes_at <= datetime.now():
+    if data.closes_at <= datetime.now(timezone.utc):
         raise ValidationError("closes_at must be in the future")
 
     if data.initial_probability is not None and data.initial_liquidity <= 0:
@@ -449,7 +449,10 @@ async def resolve_market_endpoint(
     market.resolved_at = datetime.now(UTC)
     await db.commit()
 
-    resolve_market.delay(str(market.id), str(outcome.id))
+    try:
+        resolve_market.delay(str(market.id), str(outcome.id))
+    except Exception:
+        logger.exception(f"Failed to queue market resolution task: market_id={market.id}")
 
     logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
     await cache_invalidate(f"markets:detail:{slug}")
@@ -497,10 +500,10 @@ async def claim_winnings(
     if not wallet:
         raise NotFoundError("Wallet not found")
 
-    payout = winning_pos.shares_held
+    payout = Decimal(str(winning_pos.shares_held))
     wallet.balance += payout
     winning_pos.realized_pnl += payout
-    winning_pos.shares_held = 0
+    winning_pos.shares_held = Decimal("0")
 
     tx = Transaction(
         user_id=user.id,

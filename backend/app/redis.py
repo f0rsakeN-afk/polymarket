@@ -1,33 +1,21 @@
 import asyncio
 import time
+from typing import Optional
 
 import redis.asyncio as redis
 from redis.asyncio import ConnectionPool
 
 from app.config import settings
 
-pool = ConnectionPool.from_url(
-    settings.redis_url,
-    max_connections=settings.redis_max_connections,
-    decode_responses=True,
-)
-
-# ponytail: separate pool for Celery workers so async API pool and sync worker pool don't contend
-worker_pool = ConnectionPool.from_url(
-    settings.redis_url,
-    max_connections=settings.celery_worker_redis_max_connections,
-    decode_responses=True,
-)
-
 
 def get_redis() -> redis.Redis:
-    """For async FastAPI routes — shares pool with API server."""
-    return redis.Redis(connection_pool=pool)
+    """For async FastAPI routes — each call gets a fresh client with its own pool.
 
-
-def get_worker_redis() -> redis.Redis:
-    """For sync Celery workers — dedicated pool, avoids contention with API pool."""
-    return redis.Redis(connection_pool=worker_pool)
+    redis.asyncio.Redis.from_url() creates an internal ConnectionPool, so this is
+    safe for concurrent use within a single event loop. The per-call pattern avoids
+    cross-test contamination since each test's app gets its own client instances.
+    """
+    return redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 class RedisCircuitBreaker:
@@ -37,7 +25,7 @@ class RedisCircuitBreaker:
     After 5 consecutive failures, circuit opens for 30s.
     """
 
-    def  __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self._failures = 0

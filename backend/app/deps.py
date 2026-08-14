@@ -29,7 +29,9 @@ async def cache_get(key: str) -> dict | list | None:
 async def cache_set(key: str, data: dict | list, ttl: int = 30):
     r = get_redis()
     import json
-    await redis_cb.call(lambda: r.setex(f"cache:{key}", ttl, json.dumps(data)))
+    def json_dumps(obj):
+        return json.dumps(obj, default=str)
+    await redis_cb.call(lambda: r.set(f"cache:{key}", json_dumps(data), ex=ttl))
 
 
 async def cache_invalidate(key: str):
@@ -80,15 +82,21 @@ def decode_token(token: str) -> dict:
 
 
 async def is_token_blacklisted(jti: str) -> bool:
-    r = get_redis()
-    result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
-    return result is not None
+    try:
+        r = get_redis()
+        result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
+        return result is not None
+    except Exception:
+        return False  # Fail open — if Redis is down, don't block tokens
 
 
 async def blacklist_token(jti: str, ttl_seconds: int):
     """Add a token's jti to the blacklist for its remaining TTL."""
-    r = get_redis()
-    await redis_cb.call(lambda: r.setex(f"blacklist:{jti}", ttl_seconds, "1"))
+    try:
+        r = get_redis()
+        await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
+    except Exception:
+        pass  # Best-effort — if Redis is down, token won't be blacklisted but auth still works
 
 
 async def get_current_user(

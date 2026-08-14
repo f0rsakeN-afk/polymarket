@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +9,7 @@ from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.treasury import Treasury, TreasuryLog
+from app.models.user import User
 from app.schemas.treasury import TreasuryLogResponse, TreasuryResponse
 
 logger = logging.getLogger("polymarket")
@@ -81,14 +82,21 @@ async def get_treasury_logs(
     )
 
 
+async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+    """Require current user to be admin."""
+    user = await get_current_user(request, db)
+    if not user.is_admin:
+        raise ForbiddenError("Admin access required")
+    return user
+
+
 @router.post("/distribute")
 async def distribute_fees(
     amount: float,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
 ):
-    if not current_user.is_admin:
-        raise ForbiddenError("Only admins can distribute fees")
+    current_user = await _get_admin_user(request, db)
 
     treasury = await _get_or_create_treasury(db)
     if treasury.balance < amount:

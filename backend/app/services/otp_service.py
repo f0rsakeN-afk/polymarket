@@ -39,7 +39,7 @@ class OTPService:
 
         r = get_redis()
         await redis_cb.call(
-            lambda: r.setex(key, CODE_TTL, f"{code}:{OTPService._hash_code(code, secret)}")
+            lambda: r.set(key, f"{code}:{OTPService._hash_code(code, secret)}", ex=CODE_TTL)
         )
         logger.info(f"OTP issued for {email}, purpose={purpose}")
         return code

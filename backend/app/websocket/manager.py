@@ -29,6 +29,25 @@ class ConnectionManager:
             self._ws_to_market[websocket] = market_id
         logger.info(f"WS connected: market={market_id}")
 
+    async def switch_market(self, websocket: WebSocket, new_market_id: str):
+        """Switch a websocket's market subscription without closing the connection."""
+        async with self._lock:
+            old_market_id = self._ws_to_market.get(websocket)
+
+            # Remove from old market
+            if old_market_id and old_market_id in self._market_subs:
+                self._market_subs[old_market_id].discard(websocket)
+                if not self._market_subs[old_market_id]:
+                    del self._market_subs[old_market_id]
+
+            # Add to new market
+            if new_market_id not in self._market_subs:
+                self._market_subs[new_market_id] = set()
+            self._market_subs[new_market_id].add(websocket)
+            self._ws_to_market[websocket] = new_market_id
+
+        logger.info(f"WS switched: market={old_market_id} -> market={new_market_id}")
+
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             market_id = self._ws_to_market.pop(websocket, None)

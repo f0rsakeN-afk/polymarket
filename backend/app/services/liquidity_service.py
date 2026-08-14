@@ -80,6 +80,7 @@ class LiquidityService:
             db.add(lp_share)
 
         pool.lp_token_supply += lp_tokens_minted
+        market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount
         wallet.balance -= amount
 
         tx = Transaction(
@@ -142,6 +143,7 @@ class LiquidityService:
 
         pool.yes_shares -= yes_redeemed
         pool.no_shares -= no_redeemed
+        market.total_liquidity = max(Decimal(0), (market.total_liquidity or Decimal(0)) - total_redeemed)
         pool.lp_token_supply -= lp_tokens
 
         lp_share.lp_tokens -= lp_tokens

@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import PaginatedResponse, success_response
@@ -65,11 +65,11 @@ async def list_notifications(
     result = await db.execute(query)
     notifications = result.scalars().all()
 
-    count_query = select(Notification).where(Notification.user_id == current_user.id)
+    count_query = select(func.count(Notification.id)).where(Notification.user_id == current_user.id)
     if unread_only:
         count_query = count_query.where(Notification.read_at.is_(None))
     total_result = await db.execute(count_query)
-    total = len(total_result.scalars().all())
+    total = total_result.scalar() or 0
 
     return PaginatedResponse(
         data=[

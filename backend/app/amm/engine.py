@@ -16,15 +16,22 @@ class AMMQuote:
 
 class BinaryAMM:
     """
-    Constant product AMM for binary outcome markets.
+    Constant-product AMM for binary outcome prediction markets.
 
-    x * y = k
-    x = YES shares in pool
-    y = NO shares in pool
-    k = constant product
+    Invariant:  yes_shares * no_shares = k
 
-    price(YES) = y / (x + y)
-    price(NO)  = x / (x + y)
+    price(YES) = no_shares / (yes_shares + no_shares)
+    price(NO)  = yes_shares / (yes_shares + no_shares)
+
+    Buying YES:
+      - Deposits collateral into YES pool
+      - Receives YES shares (from NO side of the pool)
+      - YES price rises, NO price falls
+
+    Selling YES:
+      - Deposits YES shares into pool
+      - Receives collateral from NO side
+      - YES price falls, NO price rises
     """
 
     def __init__(
@@ -48,42 +55,36 @@ class BinaryAMM:
             return self.no_shares / total
         return self.yes_shares / total
 
-    def buy(
+    def _execute_buy(
         self,
         outcome: Literal["yes", "no"],
         collateral: Decimal,
         min_shares_out: Decimal | None = None,
     ) -> AMMQuote:
-        """
-        Buy shares of an outcome by depositing collateral.
-
-        After fee: collateral_after = collateral * (1 - fee_rate)
-        New YES pool = YES + collateral_after
-        k stays constant → new NO pool = k / new_YES_pool
-        Shares out = old_NO_pool - new_NO_pool
-        """
+        """Core buy logic — mutates pool state and returns quote."""
         fee = collateral * self.fee_rate
-        collateral_after_fee = collateral - fee
+        collateral_net = collateral - fee
+        k = self._k()
+        before_total = self.yes_shares + self.no_shares
 
         if outcome == "yes":
-            new_yes = self.yes_shares + collateral_after_fee
-            new_no = self._k() / new_yes if new_yes > 0 else Decimal(0)
+            new_yes = self.yes_shares + collateral_net
+            new_no = k / new_yes if new_yes > 0 else Decimal(0)
             shares_out = max(Decimal(0), self.no_shares - new_no)
         else:
-            new_no = self.no_shares + collateral_after_fee
-            new_yes = self._k() / new_no if new_no > 0 else Decimal(0)
+            new_no = self.no_shares + collateral_net
+            new_yes = k / new_no if new_no > 0 else Decimal(0)
             shares_out = max(Decimal(0), self.yes_shares - new_yes)
 
-        if shares_out < 0:
-            shares_out = Decimal(0)
-
         if min_shares_out is not None and shares_out < min_shares_out:
-            raise ValueError(f"Slippage too high: {shares_out} < {min_shares_out}")
-
-        self.price(outcome)
-        self.price(outcome)  # same since state hasn't changed yet
+            raise ValueError(f"Slippage exceeded: output {shares_out} < minimum {min_shares_out}")
 
         current_price = self.price(outcome)
+
+        self.yes_shares = new_yes
+        self.no_shares = new_no
+
+        after_total = self.yes_shares + self.no_shares
 
         return AMMQuote(
             shares_out=shares_out.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
@@ -91,64 +92,60 @@ class BinaryAMM:
             fee=fee.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             price=current_price,
             slippage=Decimal(0),
-            yes_price_after=self.yes_shares / (self.yes_shares + self.no_shares),
-            no_price_after=self.no_shares / (self.yes_shares + self.no_shares),
+            yes_price_after=self.yes_shares / after_total if after_total > 0 else Decimal("0.5"),
+            no_price_after=self.no_shares / after_total if after_total > 0 else Decimal("0.5"),
         )
 
-    def sell(
+    def _execute_sell(
         self,
         outcome: Literal["yes", "no"],
         shares: Decimal,
         min_collateral_out: Decimal | None = None,
     ) -> AMMQuote:
-        """
-        Sell shares back to the AMM for collateral.
+        """Core sell logic — mutates pool state and returns quote."""
+        k = self._k()
+        before_total = self.yes_shares + self.no_shares
 
-        New YES pool = YES - shares (for selling YES)
-        k stays constant → new NO pool = k / new_YES_pool
-        Collateral out = old_NO_pool - new_NO_pool
-        """
         if outcome == "yes":
             if shares > self.yes_shares:
-                raise ValueError("Not enough YES shares in pool")
+                raise ValueError(f"Not enough YES shares: held={self.yes_shares}, requested={shares}")
             new_yes = self.yes_shares - shares
-            new_no = self._k() / new_yes if new_yes > 0 else Decimal(0)
-            collateral_raw = self.no_shares - new_no
+            new_no = k / new_yes if new_yes > 0 else Decimal(0)
+            collateral_raw = new_no - self.no_shares
         else:
             if shares > self.no_shares:
-                raise ValueError("Not enough NO shares in pool")
+                raise ValueError(f"Not enough NO shares: held={self.no_shares}, requested={shares}")
             new_no = self.no_shares - shares
-            new_yes = self._k() / new_no if new_no > 0 else Decimal(0)
-            collateral_raw = self.yes_shares - new_yes
+            new_yes = k / new_no if new_no > 0 else Decimal(0)
+            collateral_raw = new_yes - self.yes_shares
 
         fee = collateral_raw * self.fee_rate
-        collateral_out = collateral_raw - fee
+        collateral_net = collateral_raw - fee
 
-        if min_collateral_out is not None and collateral_out < min_collateral_out:
-            raise ValueError(f"Slippage too high: {collateral_out} < {min_collateral_out}")
+        if min_collateral_out is not None and collateral_net < min_collateral_out:
+            raise ValueError(f"Slippage exceeded: collateral {collateral_net} < minimum {min_collateral_out}")
 
         current_price = self.price(outcome)
 
+        self.yes_shares = new_yes
+        self.no_shares = new_no
+
+        after_total = self.yes_shares + self.no_shares
+
         return AMMQuote(
             shares_out=shares.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
-            collateral_in=collateral_out.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
+            collateral_in=collateral_net.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             fee=fee.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             price=current_price,
             slippage=Decimal(0),
-            yes_price_after=new_yes / (new_yes + new_no),
-            no_price_after=new_no / (new_yes + new_no),
+            yes_price_after=self.yes_shares / after_total if after_total > 0 else Decimal("0.5"),
+            no_price_after=self.no_shares / after_total if after_total > 0 else Decimal("0.5"),
         )
 
-    def apply_trade(self, outcome: Literal["yes", "no"], collateral: Decimal) -> AMMQuote:
-        """Execute trade and update pool state."""
-        quote = self.buy(outcome, collateral)
-        k = self.yes_shares * self.no_shares
+    def buy(self, outcome: Literal["yes", "no"], collateral: Decimal, min_shares_out: Decimal | None = None) -> AMMQuote:
+        """Buy shares of an outcome by depositing collateral. Pool state is updated."""
+        return self._execute_buy(outcome, collateral, min_shares_out)
 
-        if outcome == "yes":
-            self.yes_shares += collateral - quote.fee
-            self.no_shares = k / self.yes_shares if self.yes_shares > 0 else Decimal(0)
-        else:
-            self.no_shares += collateral - quote.fee
-            self.yes_shares = k / self.no_shares if self.no_shares > 0 else Decimal(0)
-
-        return quote
+    def sell(self, outcome: Literal["yes", "no"], shares: Decimal, min_collateral_out: Decimal | None = None) -> AMMQuote:
+        """Sell shares back to the pool for collateral. Pool state is updated."""
+        return self._execute_sell(outcome, shares, min_collateral_out)

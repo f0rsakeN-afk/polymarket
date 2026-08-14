@@ -56,4 +56,4 @@ class Session(Base, UUIDMixin):
     revoked = Column(Boolean, default=False, nullable=False)
 
     user = relationship("User")
-    refresh_token = relationship("RefreshToken", back_populates="current_session")
+    refresh_token = relationship("RefreshToken", back_populates="current_session", overlaps="sessions")

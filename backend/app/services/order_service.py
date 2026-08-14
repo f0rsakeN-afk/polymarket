@@ -131,10 +131,10 @@ class OrderService:
 
         try:
             r = get_redis()
-            await redis_cb.call(lambda: r.setex(
+            await redis_cb.call(lambda: r.set(
                 f"quote:{quote_id}",
-                OrderService.QUOTE_TTL,
                 json.dumps(payload),
+                ex=OrderService.QUOTE_TTL,
             ))
         except Exception:
             pass
@@ -358,7 +358,7 @@ class OrderService:
                         "available": float(wallet.balance),
                         "required": float(remaining),
                     })
-                quote = amm.apply_trade(data.outcome, remaining)
+                quote = amm.buy(data.outcome, remaining)
                 wallet.balance -= remaining
                 amm_shares = quote.shares_out
                 amm_price_val = quote.price

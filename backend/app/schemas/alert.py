@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_serializer
 
 
 class AlertCreate(BaseModel):
@@ -9,12 +11,16 @@ class AlertCreate(BaseModel):
 
 
 class AlertResponse(BaseModel):
-    id: str
-    market_id: str
+    id: str | UUID
+    market_id: str | UUID
     outcome: str | None
     condition: str
     trigger_price: float
     triggered: bool
     triggered_at: str | None
+
+    @field_serializer("id", "market_id")
+    def serialize_uuid(self, v: str | UUID) -> str:
+        return str(v)
 
     model_config = {"from_attributes": True}

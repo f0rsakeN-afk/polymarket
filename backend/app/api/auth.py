@@ -88,7 +88,7 @@ def _issue_tokens(
     return access_token, jti, refresh_token_id, token_record
 
 
-def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
+async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
     """
     Revoke all non-revoked refresh tokens for a user.
     Optionally keep one token (used by change-password to preserve current session).
@@ -97,7 +97,7 @@ def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: 
         RefreshToken.user_id == user_id,
         RefreshToken.revoked.is_(False),
     )
-    result = db.execute(query)
+    result = await db.execute(query)
     for token in result.scalars().all():
         if keep_token_hash and token.token_hash == keep_token_hash:
             continue
@@ -112,7 +112,7 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _blacklist_access_token(request: Request):
+async def _blacklist_access_token(request: Request):
     """Blacklist the access token from the request cookie if present."""
     access_token = request.cookies.get("access_token")
     if not access_token:
@@ -123,7 +123,7 @@ def _blacklist_access_token(request: Request):
         if jti:
             ttl = int(payload["exp"] - datetime.now(UTC).timestamp())
             if ttl > 0:
-                blacklist_token(jti, ttl)
+                await blacklist_token(jti, ttl)
     except Exception:
         pass
 
@@ -215,6 +215,7 @@ async def verify_email(data: VerifyEmailRequest, request: Request, db: AsyncSess
     user.is_email_verified = True
     await db.commit()
 
+    ua = request.headers.get("user-agent")
     await AuthAuditService.log_email_verified(db, data.email, str(user.id), ip, ua)
     logger.info(f"Email verified: {data.email}")
     return success_response({"id": str(user.id), "email": user.email, "verified": True})
@@ -287,7 +288,7 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
 
     token = str(uuid.uuid4())
     r = get_redis()
-    await redis_cb.call(lambda: r.setex(f"magicurl:{token}", 900, str(user.id)))
+    await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user_id), ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
@@ -316,7 +317,7 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
     if user.is_2fa_enabled:
         # Issue partial token, require 2FA completion
         partial = str(uuid.uuid4())
-        await redis_cb.call(lambda: r.setex(f"partial:{partial}", 300, user_id))
+        await redis_cb.call(lambda: r.set(f"partial:{partial}", user_id, ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
@@ -402,7 +403,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
             # Issue partial token so frontend can complete with TOTP without re-sending magic code
             r = get_redis()
             partial = str(uuid.uuid4())
-            await redis_cb.call(lambda: r.setex(f"magic_partial:{partial}", 300, f"{user.id}:{data.email}"))
+            await redis_cb.call(lambda: r.set(f"magic_partial:{partial}", f"{user.id}:{data.email}", ex=300))
             raise UnauthorizedError(f"2FA code required:{partial}")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
@@ -478,7 +479,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
 
     r = get_redis()
     await redis_cb.call(
-        lambda: r.setex(f"2fa_pending:{user.id}", settings.totp_setup_expire_seconds, "1")
+        lambda: r.set(f"2fa_pending:{user.id}", "1", ex=settings.totp_setup_expire_seconds)
     )
 
     ip = _get_client_ip(request)
@@ -684,7 +685,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
 
-    _blacklist_access_token(request)
+    await _blacklist_access_token(request)
 
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
@@ -714,7 +715,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
 
-    _blacklist_access_token(request)
+    await _blacklist_access_token(request)
     _revoke_all_refresh_tokens(db, str(user.id))
     # Also revoke all sessions for this user
     sessions_result = await db.execute(
@@ -806,9 +807,9 @@ async def change_password(
 
     user.password_hash = hash_password(data.new_password)
 
-    _blacklist_access_token(request)
+    await _blacklist_access_token(request)
     current_refresh = request.cookies.get("refresh_token")
-    _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
+    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
     await db.commit()
 
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)

@@ -35,7 +35,7 @@ from app.api.treasury import router as treasury_router
 from app.api.wallet import router as wallet_router
 from app.api.webhooks import router as webhook_router
 from app.config import settings
-from app.database import engine, replica_engine
+from app.database import _get_engine
 from app.models import Base
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
@@ -52,7 +52,7 @@ logger = logging.getLogger("polymarket")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
-    async with engine.begin() as conn:
+    async with _get_engine().begin() as conn:
         existing_tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         if not existing_tables:
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
@@ -135,6 +135,35 @@ app.include_router(ws_router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe — verifies DB and Redis connectivity."""
+    checks = {}
+    unhealthy = False
+
+    # Check DB
+    try:
+        from sqlalchemy import text
+        async with _get_engine().begin() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"error: {e}"
+        unhealthy = True
+
+    # Check Redis
+    try:
+        from app.redis import get_redis, redis_cb
+        r = get_redis()
+        await redis_cb.call(lambda: r.ping())
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {e}"
+        unhealthy = True
+
+    return {"status": "ok" if not unhealthy else "degraded", "checks": checks}
 
 
 @app.get("/")

@@ -13,9 +13,19 @@ logger = logging.getLogger("polymarket")
 
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"HTTP {exc.status_code}: {exc.detail} | path={request.url.path}")
+    # Extract message — AppException stores dict in detail, plain HTTPException stores string
+    detail = exc.detail
+    if isinstance(detail, dict):
+        message = detail.get("message", str(detail))
+        error_code = detail.get("error_code", f"ERR_{exc.status_code}")
+        details = detail.get("details", {})
+    else:
+        message = str(detail)
+        error_code = f"ERR_{exc.status_code}"
+        details = {}
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(str(exc.detail), f"ERR_{exc.status_code}"),
+        content=error_response(message, error_code, details if details else None),
     )
 
 
@@ -23,7 +33,7 @@ async def app_exception_handler(request: Request, exc: AppException):
     logger.warning(f"{exc.error_code}: {exc.message} | path={request.url.path} details={exc.details}")
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(exc.message, exc.error_code, exc.details),
+        content=error_response(exc.message, exc.error_code, exc.details if exc.details else None),
     )
 
 
@@ -33,7 +43,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         errors.append({"field": ".".join(str(loc) for loc in err["loc"]), "message": err["msg"]})
     logger.warning(f"Validation error: {errors} | path={request.url.path}")
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=error_response("Validation failed", "VALIDATION_ERROR", {"errors": errors}),
     )
 

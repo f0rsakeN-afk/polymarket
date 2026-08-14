@@ -2,10 +2,10 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError, NotFoundError
+from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.api.responses import success_response, PaginatedResponse
 from app.database import get_db
 from app.deps import get_current_user
@@ -38,19 +38,25 @@ async def list_users(
     await _get_admin_user(request, db)
 
     query = select(User)
+    count_query = select(func.count(User.id))
     if search:
+        # Escape LIKE wildcards to prevent DoS
+        safe_search = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.where(
-            (User.email.ilike(f"%{search}%")) | (User.username.ilike(f"%{search}%"))
+            (User.email.ilike(f"%{safe_search}%", escape="\\")) |
+            (User.username.ilike(f"%{safe_search}%", escape="\\"))
+        )
+        count_query = count_query.where(
+            (User.email.ilike(f"%{safe_search}%", escape="\\")) |
+            (User.username.ilike(f"%{safe_search}%", escape="\\"))
         )
     query = query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
     users = result.scalars().all()
 
-    count_result = await db.execute(select(User.id).where(
-        (User.email.ilike(f"%{search}%")) | (User.username.ilike(f"%{search}%")) if search else True
-    ))
-    total = len(count_result.scalars().all())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
 
     return PaginatedResponse(
         data=[
@@ -155,15 +161,25 @@ async def list_audit_events(
     """List auth audit events across all users (admin only)."""
     await _get_admin_user(request, db)
 
-    query = select(AuthAuditEvent)
+    base_filters = []
     if event:
-        query = query.where(AuthAuditEvent.event == event)
+        base_filters.append(AuthAuditEvent.event == event)
     if success in ("success", "failure"):
-        query = query.where(AuthAuditEvent.success == success)
+        base_filters.append(AuthAuditEvent.success == success)
     if user_id:
-        query = query.where(AuthAuditEvent.user_id == uuid.UUID(user_id))
+        try:
+            parsed_uuid = uuid.UUID(user_id)
+        except ValueError:
+            raise ValidationError(f"Invalid user_id format: {user_id}")
+        base_filters.append(AuthAuditEvent.user_id == parsed_uuid)
 
-    query = query.order_by(AuthAuditEvent.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    count_query = select(func.count(AuthAuditEvent.id)).where(*base_filters)
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    query = select(AuthAuditEvent).where(*base_filters).order_by(
+        AuthAuditEvent.created_at.desc()
+    ).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     events = result.scalars().all()
 
@@ -181,10 +197,10 @@ async def list_audit_events(
             }
             for e in events
         ],
-        total=len(events),
+        total=total,
         page=page,
         page_size=page_size,
-        has_more=len(events) == page_size,
+        has_more=(page * page_size) < total,
     )
 
 
