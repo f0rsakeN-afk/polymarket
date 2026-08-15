@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
     ConflictError,
@@ -835,11 +836,13 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("No refresh token")
 
     result = await db.execute(
-        select(RefreshToken).where(
+        select(RefreshToken)
+        .where(
             RefreshToken.token_hash == refresh_token,
             RefreshToken.revoked.is_(False),
             RefreshToken.expires_at > datetime.now(UTC),
         )
+        .options(selectinload(RefreshToken.current_session))
     )
     token_record = result.scalar_one_or_none()
     if not token_record:

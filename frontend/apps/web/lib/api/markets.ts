@@ -90,7 +90,7 @@ export function postComment(slug: string, content: string, parent_id?: string) {
 }
 
 export function getMarketFAQs(slug: string) {
-  return api.get<{ success: boolean; data: FAQ[] }>(`/api/v1/markets/${slug}/faqs/`)
+  return api.get<{ success: boolean; data: FAQ[] }>(`/api/v1/markets/${slug}/faqs`)
 }
 
 export function getPriceHistory(slug: string, params?: { interval?: string; from_date?: string; to_date?: string }) {

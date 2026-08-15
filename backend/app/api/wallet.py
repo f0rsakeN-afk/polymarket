@@ -31,9 +31,9 @@ async def get_wallet(request: Request, db: AsyncSession = Depends(get_db_replica
     if not wallet:
         raise NotFoundError("Wallet not found")
     return success_response(WalletResponse(
-        balance=float(wallet.balance),
-        locked_balance=float(wallet.locked_balance),
-        available_balance=float(wallet.balance - wallet.locked_balance),
+        balance=str(wallet.balance),
+        locked_balance=str(wallet.locked_balance),
+        available_balance=str(wallet.balance - wallet.locked_balance),
         currency=wallet.currency,
     ))
 
@@ -87,8 +87,8 @@ async def list_transactions(
             TransactionResponse(
                 id=str(tx.id),
                 type=tx.type,
-                amount=float(tx.amount),
-                balance_after=float(tx.balance_after),
+                amount=str(tx.amount),
+                balance_after=str(tx.balance_after),
                 status=tx.status,
                 created_at=tx.created_at.isoformat() if tx.created_at else None,
             )

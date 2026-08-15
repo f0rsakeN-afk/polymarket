@@ -45,8 +45,8 @@ async def list_trades(
             "market_question": question,
             "outcome": trade.outcome,
             "side": trade.side,
-            "price": float(trade.price),
-            "amount": float(trade.amount),
+            "price": str(trade.price),
+            "amount": str(trade.amount),
             "executed_at": trade.executed_at,
             "username": username,
         }
@@ -91,8 +91,8 @@ async def list_market_trades(
                 "market_question": market.question,
                 "outcome": t.outcome,
                 "side": t.side,
-                "price": float(t.price),
-                "amount": float(t.amount),
+                "price": str(t.price),
+                "amount": str(t.amount),
                 "executed_at": t.executed_at,
                 "username": username,
             }

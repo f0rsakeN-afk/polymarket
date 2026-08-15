@@ -235,8 +235,8 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
         entry = {
             "outcome_id": str(row.outcome_id),
             "outcome": outcome_names.get(str(row.outcome_id), "unknown"),
-            "price": float(row.price),
-            "size": float(row.total_size),
+            "price": str(row.price),
+            "size": str(row.total_size),
         }
         if entry["outcome"] == "yes":
             bids.append(entry)
@@ -394,7 +394,7 @@ async def get_price_history(
                 {"id": oid, "name": outcomes_map.get(oid, "Unknown"), "price": outcome_prices[oid]}
                 for oid in sorted(outcome_prices, key=lambda x: outcomes_map.get(x, ""))
             ],
-            "total_volume": total_vol,
+            "total_volume": str(total_vol),
         })
 
     return success_response(samples)
@@ -525,4 +525,4 @@ async def claim_winnings(
     await db.commit()
 
     logger.info(f"Claimed winnings: user={user.id} market={slug} payout={payout}")
-    return success_response({"claimed": float(payout)})
+    return success_response({"claimed": str(payout)})

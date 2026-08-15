@@ -53,13 +53,13 @@ async def get_referral_stats(
         "referral_code": user.referral_code or "",
         "total_referrals": total_referrals,
         "completed_referrals": completed_referrals,
-        "total_rewards_earned": total_rewards,
+        "total_rewards_earned": str(total_rewards),
         "referrals": [
             {
                 "id": str(r.id),
                 "referred_id": str(r.referred_id),
                 "status": r.status,
-                "reward_amount": float(r.reward_amount),
+                "reward_amount": str(r.reward_amount),
                 "created_at": r.created_at.isoformat(),
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
             }

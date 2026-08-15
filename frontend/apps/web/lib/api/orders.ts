@@ -1,7 +1,7 @@
 import { api } from "./client"
 import { z } from "zod"
 import { placeOrderSchema } from "@/lib/schemas/trading"
-import type { OrdersResponse, Order, QuoteResponse } from "@/hooks/api/types/order"
+import type { OrdersResponse, QuoteResponse } from "@/hooks/api/types/order"
 
 export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
 

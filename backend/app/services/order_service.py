@@ -120,12 +120,12 @@ class OrderService:
             "market_id": market_id,
             "outcome": outcome_name,
             "side": side,
-            "amount": float(amount),
-            "price_before": price_before,
-            "price_after": price_after,
-            "slippage": slippage,
-            "yes_price": float(amm.yes_shares),
-            "no_price": float(amm.no_shares),
+            "amount": str(amount),
+            "price_before": str(price_before),
+            "price_after": str(price_after),
+            "slippage": str(slippage),
+            "yes_price": str(float(amm.yes_shares)),
+            "no_price": str(float(amm.no_shares)),
             "expires_at": now + OrderService.QUOTE_TTL,
         }
 

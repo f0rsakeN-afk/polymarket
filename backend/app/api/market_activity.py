@@ -54,14 +54,14 @@ async def get_market_activity(
         yes_liquidity = no_liquidity = 0.0
 
     market_stats = {
-        "total_volume": float(market.total_volume),
-        "total_liquidity": float(market.total_liquidity),
+        "total_volume": str(market.total_volume),
+        "total_liquidity": str(market.total_liquidity),
         "num_trades": market.num_trades,
-        "yes_price": yes_price,
-        "no_price": no_price,
-        "spread": abs(yes_price - no_price),
-        "yes_liquidity": yes_liquidity,
-        "no_liquidity": no_liquidity,
+        "yes_price": str(yes_price),
+        "no_price": str(no_price),
+        "spread": str(abs(yes_price - no_price)),
+        "yes_liquidity": str(yes_liquidity),
+        "no_liquidity": str(no_liquidity),
         "status": market.status,
     }
 
@@ -86,9 +86,9 @@ async def get_market_activity(
             holders.append({
                 "user_id": str(pos.user_id),
                 "username": username,
-                "shares_held": float(pos.shares_held),
-                "average_price": float(pos.average_price),
-                "realized_pnl": float(pos.realized_pnl),
+                "shares_held": str(pos.shares_held),
+                "average_price": str(pos.average_price),
+                "realized_pnl": str(pos.realized_pnl),
             })
         if holders:
             top_holders_by_outcome[outcome.name] = holders
@@ -106,8 +106,8 @@ async def get_market_activity(
             "id": str(t.id),
             "outcome": t.outcome,
             "side": t.side,
-            "price": float(t.price),
-            "amount": float(t.amount),
+            "price": str(t.price),
+            "amount": str(t.amount),
             "executed_at": t.executed_at.isoformat(),
             "username": username,
         }

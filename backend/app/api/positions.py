@@ -75,12 +75,13 @@ async def list_positions(
         response.append(PositionResponse(
             id=str(pos.id),
             market_id=str(pos.market_id),
+            market_slug=market.slug if market else "",
             market_question=market.question if market else None,
             outcome=outcome.name.lower() if outcome else "",
-            shares_held=float(pos.shares_held),
-            average_price=float(pos.average_price),
-            realized_pnl=float(pos.realized_pnl),
-            unrealized_pnl=unrealized_pnl,
+            shares_held=str(pos.shares_held),
+            average_price=str(pos.average_price),
+            realized_pnl=str(pos.realized_pnl),
+            unrealized_pnl=str(unrealized_pnl),
         ))
 
     return success_response({"positions": response, "total": total, "page": page, "page_size": page_size, "has_more": (page * page_size) < total})

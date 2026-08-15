@@ -76,7 +76,7 @@ async function validateSession(request: NextRequest): Promise<{
   return { user: null, refreshed: false };
 }
 
-function setSecurityHeaders(response: NextResponse, request: NextRequest) {
+function setSecurityHeaders(response: NextResponse, _request: NextRequest) {
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-XSS-Protection", "1; mode=block");
