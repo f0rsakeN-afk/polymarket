@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
@@ -67,7 +68,21 @@ class NotificationService:
         body: str | None = None,
         data: dict | None = None,
     ) -> None:
-        await NotificationService.create_in_app(db, user_id, ntype, title, body, data)
+        notif = await NotificationService.create_in_app(db, user_id, ntype, title, body, data)
+
+        # Publish to WebSocket for real-time notification
+        try:
+            await redis_pubsub.publish_notification(user_id, {
+                "id": str(notif.id),
+                "type": ntype,
+                "title": title,
+                "body": body,
+                "data": data,
+                "read_at": None,
+                "created_at": notif.created_at.isoformat() if notif.created_at else None,
+            })
+        except Exception:
+            pass  # non-fatal
 
         prefs = await NotificationService.get_or_create_prefs(db, user_id)
         user_result = await db.execute(select(User).where(User.id == user_id))

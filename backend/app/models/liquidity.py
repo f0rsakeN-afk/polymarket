@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -7,6 +7,7 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class LiquidityPool(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "liquidity_pools"
+    __table_args__ = (Index("ix_liquidity_pools_market_id", "market_id"),)
 
     market_id = Column(
         UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), unique=True, nullable=False

@@ -14,8 +14,11 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
-    # CORS
-    cors_origins: str = "*"  # comma-separated list of origins
+    # Frontend (Next.js) — used for magic link URLs
+    frontend_url: str = "http://localhost:3000"
+
+    # CORS — comma-separated, must NOT contain wildcards when credentials=True
+    cors_origins: str = "http://localhost:3000"
 
     # Database
     database_url: str = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase"
@@ -27,6 +30,7 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6382/0"
     redis_max_connections: int = 100
+    celery_worker_redis_max_connections: int = 20
 
     # JWT
     jwt_secret: str = "change-me-in-production"
@@ -41,14 +45,29 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6382/1"
 
     # Rate limiting
-    rate_limit_enabled: bool = False
+    rate_limit_enabled: bool = True
+    rate_limit_per_ip: int = 60          # general API per IP per minute
+    rate_limit_per_email_ip: int = 5     # auth decisions per email+IP per minute
+    rate_limit_auth_max_attempts: int = 5  # failed attempts before progressive friction
+    rate_limit_auth_lockout_seconds: int = 900  # 15 min
 
     # Resend (email notifications)
     resend_api_key: str = ""
     notifications_from_email: str = "noreply@polymarket.example.com"
 
+    # Mailtrap SMTP (dev fallback — set smtp_host to use instead of Resend)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from_email: str = "noreply@polymarket.example.com"
+
     # Referral
     referral_reward_amount: float = 1.0
+
+    # 2FA
+    totp_encryption_key: str = "change-me-in-production"
+    totp_setup_expire_seconds: int = 900  # 15 minutes
 
     @field_validator("database_url", "database_replica_url", mode="before")
     @classmethod

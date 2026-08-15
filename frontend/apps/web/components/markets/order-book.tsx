@@ -1,34 +1,29 @@
 "use client"
 
 import { useQuery } from "@tanstack/react-query"
-import { api } from "@/lib/api/client"
+import { getOrderBook } from "@/lib/api/markets"
+import type { OrderBookEntry } from "@/lib/api/markets"
 
-interface OrderBookLevel {
-  price: number
-  depth: number
-  outcome: string
-}
-
-async function fetchOrderBook(slug: string) {
-  return api.get<{ success: boolean; data: { bids: OrderBookLevel[]; asks: OrderBookLevel[] } }>(
-    `/api/v1/markets/${slug}/orderbook`
-  )
+function n(v: string | number | null | undefined, fallback = 0): number {
+  if (v == null) return fallback
+  const parsed = Number(v)
+  return isNaN(parsed) ? fallback : parsed
 }
 
 function OrderBook({ slug }: { slug: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["orderbook", slug] as const,
-    queryFn: () => fetchOrderBook(slug),
+    queryFn: () => getOrderBook(slug),
     enabled: !!slug,
     refetchInterval: 5000,
   })
 
-  const bids = data?.data?.bids ?? []
-  const asks = data?.data?.asks ?? []
+  const bids: OrderBookEntry[] = data?.bids ?? []
+  const asks: OrderBookEntry[] = data?.asks ?? []
 
   const maxDepth = Math.max(
-    ...bids.map((b) => b.depth),
-    ...asks.map((a) => a.depth),
+    ...bids.map((b) => n(b.size)),
+    ...asks.map((a) => n(a.size)),
     1
   )
 
@@ -48,56 +43,93 @@ function OrderBook({ slug }: { slug: string }) {
     )
   }
 
+  const bestBid = n(bids[0]?.price)
+  const bestAsk = n(asks[asks.length - 1]?.price)
+  const spread =
+    bids.length > 0 && asks.length > 0
+      ? ((bestAsk - bestBid) * 100).toFixed(2)
+      : null
+
   return (
     <section aria-label="Order book" className="space-y-2">
       {/* Column headers */}
       <div className="flex items-center justify-between px-1 mb-1">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Price</span>
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Size</span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Price
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Size
+        </span>
       </div>
 
       {/* Asks (sells) — reversed so lowest ask is at bottom */}
       <div role="list" aria-label="Sell orders">
-        {[...asks].reverse().map((ask, i) => (
-          <div key={`ask-${i}`} role="listitem" className="relative h-6 overflow-hidden rounded-sm" aria-label={`Sell at $${ask.price.toFixed(3)}, size ${ask.depth.toFixed(0)}`}>
+        {[...asks]
+          .reverse()
+          .map((ask, i) => (
             <div
-              className="absolute inset-y-0 right-0 bg-red-500/20"
-              style={{ width: `${(ask.depth / maxDepth) * 100}%` }}
-              aria-hidden="true"
-            />
-            <div className="absolute inset-y-0 flex items-center justify-between px-2 text-xs">
-              <span className="text-muted-foreground font-medium">${ask.price.toFixed(3)}</span>
-              <span className="font-semibold text-red-400">{ask.depth.toFixed(0)}</span>
+              key={`ask-${i}`}
+              role="listitem"
+              className="relative h-6 overflow-hidden rounded-sm"
+              aria-label={`Sell at $${n(ask.price).toFixed(3)}, size ${n(
+                ask.size
+              ).toFixed(0)}`}
+            >
+              <div
+                className="absolute inset-y-0 right-0 bg-red-500/20"
+                style={{ width: `${(n(ask.size) / maxDepth) * 100}%` }}
+                aria-hidden="true"
+              />
+              <div className="absolute inset-y-0 flex items-center justify-between px-2 text-xs">
+                <span className="text-red-400 font-medium">
+                  ${n(ask.price).toFixed(3)}
+                </span>
+                <span className="font-semibold text-red-400">
+                  {n(ask.size).toFixed(0)}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
 
       {/* Spread indicator */}
-      <div className="flex items-center justify-center py-1" role="status" aria-label={
-        bids.length > 0 && asks.length > 0
-          ? `Spread ${((asks[asks.length - 1]!.price - bids[0]!.price) * 100).toFixed(2)}%`
-          : bids.length > 0 ? "Bid side only" : "Ask side only"
-      }>
+      <div
+        className="flex items-center justify-center py-1"
+        role="status"
+        aria-label={spread ? `Spread ${spread}%` : "No spread"}
+      >
         <span className="rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-          {bids.length > 0 && asks.length > 0
-            ? `Spread: ${((asks[asks.length - 1]!.price - bids[0]!.price) * 100).toFixed(2)}%`
-            : bids.length > 0 ? "Bid side" : "Ask side"}
+          {spread
+            ? `Spread: ${spread}%`
+            : bids.length > 0
+              ? "Bid side"
+              : "Ask side"}
         </span>
       </div>
 
       {/* Bids (buys) */}
       <div role="list" aria-label="Buy orders">
         {bids.map((bid, i) => (
-          <div key={`bid-${i}`} role="listitem" className="relative h-6 overflow-hidden rounded-sm" aria-label={`Buy at $${bid.price.toFixed(3)}, size ${bid.depth.toFixed(0)}`}>
+          <div
+            key={`bid-${i}`}
+            role="listitem"
+            className="relative h-6 overflow-hidden rounded-sm"
+            aria-label={`Buy at $${n(bid.price).toFixed(3)}, size ${n(
+              bid.size
+            ).toFixed(0)}`}
+          >
             <div
               className="absolute inset-y-0 right-0 bg-green-500/20"
-              style={{ width: `${(bid.depth / maxDepth) * 100}%` }}
+              style={{ width: `${(n(bid.size) / maxDepth) * 100}%` }}
               aria-hidden="true"
             />
             <div className="absolute inset-y-0 flex items-center justify-between px-2 text-xs">
-              <span className="text-muted-foreground font-medium">${bid.price.toFixed(3)}</span>
-              <span className="font-semibold text-green-400">{bid.depth.toFixed(0)}</span>
+              <span className="text-green-400 font-medium">
+                ${n(bid.price).toFixed(3)}
+              </span>
+              <span className="font-semibold text-green-400">
+                {n(bid.size).toFixed(0)}
+              </span>
             </div>
           </div>
         ))}

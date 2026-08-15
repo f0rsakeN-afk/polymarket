@@ -3,7 +3,7 @@
 import { useEffect, useRef, memo } from "react"
 import { MarketCard } from "./market-card"
 import { SkeletonMarketGrid } from "@/components/shared/skeletons"
-import type { MarketResponse } from "@/lib/types/api"
+import type { MarketResponse } from "@/hooks/api/types/market"
 
 interface MarketListProps {
   markets: MarketResponse[]

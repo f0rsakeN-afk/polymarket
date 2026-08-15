@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useRef } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 import { Spinner } from "@workspace/ui/components/spinner"
-import type { Trade } from "@/lib/types/api"
+import type { Trade } from "@/hooks/api/types/market"
 
 function formatTime(iso: string) {
   const d = new Date(iso)
@@ -16,7 +16,7 @@ function formatTime(iso: string) {
 }
 
 const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
-  const total = trade.total ?? trade.price * trade.amount
+  const total = Number(trade.total ?? Number(trade.price) * Number(trade.amount))
 
   return (
     <div role="listitem" className="grid grid-cols-5 sm:grid-cols-7 gap-1.5 sm:gap-2 py-2.5 px-1 text-xs items-center border-b border-border/40 last:border-0">
@@ -32,8 +32,8 @@ const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
         {trade.side}
       </span>
       <span className="capitalize font-medium truncate hidden sm:inline">{trade.outcome}</span>
-      <span className="text-right font-medium tabular-nums">{trade.amount.toFixed(0)}</span>
-      <span className="text-right text-muted-foreground tabular-nums hidden sm:inline">${trade.price.toFixed(3)}</span>
+      <span className="text-right font-medium tabular-nums">{Number(trade.amount).toFixed(0)}</span>
+      <span className="text-right text-muted-foreground tabular-nums hidden sm:inline">${Number(trade.price).toFixed(3)}</span>
       <span className="text-right font-semibold tabular-nums">${total.toFixed(2)}</span>
       <span className="text-right text-muted-foreground hidden sm:inline">{formatTime(trade.executed_at)}</span>
     </div>

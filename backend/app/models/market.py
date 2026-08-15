@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -70,6 +71,7 @@ class Outcome(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "outcomes"
     __table_args__ = (
         CheckConstraint("outcome_index >= 0"),
+        Index("ix_outcomes_market_id", "market_id"),
     )
 
     market_id = Column(UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)

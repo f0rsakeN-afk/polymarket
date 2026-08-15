@@ -91,7 +91,7 @@ export default function Footer() {
           <div className="col-span-2 sm:col-span-1">
             <Link href="/" className="flex items-center gap-2 font-bold tracking-wide mb-3">
               <PolygonIcon />
-              <span>POLYMARKET</span>
+              <span>PredictX</span>
             </Link>
             <p className="text-xs text-muted-foreground leading-relaxed max-w-xs">
               A decentralized prediction market platform for trading on the outcome of real-world events.
@@ -139,7 +139,7 @@ export default function Footer() {
         {/* Bottom bar */}
         <div className="flex flex-col items-center justify-between gap-4 border-t border-border py-6 sm:flex-row">
           <p className="text-[11px] text-muted-foreground">
-            &copy; {new Date().getFullYear()} Polymarket. All rights reserved.
+            &copy; {new Date().getFullYear()} PredictX. All rights reserved.
           </p>
           <div className="flex items-center gap-4">
             <Link href="/legal/privacy" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">

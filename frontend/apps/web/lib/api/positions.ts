@@ -1,5 +1,5 @@
 import { api } from "./client"
-import type { PositionsResponse } from "../types/api"
+import type { PositionsResponse } from "@/hooks/api/types/order"
 
 export function listPositions(params?: { page?: number; page_size?: number }) {
   const qs = new URLSearchParams()

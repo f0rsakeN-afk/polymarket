@@ -1,8 +1,11 @@
+import hashlib
+import hmac
 import json
 import logging
+import time
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,13 +18,41 @@ from app.models.wallet import Transaction, Wallet
 logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
+STRIPE_TOLERANCE = 300  # 5 minutes
 
-async def verify_stripe_signature(payload: bytes, sig: str) -> bool:
-    """Verify Stripe webhook signature."""
-    if not settings.stripe_webhook_secret:
-        return True  # Skip verification in dev
-    # In production: use stripe.Webhook.construct_event
-    return True
+
+async def verify_stripe_signature(payload: bytes, sig: str, secret: str) -> bool:
+    """Verify Stripe webhook signature using HMAC."""
+    if not secret:
+        logger.warning("Stripe webhook secret not configured — skipping verification in dev")
+        return True
+
+    try:
+        # Parse signature header: "t=timestamp,v1=signature"
+        parts = dict(p.split("=", 1) for p in sig.split(","))
+        timestamp = parts.get("t", "")
+        v1_signature = parts.get("v1", "")
+
+        if not timestamp or not v1_signature:
+            return False
+
+        # Check timestamp is within tolerance
+        if abs(time.time() - int(timestamp)) > STRIPE_TOLERANCE:
+            logger.warning(f"Stripe webhook timestamp outside tolerance: {timestamp}")
+            return False
+
+        # Compute expected signature
+        signed_payload = f"{timestamp}.{payload.decode()}"
+        expected = hmac.new(
+            secret.encode(),
+            signed_payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        return hmac.compare_digest(expected, v1_signature)
+    except Exception as e:
+        logger.error(f"Stripe signature verification error: {e}")
+        return False
 
 
 @router.post("/stripe", summary="Stripe webhook", description="Handle Stripe webhook events. Currently processes payment_intent.succeeded to credit user wallets idempotently.")
@@ -32,8 +63,8 @@ async def stripe_webhook(
 ):
     payload = await request.body()
 
-    if not await verify_stripe_signature(payload, stripe_signature or ""):
-        raise ValidationError("Invalid Stripe signature")
+    if not await verify_stripe_signature(payload, stripe_signature or "", settings.stripe_webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid Stripe signature")
 
     try:
         event = json.loads(payload)

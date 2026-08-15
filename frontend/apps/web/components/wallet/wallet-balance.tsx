@@ -1,13 +1,13 @@
 "use client"
 
 import { Spinner } from "@workspace/ui/components/spinner"
-import type { Wallet } from "@/lib/types/api"
+import type { Wallet } from "@/hooks/api/types/wallet"
 
-function formatUSD(n: number) {
+function formatUSD(n: string | number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-  }).format(n)
+  }).format(Number(n))
 }
 
 interface WalletBalanceProps {
@@ -30,12 +30,12 @@ function WalletBalance({ wallet, loading }: WalletBalanceProps) {
           <div className="flex justify-between">
             <span className="text-muted-foreground">Locked</span>
             <span className="font-medium text-muted-foreground">
-              {formatUSD(wallet.locked)}
+              {formatUSD(wallet.locked_balance)}
             </span>
           </div>
           <div className="flex justify-between border-t border-border pt-2">
             <span className="text-muted-foreground">Available</span>
-            <span className="font-bold">{formatUSD(wallet.available)}</span>
+            <span className="font-bold">{formatUSD(wallet.available_balance)}</span>
           </div>
         </div>
       ) : (

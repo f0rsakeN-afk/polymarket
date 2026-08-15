@@ -8,9 +8,10 @@ import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
 import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/use-markets"
+import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/api/use-markets"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket } from "@/hooks/use-market-socket"
+import { claimWinnings, getOrderBook } from "@/lib/api/markets"
 import { api } from "@/lib/api/client"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -22,7 +23,7 @@ import { LiveTradeTicker } from "./live-trade-ticker"
 import { SkeletonMarketDetail } from "@/components/shared/skeletons"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
-import type { MarketDetailResponse, PriceHistoryPoint, Trade } from "@/lib/types/api"
+import type { MarketDetailResponse, PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
 
 interface MarketDetailProps {
@@ -41,10 +42,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const { data: orderbookData } = useQuery({
     queryKey: ["orderbook-header", slug] as const,
-    queryFn: () => api.get<{ success: boolean; data: { bids: { price: number; depth: number }[]; asks: { price: number; depth: number }[] } }>(`/api/v1/markets/${slug}/orderbook`),
+    queryFn: () => getOrderBook(slug),
     enabled: !!slug,
     refetchInterval: 5000,
-    select: (res) => res.data,
   })
 
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
@@ -55,7 +55,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
     if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
       setRealtimeTrades((prev) => {
-        const next = [{ id: `ws-${Date.now()}`, market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: msg.price!, amount: msg.amount!, executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
+        const next = [{ id: `ws-${Date.now()}`, market_id: "", market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: String(msg.price!), amount: String(msg.amount!), executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
         return next.slice(0, 200)
       })
       return
@@ -90,6 +90,15 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         title: "Price Alert!",
         description: `${(msg as { outcome?: string }).outcome?.toUpperCase()} ${(msg as { condition?: string }).condition} $${(msg as { trigger_price?: number }).trigger_price?.toFixed(2)}`,
       })
+    }
+    if (msg.type === "orderbook:update") {
+      queryClient.invalidateQueries({ queryKey: ["orderbook-header", slug] })
+    }
+    if (msg.type === "comment:new" || msg.type === "comment:updated") {
+      queryClient.invalidateQueries({ queryKey: ["comments", slug] })
+    }
+    if (msg.type === "comment:deleted") {
+      queryClient.invalidateQueries({ queryKey: ["comments", slug] })
     }
   }, [slug, queryClient])
 
@@ -174,9 +183,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   )
 
   const stats = useMemo(() => activity ? [
-    { label: "Volume", value: `$${(activity.market_stats.total_volume / 1e6).toFixed(1)}M` },
-    { label: "Liquidity", value: `$${(activity.market_stats.total_liquidity / 1e6).toFixed(1)}M` },
-    { label: "Spread", value: `${(activity.market_stats.spread * 100).toFixed(1)}%` },
+    { label: "Volume", value: `$${(Number(activity.market_stats.total_volume) / 1e6).toFixed(1)}M` },
+    { label: "Liquidity", value: `$${(Number(activity.market_stats.total_liquidity) / 1e6).toFixed(1)}M` },
+    { label: "Spread", value: `${(Number(activity.market_stats.spread) * 100).toFixed(1)}%` },
     { label: "Trades", value: activity.market_stats.num_trades.toLocaleString() },
   ] : null, [activity])
 
@@ -271,17 +280,17 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                   <>
                     <div className="flex items-center gap-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
-                      <div className="text-lg font-bold text-green-500">${market.yes_price.toFixed(2)}</div>
+                      <div className="text-lg font-bold text-green-500">${Number(market.yes_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.bids?.[0] ? `${orderbookData.bids[0].depth.toFixed(0)} shares` : ""}
+                        {orderbookData?.bids?.[0] ? `${Number(orderbookData.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
                     <div className="flex items-center gap-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
-                      <div className="text-lg font-bold text-red-500">${market.no_price.toFixed(2)}</div>
+                      <div className="text-lg font-bold text-red-500">${Number(market.no_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.asks?.[0] ? `${orderbookData.asks[0].depth.toFixed(0)} shares` : ""}
+                        {orderbookData?.asks?.[0] ? `${Number(orderbookData.asks[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                   </>
@@ -375,7 +384,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                           {holders.slice(0, 10).map((holder, i) => (
                             <li key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/50 last:border-0">
                               <span className="text-muted-foreground font-medium">{holder.username}</span>
-                              <span className="font-semibold">{holder.shares_held.toFixed(0)} <span className="text-muted-foreground text-[10px]">shares</span></span>
+                              <span className="font-semibold">{Number(holder.shares_held).toFixed(0)} <span className="text-muted-foreground text-[10px]">shares</span></span>
                             </li>
                           ))}
                           {holders.length === 0 && (
@@ -423,22 +432,23 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           <h2 id="trade-heading" className="mb-4 text-sm font-semibold text-foreground">Place Trade</h2>
           <TradeForm
             marketId={market.id}
-            currentYesPrice={market.yes_price}
-            currentNoPrice={market.no_price}
+            currentYesPrice={Number(market.yes_price)}
+            currentNoPrice={Number(market.no_price)}
             outcomes={outcomes}
+            marketStatus={market.status}
             onSubmit={handleTrade}
           />
           <AlertDialog
             marketId={market.id}
-            currentYesPrice={market.yes_price}
-            currentNoPrice={market.no_price}
+            currentYesPrice={Number(market.yes_price)}
+            currentNoPrice={Number(market.no_price)}
           />
         </section>
 
         {/* Liquidity */}
         <section aria-labelledby="liquidity-heading" className="rounded-xl border border-border bg-card p-5">
           <h2 id="liquidity-heading" className="mb-3 text-sm font-semibold text-foreground">Liquidity</h2>
-          <AddLiquidityForm marketId={market.id} />
+          <AddLiquidityForm marketId={market.id} marketStatus={market.status} />
         </section>
 
         {/* Market Info */}
@@ -476,7 +486,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             {market.status !== "resolved" && (
               <div className="flex items-center justify-between text-xs">
                 <dt className="text-muted-foreground">Spread</dt>
-                <dd className="font-medium">{((market as MarketDetailResponse).spread * 100).toFixed(1)}%</dd>
+                <dd className="font-medium">{((Number((market as MarketDetailResponse).spread)) * 100).toFixed(1)}%</dd>
               </div>
             )}
             {isMultiOutcome && (
@@ -501,9 +511,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 >
                   <div className="text-xs font-medium leading-snug line-clamp-2 mb-1.5">{m.question}</div>
                   <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                    <span className="text-green-500 font-semibold">${m.yes_price.toFixed(2)}</span>
+                    <span className="text-green-500 font-semibold">${Number(m.yes_price).toFixed(2)}</span>
                     <span aria-hidden="true">·</span>
-                    <span>${(m.total_volume / 1000).toFixed(0)}K vol</span>
+                    <span>${(Number(m.total_volume) / 1000).toFixed(0)}K vol</span>
                   </div>
                 </a>
               ))}
@@ -524,10 +534,11 @@ const ClaimWinnings = memo(function ClaimWinnings({ slug }: { slug: string }) {
   const handleClaim = useCallback(async () => {
     setClaiming(true)
     try {
-      await api.post(`/api/v1/markets/${slug}/claim`)
+      await claimWinnings(slug)
       setClaimed(true)
       qc.invalidateQueries({ queryKey: ["wallet"] })
       qc.invalidateQueries({ queryKey: ["transactions"] })
+      qc.invalidateQueries({ queryKey: ["positions"] })
       sileo.success({ title: "Winnings claimed!" })
     } catch (e) {
       sileo.error({ title: "Claim failed", description: e instanceof Error ? e.message : "Unknown error" })

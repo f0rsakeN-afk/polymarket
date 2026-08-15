@@ -29,6 +29,25 @@ class ConnectionManager:
             self._ws_to_market[websocket] = market_id
         logger.info(f"WS connected: market={market_id}")
 
+    async def switch_market(self, websocket: WebSocket, new_market_id: str):
+        """Switch a websocket's market subscription without closing the connection."""
+        async with self._lock:
+            old_market_id = self._ws_to_market.get(websocket)
+
+            # Remove from old market
+            if old_market_id and old_market_id in self._market_subs:
+                self._market_subs[old_market_id].discard(websocket)
+                if not self._market_subs[old_market_id]:
+                    del self._market_subs[old_market_id]
+
+            # Add to new market
+            if new_market_id not in self._market_subs:
+                self._market_subs[new_market_id] = set()
+            self._market_subs[new_market_id].add(websocket)
+            self._ws_to_market[websocket] = new_market_id
+
+        logger.info(f"WS switched: market={old_market_id} -> market={new_market_id}")
+
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             market_id = self._ws_to_market.pop(websocket, None)
@@ -80,6 +99,58 @@ class ConnectionManager:
 
 # Global manager instance
 manager = ConnectionManager()
+
+
+class UserConnectionManager:
+    """Manages per-user WebSocket connections for notifications."""
+
+    def __init__(self):
+        self._user_socks: dict[str, set[WebSocket]] = {}
+        self._ws_to_user: dict[WebSocket, str] = {}
+        self._lock = _manager_lock
+
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        async with self._lock:
+            if user_id not in self._user_socks:
+                self._user_socks[user_id] = set()
+            self._user_socks[user_id].add(websocket)
+            self._ws_to_user[websocket] = user_id
+        logger.info(f"User WS connected: user={user_id}")
+
+    async def disconnect(self, websocket: WebSocket, user_id: str):
+        async with self._lock:
+            self._ws_to_user.pop(websocket, None)
+            if user_id in self._user_socks:
+                self._user_socks[user_id].discard(websocket)
+                if not self._user_socks[user_id]:
+                    del self._user_socks[user_id]
+        logger.info(f"User WS disconnected: user={user_id}")
+
+    async def broadcast_to_user(self, user_id: str, event: dict):
+        async with self._lock:
+            sockets = list(self._user_socks.get(user_id, set()))
+
+        if not sockets:
+            return
+
+        dead = []
+        for ws in sockets:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                dead.append(ws)
+
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    uid = self._ws_to_user.pop(ws, None)
+                    if uid and uid in self._user_socks:
+                        self._user_socks[uid].discard(ws)
+
+
+# Global user manager instance
+user_manager = UserConnectionManager()
 
 
 class RedisPubSub:
@@ -142,6 +213,18 @@ class RedisPubSub:
         except redis.RedisError:
             pass
 
+    async def publish_notification(self, user_id: str, notification_data: dict):
+        """Publish a notification to the user's channel."""
+        if not self._redis:
+            return
+        async def _op():
+            msg = json.dumps({**notification_data, "type": "notification"})
+            await self._redis.publish(f"user:{user_id}:notifications", msg)
+        try:
+            await redis_cb.call(_op)
+        except redis.RedisError:
+            pass
+
     async def publish_market_event(self, market_id: str, event_type: str, data: dict | None = None):
         if not self._redis:
             return
@@ -165,6 +248,39 @@ class RedisPubSub:
                 await self._pubsub.subscribe(ch)
                 self._subscribed.add(ch)
 
+    async def subscribe_user(self, user_id: str):
+        """Subscribe to user-specific notification channels."""
+        if not self._pubsub:
+            return
+        channels = [
+            f"user:{user_id}:fills",
+            f"user:{user_id}:notifications",
+        ]
+        for ch in channels:
+            if ch not in self._subscribed:
+                await self._pubsub.subscribe(ch)
+                self._subscribed.add(ch)
+
+    async def subscribe_global_trades(self):
+        """Subscribe to the global trades channel for the trade feed."""
+        if not self._pubsub:
+            return
+        if "global:trades" not in self._subscribed:
+            await self._pubsub.subscribe("global:trades")
+            self._subscribed.add("global:trades")
+
+    async def publish_global_trade(self, trade_data: dict):
+        """Publish a trade event to the global trades channel."""
+        if not self._redis:
+            return
+        async def _op():
+            msg = json.dumps({"type": "trade:new", **(trade_data or {})})
+            await self._redis.publish("global:trades", msg)
+        try:
+            await redis_cb.call(_op)
+        except redis.RedisError:
+            pass
+
     async def listen(self):
         """Listen for Redis messages and broadcast to local WebSocket clients."""
         if not self._pubsub:
@@ -178,8 +294,14 @@ class RedisPubSub:
                     channel = message["channel"].decode() if isinstance(message["channel"], bytes) else message["channel"]
                     parts = channel.split(":")
                     if len(parts) >= 2:
-                        market_id = parts[1]
-                        await manager.broadcast_to_market(market_id, data)
+                        prefix = parts[0]
+                        target = parts[1]
+                        if prefix == "market":
+                            await manager.broadcast_to_market(target, data)
+                        elif prefix == "user":
+                            await user_manager.broadcast_to_user(target, data)
+                    elif channel == "global:trades":
+                        await manager.broadcast_global(data)
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON from Redis channel {channel}: {message['data'][:100]}")
                 except Exception:

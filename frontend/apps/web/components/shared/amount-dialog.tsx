@@ -2,20 +2,20 @@
 
 import { useCallback, useState } from "react"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { sileo } from "sileo"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@workspace/ui/components/alert-dialog"
 import { Field, FieldContent, FieldError } from "@workspace/ui/components/field"
-import { object, pipe, number, minValue } from "valibot"
+import { z } from "zod"
 
-const AmountSchema = object({
-  amount: pipe(number(), minValue(0.01, "Minimum amount is $0.01")),
+const amountSchema = z.object({
+  amount: z.number().min(0.01, "Minimum amount is $0.01"),
 })
 
-type AmountInput = { amount: number }
+type AmountInput = z.infer<typeof amountSchema>
 
 interface AmountDialogProps {
   title: string
@@ -29,7 +29,7 @@ export function AmountDialog({ title, description, trigger, onConfirm }: AmountD
   const [submitting, setSubmitting] = useState(false)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<AmountInput>({
-    resolver: valibotResolver(AmountSchema),
+    resolver: zodResolver(amountSchema),
   })
 
   const handleOpenChange = useCallback((next: boolean) => {

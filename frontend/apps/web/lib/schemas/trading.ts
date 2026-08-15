@@ -1,44 +1,20 @@
-import { boolean, literal, maxValue, minValue, number, object, optional, pipe, string, union } from "valibot"
+import { z } from "zod"
 
-const sideLiteral = (v: "buy" | "sell") => pipe(literal(v))
+// ─── Place Order ──────────────────────────────────────────────────────────────
 
-export const PlaceOrderSchema = object({
-  market_id: string(),
-  outcome: optional(string(), "yes"),
-  side: optional(union([sideLiteral("buy"), sideLiteral("sell")]), "buy"),
-  order_type: optional(
-    union([literal("market"), literal("limit"), literal("fill_or_kill")]),
-    "market"
-  ),
-  amount: pipe(number(), minValue(0.01)),
-  price: optional(pipe(number(), minValue(0.001), maxValue(0.999))),
-  post_only: optional(boolean(), false),
-  expires_at: optional(string()),
-  client_order_id: optional(string()),
-  max_slippage: optional(pipe(number(), minValue(0), maxValue(1))),
-  min_shares_out: optional(pipe(number(), minValue(0))),
-  quote_id: optional(string()),
+export const placeOrderSchema = z.object({
+  market_id: z.string(),
+  outcome: z.string(),
+  side: z.enum(["buy", "sell"]),
+  order_type: z.enum(["market", "limit", "fill_or_kill"]),
+  amount: z.number().min(0.00000001),
+  price: z.number().min(0).max(1).nullable().optional(),
+  post_only: z.boolean(),
+  expires_at: z.string().optional(),
+  client_order_id: z.string().optional(),
+  max_slippage: z.number().min(0).max(1).optional(),
+  min_shares_out: z.number().min(0).optional(),
+  quote_id: z.string().optional(),
 })
 
-export const DepositSchema = object({
-  amount: pipe(number(), minValue(1)),
-})
-
-export const WithdrawSchema = object({
-  amount: pipe(number(), minValue(1)),
-})
-
-export type PlaceOrderInput = {
-  market_id: string
-  outcome: string
-  side: "buy" | "sell"
-  order_type: "market" | "limit" | "fill_or_kill"
-  amount: number
-  price?: number
-  post_only: boolean
-  expires_at?: string
-  client_order_id?: string
-  max_slippage?: number
-  min_shares_out?: number
-  quote_id?: string
-}
+export type PlaceOrderInput = z.infer<typeof placeOrderSchema>

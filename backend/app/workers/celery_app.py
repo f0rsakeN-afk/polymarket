@@ -31,7 +31,7 @@ celery_app.conf.beat_schedule = {
         "schedule": 60.0,
     },
     "check-market-resolution": {
-        "task": "app.workers.tasks.check_market_resolution",
+        "task": "app.workers.tasks.check_markets_ready_to_resolve",
         "schedule": crontab(minute="*/5"),
     },
     "check-limit-order-execution": {
@@ -41,5 +41,21 @@ celery_app.conf.beat_schedule = {
     "snapshot-price-history": {
         "task": "app.workers.tasks.snapshot_price_history",
         "schedule": 300.0,
+    },
+    "cleanup-expired-sessions": {
+        "task": "app.workers.tasks.cleanup_expired_sessions",
+        "schedule": crontab(hour=3, minute=0),  # 3am daily
+    },
+    "distribute-protocol-fees": {
+        "task": "app.workers.tasks.distribute_protocol_fees",
+        "schedule": crontab(hour=3, minute=30),  # 3:30am daily
+    },
+    "check-order-expiration": {
+        "task": "app.workers.tasks.check_order_expiration",
+        "schedule": 30.0,
+    },
+    "check-markets-ready-to-resolve": {
+        "task": "app.workers.tasks.check_markets_ready_to_resolve",
+        "schedule": 60.0,
     },
 }

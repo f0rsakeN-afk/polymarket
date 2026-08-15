@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState, memo } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@workspace/ui/components/alert-dialog"
-import { useCancelOrder } from "@/hooks/use-orders"
+import { useCancelOrder } from "@/hooks/api/use-orders"
 import { sileo } from "sileo"
-import type { Order } from "@/lib/types/api"
+import type { Order } from "@/hooks/api/types/order"
 
 interface OrderRowProps {
   order: Order
@@ -45,8 +45,8 @@ function OrderRow({ order }: OrderRowProps) {
           <span className="text-[10px]">{order.side}</span>
           <span className="text-[10px]">
             {order.status === "partial" || order.status === "pending"
-              ? `${order.remaining_amount?.toFixed(2) ?? order.amount} / ${order.amount} @ $${order.price.toFixed(2)}`
-              : `${order.amount} @ $${order.price.toFixed(2)}`}
+              ? `${Number(order.remaining_amount ?? order.amount).toFixed(2)} / ${Number(order.amount).toFixed(2)} @ $${Number(order.price).toFixed(2)}`
+              : `${Number(order.amount).toFixed(2)} @ $${Number(order.price).toFixed(2)}`}
           </span>
         </div>
       </div>
@@ -71,7 +71,7 @@ function OrderRow({ order }: OrderRowProps) {
               <AlertDialogHeader>
                 <AlertDialogTitle>Cancel Order</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Are you sure you want to cancel this order for {order.amount} @ ${order.price.toFixed(2)}?
+                  Are you sure you want to cancel this order for {Number(order.amount).toFixed(2)} @ ${Number(order.price).toFixed(2)}?
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

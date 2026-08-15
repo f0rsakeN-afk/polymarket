@@ -18,6 +18,7 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.config import settings
+from app.deps import cache_invalidate
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
@@ -130,10 +131,10 @@ class OrderService:
 
         try:
             r = get_redis()
-            await redis_cb.call(lambda: r.setex(
+            await redis_cb.call(lambda: r.set(
                 f"quote:{quote_id}",
-                OrderService.QUOTE_TTL,
                 json.dumps(payload),
+                ex=OrderService.QUOTE_TTL,
             ))
         except Exception:
             pass
@@ -256,20 +257,6 @@ class OrderService:
         price_before = amm.price(data.outcome)
         limit_price = Decimal(str(data.price)) if data.price is not None else None
 
-        if data.post_only:
-            if data.order_type in ("limit", "fill_or_kill"):
-                amm_price_f = float(price_before)
-                limit_price_f = float(limit_price) if limit_price else 0
-                if data.side == "buy":
-                    would_execute = amm_price_f <= limit_price_f
-                else:
-                    would_execute = amm_price_f >= limit_price_f
-                if would_execute:
-                    raise ValidationError(
-                        f"Post-only order would execute immediately. "
-                        f"Current price: {amm_price_f:.4f}, limit: {limit_price_f:.4f}"
-                    )
-
         matched_shares, matched_usdc, match_details = await MatchingEngine.match_order_against_book(
             db, market, outcome, data.side, amount, limit_price, str(user.id),
         )
@@ -284,10 +271,24 @@ class OrderService:
         amm_fee = Decimal(0)
         amm_slippage = Decimal(0)
         sell_proceeds_amm = Decimal(0)
-        Decimal(0)
 
         if remaining > 0:
             if data.order_type in ("limit", "fill_or_kill"):
+                # Check post_only BEFORE AMM touches remaining — post_only means don't cross the spread
+                if data.post_only and limit_price is not None:
+                    current_amm_price = float(amm.price(data.outcome))
+                    limit_price_f = float(limit_price)
+                    if data.side == "buy" and current_amm_price > limit_price_f:
+                        raise ValidationError(
+                            f"Post-only order would cross the spread. "
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                        )
+                    if data.side == "sell" and current_amm_price < limit_price_f:
+                        raise ValidationError(
+                            f"Post-only order would cross the spread. "
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                        )
+
                 amm_price_f = float(price_before)
                 limit_price_f = float(limit_price) if limit_price else 0
                 if data.side == "buy":
@@ -357,7 +358,7 @@ class OrderService:
                         "available": float(wallet.balance),
                         "required": float(remaining),
                     })
-                quote = amm.apply_trade(data.outcome, remaining)
+                quote = amm.buy(data.outcome, remaining)
                 wallet.balance -= remaining
                 amm_shares = quote.shares_out
                 amm_price_val = quote.price
@@ -502,7 +503,7 @@ class OrderService:
             )
             db.add(t)
 
-        trade_amount = -float(total_usdc_spent) if data.side == "buy" else float(total_usdc_received)
+        trade_amount = -total_usdc_spent if data.side == "buy" else total_usdc_received
         tx = Transaction(
             user_id=user.id,
             wallet_id=wallet.id,
@@ -540,7 +541,7 @@ class OrderService:
                         user_id=referral.referrer_id,
                         wallet_id=ref_wallet.id,
                         type="referral_reward",
-                        amount=float(reward),
+                        amount=reward,
                         balance_after=ref_wallet.balance,
                         reference_id=str(referral.id),
                         reference_type="referral",
@@ -552,10 +553,8 @@ class OrderService:
 
         # ── Step 9: Single commit ──
 
-        await db.commit()
-
         tx.reference_id = str(order.id)
-        await db.refresh(order)
+        await db.commit()
 
         # ── Step 10: Post-commit notifications (best-effort) ──
 
@@ -571,6 +570,16 @@ class OrderService:
                 "amount": float(total_shares),
                 "username": user.username,
             })
+            await redis_pubsub.publish_global_trade({
+                "market_id": str(market.id),
+                "outcome": data.outcome,
+                "side": data.side,
+                "price": float(amm_price_val) if amm_price_val > 0 else float(matched_usdc / matched_shares) if matched_shares > 0 else 0,
+                "amount": float(total_shares),
+                "username": user.username,
+            })
+            await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", {})
+            await cache_invalidate(f"markets:orderbook:{market.slug}")
         except Exception:
             pass
 

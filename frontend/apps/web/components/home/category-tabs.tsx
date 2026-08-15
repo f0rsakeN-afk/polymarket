@@ -2,8 +2,7 @@
 
 import { useCallback, memo } from "react"
 import { cn } from "@workspace/ui/lib/utils"
-
-const CATEGORIES = ["All", "Crypto", "Politics", "Finance", "Science", "Sports", "Other"]
+import { useMarketCategories } from "@/hooks/api/use-markets"
 
 interface CategoryTabsProps {
   tag: string
@@ -11,13 +10,14 @@ interface CategoryTabsProps {
 }
 
 function CategoryTabs({ tag, onTagChange }: CategoryTabsProps) {
+  const { data: categories = [] } = useMarketCategories()
   const handleClick = useCallback((cat: string) => {
     onTagChange(cat)
   }, [onTagChange])
 
   return (
     <div role="tablist" aria-label="Market categories" className="flex items-center gap-1 border-b border-border overflow-x-auto">
-      {CATEGORIES.map((cat) => {
+      {["All", ...(categories ?? [])].map((cat) => {
         const isSelected = tag.toLowerCase() === cat.toLowerCase()
         return (
           <button
