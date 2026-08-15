@@ -80,8 +80,8 @@ async def split(
     amount_after_fee = amount_dec - fee
     wallet.balance -= amount_dec
 
-    def update_position(outcome_obj, avg_price):
-        pos_result = db.execute(
+    async def update_position(outcome_obj, avg_price):
+        pos_result = await db.execute(
             select(Position).where(
                 Position.user_id == user.id,
                 Position.market_id == market.id,
@@ -103,8 +103,8 @@ async def split(
             )
             db.add(pos)
 
-    update_position(yes_outcome, yes_price)
-    update_position(no_outcome, no_price)
+    await update_position(yes_outcome, yes_price)
+    await update_position(no_outcome, no_price)
 
     tx = Transaction(
         user_id=user.id,
@@ -167,23 +167,23 @@ async def merge(
     yes_outcome = outcomes[0]
     no_outcome = outcomes[1]
 
-    yes_pos = db.execute(
+    yes_pos_result = await db.execute(
         select(Position).where(
             Position.user_id == user.id,
             Position.market_id == market.id,
             Position.outcome_id == yes_outcome.id,
         ).with_for_update()
     )
-    yes_pos = yes_pos.scalar_one_or_none()
+    yes_pos = yes_pos_result.scalar_one_or_none()
 
-    no_pos = db.execute(
+    no_pos_result = await db.execute(
         select(Position).where(
             Position.user_id == user.id,
             Position.market_id == market.id,
             Position.outcome_id == no_outcome.id,
         ).with_for_update()
     )
-    no_pos = no_pos.scalar_one_or_none()
+    no_pos = no_pos_result.scalar_one_or_none()
 
     if not yes_pos or yes_pos.shares_held < amount_dec:
         raise ValidationError(f"Insufficient YES shares (held: {float(yes_pos.shares_held) if yes_pos else 0}, needed: {amount})")

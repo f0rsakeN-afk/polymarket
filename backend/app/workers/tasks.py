@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.amm.engine import BinaryAMM
@@ -18,11 +18,14 @@ from app.models import (
     Outcome,
     Position,
     PriceHistory,
+    RefreshToken,
+    Session,
     Trade,
     Transaction,
     User,
     Wallet,
 )
+from app.services.liquidity_service import LiquidityService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 
@@ -309,6 +312,24 @@ def check_limit_order_execution(self):
                                 "shares": float(order_amount - remaining),
                                 "price": float(amm_price_val) if amm_price_val > 0 else float(order.price),
                             })
+                            # Also dispatch in-app notification
+                            from app.services.notification_service import (
+                                NotificationService,
+                            )
+                            await NotificationService.dispatch(
+                                db, str(order.user_id), "order_filled",
+                                f"Order filled: {order_side} {float(order_amount - remaining):.2f} shares",
+                                f"Your {order.status} order on {market.slug} has been filled.",
+                                {"order_id": str(order.id), "market_id": str(market.id), "side": order_side}
+                            )
+                            # Publish position:update for real-time UI refresh
+                            await redis_pubsub.publish_notification(str(order.user_id), {
+                                "type": "position:update",
+                                "market_id": str(market.id),
+                                "outcome": outcome.name if outcome else None,
+                                "shares": float(order_amount - remaining),
+                                "side": order_side,
+                            })
                         except Exception:
                             pass
 
@@ -431,10 +452,54 @@ def snapshot_price_history(self):
     return asyncio.run(_run())
 
 
-@shared_task(bind=True, name="app.workers.tasks.check_market_resolution")
-def check_market_resolution(self):
-    """Find markets that have closed but not yet resolved."""
-    logger.info("Running check_market_resolution")
+@shared_task(bind=True, name="app.workers.tasks.check_order_expiration")
+def check_order_expiration(self):
+    """Cancel pending orders that have passed their expiry time."""
+    logger.info("Running check_order_expiration")
+
+    async def _run():
+        async with async_session() as db:
+            now = datetime.now(UTC)
+            result = await db.execute(
+                select(Order).where(
+                    Order.status == "pending",
+                    Order.expires_at.isnot(None),
+                    Order.expires_at <= now,
+                ).with_for_update()
+            )
+            orders = result.scalars().all()
+            if not orders:
+                return "No expired pending orders"
+
+            for order in orders:
+                order.status = "cancelled"
+                order.executed_at = now
+                if order.side == "buy" and order.amount:
+                    wallet_result = await db.execute(
+                        select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
+                    )
+                    wallet = wallet_result.scalar_one_or_none()
+                    if wallet:
+                        wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                logger.info(f"Cancelled expired pending order {order.id}")
+                try:
+                    await redis_pubsub.publish_market_event(
+                        str(order.market_id), "order:cancelled",
+                        {"order_id": str(order.id), "reason": "expired"}
+                    )
+                except Exception:
+                    pass
+
+            await db.commit()
+            return f"Cancelled {len(orders)} expired pending orders"
+
+    return asyncio.run(_run())
+
+
+@shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
+def check_markets_ready_to_resolve(self):
+    """Close markets that have passed their close time but are not yet resolved."""
+    logger.info("Running check_markets_ready_to_resolve")
 
     async def _run():
         async with async_session() as db:
@@ -443,19 +508,19 @@ def check_market_resolution(self):
                 select(Market).where(
                     Market.status == "active",
                     Market.closes_at <= now,
+                    Market.winning_outcome_id.is_(None),
                 )
             )
             markets = result.scalars().all()
-
             if not markets:
-                return "No markets to auto-resolve"
+                return "No markets ready to close"
 
-            # For now, just log - auto-resolution requires oracle/admin input
             for market in markets:
-                logger.warning(f"Market {market.slug} ({market.id}) has closed but not resolved")
-                # In production: trigger resolution workflow or notify admin
+                market.status = "closed"
+                logger.warning(f"Market {market.slug} ({market.id}) closed — awaiting resolution")
 
-            return f"Found {len(markets)} markets needing resolution"
+            await db.commit()
+            return f"Closed {len(markets)} markets"
 
     return asyncio.run(_run())
 
@@ -548,6 +613,13 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 )
                 db.add(treasury_user)
                 await db.flush()
+
+            # Get or create treasury wallet
+            treasury_wallet_result = await db.execute(
+                select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+            )
+            treasury_wallet = treasury_wallet_result.scalar_one_or_none()
+            if not treasury_wallet:
                 treasury_wallet = Wallet(
                     user_id=treasury_user.id,
                     balance=Decimal(0),
@@ -555,6 +627,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     currency="USDC",
                 )
                 db.add(treasury_wallet)
+                await db.flush()
 
             # Get YES outcome for LP redemption
             yes_outcome_result = await db.execute(
@@ -698,13 +771,13 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                 )
                 if is_triggered:
                     alert.triggered = True
-                    alert.triggered_at = datetime.now(UTC).isoformat()
+                    alert.triggered_at = datetime.now(UTC)
                     triggered_count += 1
                     try:
-                        await redis_pubsub.publish_market_event(
+                        await redis_pubsub.publish_notification(
                             str(alert.user_id),
-                            "alert:triggered",
                             {
+                                "type": "alert:triggered",
                                 "alert_id": str(alert.id),
                                 "market_id": market_id,
                                 "outcome": alert.outcome or "any",
@@ -712,6 +785,20 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                                 "trigger_price": alert.trigger_price,
                                 "actual_price": price,
                             },
+                        )
+                        # Also dispatch in-app notification
+                        from app.models.market import Market
+                        from app.services.notification_service import (
+                            NotificationService,
+                        )
+                        market_result = await db.execute(select(Market).where(Market.id == market_id))
+                        market = market_result.scalar_one_or_none()
+                        market_slug = market.slug if market else market_id
+                        await NotificationService.dispatch(
+                            db, str(alert.user_id), "alert_triggered",
+                            f"Price alert triggered: {alert.outcome or 'price'} {alert.condition} ${alert.trigger_price:.2f}",
+                            f"Your alert on {market_slug} has been triggered at ${price:.2f}.",
+                            {"alert_id": str(alert.id), "market_id": market_id, "outcome": alert.outcome, "condition": alert.condition}
                         )
                     except Exception:
                         pass
@@ -723,17 +810,187 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
 
 @shared_task(bind=True, name="app.workers.tasks.send_email", max_retries=3, default_retry_delay=60)
 def send_email(self, to_email: str, subject: str, body: str):
-    """Send transactional email via Resend."""
+    """Send transactional email via Resend or Mailtrap SMTP."""
     try:
-        import resend
-        resend.api_key = settings.resend_api_key
-        resend.Emails.send({
-            "from": settings.notifications_from_email,
-            "to": [to_email],
-            "subject": subject,
-            "text": body,
-        })
-        logger.info(f"Email sent to {to_email}: {subject}")
+        if settings.smtp_host:
+            # Mailtrap / SMTP fallback
+            import smtplib
+            from email.message import EmailMessage
+            msg = EmailMessage()
+            msg["From"] = settings.smtp_from_email
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg.set_content(body)
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_pass)
+                server.send_message(msg)
+            logger.info(f"Email sent via SMTP to {to_email}: {subject}")
+        else:
+            # Resend
+            import resend
+            resend.api_key = settings.resend_api_key
+            resend.Emails.send({
+                "from": settings.notifications_from_email,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            })
+            logger.info(f"Email sent via Resend to {to_email}: {subject}")
     except Exception as exc:
         logger.error(f"Failed to send email to {to_email}: {exc}")
         raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True, name="app.workers.tasks.send_auth_email",
+    max_retries=3, default_retry_delay=30,
+)
+def send_auth_email(self, email: str, purpose: str, code: str | None = None, magic_url: str | None = None):
+    """
+    Send an auth-related email. Purpose drives content:
+    - verify    → email verification code
+    - magic     → login code OR magic URL
+    - resetpwd  → password reset code
+    """
+    if purpose == "verify":
+        subject = "Your Polymarket verification code"
+        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+    elif purpose == "magic" and magic_url:
+        subject = "Your Polymarket login link"
+        body = (
+            f"Click this link to sign in: {magic_url}\n\n"
+            f"This link expires in 15 minutes. "
+            f"If you didn't request this, you can safely ignore this email."
+        )
+    elif purpose == "magic":
+        subject = "Your Polymarket login code"
+        body = (
+            f"Your login code is: {code}\n"
+            f"This code expires in 10 minutes. "
+            f"If you didn't request this, you can safely ignore this email."
+        )
+    elif purpose == "resetpwd":
+        subject = "Your Polymarket password reset code"
+        body = (
+            f"Your password reset code is: {code}\n"
+            f"This code expires in 10 minutes. "
+            f"If you didn't request this, your account is safe."
+        )
+    else:
+        subject = "Your Polymarket code"
+        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+
+    self.delay(to_email=email, subject=subject, body=body)
+    logger.info(f"Auth email prepared for {email}, purpose={purpose}")
+
+
+@shared_task(bind=True, name="app.workers.tasks.enqueue_otp")
+def enqueue_otp(self, email: str, purpose: str):
+    """
+    Store OTP in Redis and dispatch the appropriate email via the send_email task.
+    Called by auth routes as a fire-and-forget Celery task.
+    """
+    import hashlib
+    import hmac
+    import random
+
+    def _get_secret(e: str, p: str) -> str:
+        import app.config
+        base = f"{app.config.settings.jwt_secret}:{e}:{p}"
+        return hashlib.sha256(base.encode()).hexdigest()[:32]
+
+    def _hash_code(code: str, secret: str) -> str:
+        return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
+
+    def _generate_code() -> str:
+        return str(random.randint(100000, 999999))
+
+    code = _generate_code()
+    secret = _get_secret(email, purpose)
+    key = f"otp:{purpose}:{email}"
+
+    # Store in Redis synchronously inside the task
+    import asyncio
+    async def _store():
+        from app.redis import get_redis, redis_cb
+        r = get_redis()
+        await redis_cb.call(
+            lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
+        )
+    asyncio.run(_store())
+
+    # Build email content based on purpose
+    if purpose == "verify":
+        subject = "Your Polymarket verification code"
+        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+    elif purpose == "magic":
+        subject = "Your Polymarket login code"
+        body = f"Your login code is: {code}\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email."
+    elif purpose == "resetpwd":
+        subject = "Your Polymarket password reset code"
+        body = f"Your password reset code is: {code}\nThis code expires in 10 minutes. If you didn't request this, your account is safe."
+    else:
+        subject = "Your Polymarket code"
+        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+
+    send_email.delay(to_email=email, subject=subject, body=body)
+    logger.info(f"OTP enqueued for {email}, purpose={purpose}")
+
+
+
+@shared_task(bind=True, name="app.workers.tasks.distribute_protocol_fees")
+def distribute_protocol_fees(self):
+    """Distribute accumulated protocol fees from all markets to the treasury."""
+    logger.info("Running distribute_protocol_fees")
+
+    async def _run():
+        async with async_session() as db:
+            result = await LiquidityService.distribute_protocol_fees(db)
+            logger.info(f"Protocol fees distributed: {result}")
+            return result
+
+    return asyncio.run(_run())
+
+
+@shared_task(bind=True, name="app.workers.tasks.cleanup_expired_sessions")
+def cleanup_expired_sessions(self):
+    """
+    Delete expired sessions and refresh tokens from the DB.
+    Runs daily to prevent table bloat.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    async def _run():
+        async with async_session() as db:
+            now = datetime.now(UTC)
+
+            # Delete expired refresh tokens
+            del_rt = await db.execute(
+                delete(RefreshToken).where(RefreshToken.expires_at < now)
+            )
+            rt_count = del_rt.rowcount
+
+            # Delete expired sessions
+            del_sess = await db.execute(
+                delete(Session).where(Session.expires_at < now)
+            )
+            sess_count = del_sess.rowcount
+
+            # Also delete revoked sessions older than 30 days
+            del_old = await db.execute(
+                delete(Session).where(
+                    Session.revoked.is_(True),
+                    Session.created_at < datetime.now(UTC) - timedelta(days=30),
+                )
+            )
+            old_count = del_old.rowcount
+
+            await db.commit()
+            return {
+                "refresh_tokens_expired": rt_count,
+                "sessions_expired": sess_count,
+                "sessions_revoked_old": old_count,
+            }
+
+    return asyncio.run(_run())

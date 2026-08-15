@@ -47,10 +47,10 @@ class LiquidityService:
 
         available = wallet.balance - wallet.locked_balance
         if amount > available:
-            raise ValidationError({
-                "available": float(available),
-                "requested": float(amount),
-            })
+            raise ValidationError(
+                f"Insufficient balance: available={float(available)}, requested={float(amount)}",
+                details={"available": float(available), "requested": float(amount)},
+            )
 
         if float(pool.lp_token_supply) > 0:
             pool_total = pool.yes_shares + pool.no_shares
@@ -80,6 +80,7 @@ class LiquidityService:
             db.add(lp_share)
 
         pool.lp_token_supply += lp_tokens_minted
+        market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount
         wallet.balance -= amount
 
         tx = Transaction(
@@ -142,6 +143,7 @@ class LiquidityService:
 
         pool.yes_shares -= yes_redeemed
         pool.no_shares -= no_redeemed
+        market.total_liquidity = max(Decimal(0), (market.total_liquidity or Decimal(0)) - total_redeemed)
         pool.lp_token_supply -= lp_tokens
 
         lp_share.lp_tokens -= lp_tokens
@@ -169,3 +171,71 @@ class LiquidityService:
             "total_redeemed": float(total_redeemed),
             "wallet_balance": float(wallet.balance),
         }
+
+    @staticmethod
+    async def distribute_protocol_fees(db: AsyncSession) -> dict:
+        """Withdraw all accumulated protocol fees to the treasury and reset pool.protocol_fees to 0."""
+        result = await db.execute(
+            select(LiquidityPool, Market).join(Market, LiquidityPool.market_id == Market.id)
+            .where(LiquidityPool.protocol_fees > 0)
+            .with_for_update()
+        )
+        pools = result.all()
+        if not pools:
+            return {"markets": [], "total_distributed": 0.0}
+
+        # Get or create system treasury user
+        treasury_result = await db.execute(select(User).where(User.is_system.is_(True)).limit(1))
+        treasury_user = treasury_result.scalar_one_or_none()
+        if not treasury_user:
+            treasury_user = User(
+                email="treasury@system",
+                username="treasury",
+                password_hash="",
+                is_system=True,
+                is_active=True,
+            )
+            db.add(treasury_user)
+            await db.flush()
+            treasury_wallet = Wallet(
+                user_id=treasury_user.id,
+                balance=Decimal(0),
+                locked_balance=Decimal(0),
+                currency="USDC",
+            )
+            db.add(treasury_wallet)
+        else:
+            treasury_wallet_result = await db.execute(
+                select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+            )
+            treasury_wallet = treasury_wallet_result.scalar_one_or_none()
+
+        distributed = []
+        total = Decimal(0)
+        for pool, market in pools:
+            if float(pool.protocol_fees) <= 0:
+                continue
+            amount = pool.protocol_fees
+            treasury_wallet.balance += amount
+            pool.protocol_fees = Decimal(0)
+            total += amount
+            distributed.append({
+                "market_id": str(market.id),
+                "market_slug": market.slug,
+                "amount": float(amount),
+            })
+            tx = Transaction(
+                user_id=treasury_user.id,
+                wallet_id=treasury_wallet.id,
+                type="protocol_fee",
+                amount=float(amount),
+                balance_after=treasury_wallet.balance,
+                reference_id=str(market.id),
+                reference_type="protocol_fee",
+                status="completed",
+            )
+            db.add(tx)
+            logger.info(f"Distributed protocol fees: market={market.slug} amount={float(amount)}")
+
+        await db.commit()
+        return {"markets": distributed, "total_distributed": float(total)}

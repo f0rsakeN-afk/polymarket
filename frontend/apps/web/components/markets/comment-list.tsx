@@ -1,8 +1,10 @@
 "use client"
 
 import { useCallback, memo, useState } from "react"
+import Link from "next/link"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -12,15 +14,14 @@ import {
   FieldError,
 } from "@workspace/ui/components/field"
 import { cn } from "@workspace/ui/lib/utils"
-import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/use-markets"
+import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/api/use-comments"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
-import { object, pipe, string, minLength, maxLength } from "valibot"
 import { getMarketCommentReplies } from "@/lib/api/markets"
-import type { Comment } from "@/lib/types/api"
+import type { Comment } from "@/hooks/api/types/comment"
 
-const CommentSchema = object({
-  content: pipe(string(), minLength(1, "Comment cannot be empty"), maxLength(2000, "Max 2000 characters")),
+const commentSchema = z.object({
+  content: z.string().min(1, "Comment cannot be empty").max(2000, "Max 2000 characters"),
 })
 
 type CommentInput = { content: string }
@@ -59,8 +60,11 @@ const CommentRow = memo(function CommentRow({
     try {
       const res = await getMarketCommentReplies(slug, comment.id)
       setReplies(res.data.replies)
-    } catch { /* ignore */ }
-    setLoadingReplies(false)
+    } catch {
+      sileo.error({ title: "Failed to load replies" })
+    } finally {
+      setLoadingReplies(false)
+    }
   }, [slug, comment.id])
 
   const toggleReplies = useCallback(async () => {
@@ -76,7 +80,10 @@ const CommentRow = memo(function CommentRow({
       setShowReplyForm(false)
       await loadReplies()
       setShowReplies(true)
-    } catch { /* ignore */ }
+      sileo.success({ title: "Reply posted" })
+    } catch {
+      sileo.error({ title: "Failed to post reply" })
+    }
   }, [comment.id, postReply, loadReplies])
 
   const handleEdit = useCallback(async () => {
@@ -84,13 +91,19 @@ const CommentRow = memo(function CommentRow({
     try {
       await editComment({ commentId: comment.id, content: editValue.trim() })
       setEditing(false)
-    } catch { /* ignore */ }
+      sileo.success({ title: "Comment updated" })
+    } catch {
+      sileo.error({ title: "Failed to update comment" })
+    }
   }, [comment.id, editValue, editComment])
 
   const handleDelete = useCallback(async () => {
     try {
       await removeComment({ commentId: comment.id })
-    } catch { /* ignore */ }
+      sileo.success({ title: "Comment deleted" })
+    } catch {
+      sileo.error({ title: "Failed to delete comment" })
+    }
   }, [comment.id, removeComment])
 
   if (comment.is_deleted) return null
@@ -215,10 +228,11 @@ function ReplyForm({ onReply, isPending, onCancel }: {
 }
 
 function CommentForm({ slug }: { slug: string }) {
+  const { data: currentUser } = useCurrentUser()
   const { mutateAsync: postComment, isPending } = usePostComment(slug)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<CommentInput>({
-    resolver: valibotResolver(CommentSchema),
+    resolver: zodResolver(commentSchema),
   })
 
   const onSubmit = useCallback(async (data: CommentInput) => {
@@ -230,6 +244,14 @@ function CommentForm({ slug }: { slug: string }) {
       sileo.error({ title: "Failed to post", description: e instanceof Error ? e.message : "Unknown error" })
     }
   }, [postComment, reset])
+
+  if (!currentUser) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        <Link href="/login" className="underline underline-offset-2 hover:text-foreground">Sign in</Link> to comment
+      </p>
+    )
+  }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2" aria-label="Post a comment">

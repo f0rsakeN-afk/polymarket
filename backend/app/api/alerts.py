@@ -15,7 +15,7 @@ logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
-@router.post("/", response_model=AlertResponse, summary="Create a price alert")
+@router.post("/", summary="Create a price alert")
 async def create_alert(data: AlertCreate, request: Request, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
 
@@ -38,7 +38,7 @@ async def create_alert(data: AlertCreate, request: Request, db: AsyncSession = D
     return success_response(AlertResponse.model_validate(alert))
 
 
-@router.get("/", response_model=list[AlertResponse], summary="List active alerts")
+@router.get("/", summary="List active alerts")
 async def list_alerts(request: Request, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
 

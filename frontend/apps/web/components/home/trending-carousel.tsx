@@ -2,8 +2,8 @@
 
 import { useCallback } from "react"
 import TrendingCarouselItem from "./trending-carousel-item"
-import { useCarouselScroll } from "./hooks"
-import type { MarketResponse } from "@/lib/types/api"
+import { useCarouselScroll } from "@/hooks/use-carousel-scroll"
+import type { MarketResponse } from "@/hooks/api/types/market"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 
 interface TrendingCarouselProps {

@@ -10,7 +10,6 @@ from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
 from app.models.trade import Trade
-from app.models.user import User
 from app.models.wallet import Wallet
 
 logger = logging.getLogger("polymarket")
@@ -72,32 +71,29 @@ class MatchingEngine:
         match_shares: Decimal,
         match_price: Decimal,
     ) -> dict:
-        await db.get(User, maker.user_id)
-        maker_wallet = await db.execute(
-            select(Wallet).where(Wallet.user_id == maker.user_id).with_for_update()
-        )
-        maker_wallet = maker_wallet.scalar_one_or_none()
-
         outcome = await db.get(Outcome, maker.outcome_id)
         outcome_name = outcome.name.lower() if outcome else "unknown"
 
         usdc_value = match_shares * match_price
         fee = usdc_value * Decimal("0.01")
 
-        if maker.side == "buy":
-            str(maker.user_id)
-            buyer_wallet = maker_wallet
-            seller_wallet = await db.execute(
-                select(Wallet).where(Wallet.user_id == taker_user_id).with_for_update()
+        # Always lock wallets in deterministic order by user_id to prevent deadlocks
+        user_ids = sorted([maker.user_id, taker_user_id], key=str)
+        wallet_map = {}
+        for uid in user_ids:
+            w_result = await db.execute(
+                select(Wallet).where(Wallet.user_id == uid).with_for_update()
             )
-            seller_wallet = seller_wallet.scalar_one_or_none()
+            wallet_map[uid] = w_result.scalar_one_or_none()
+
+        maker_wallet = wallet_map[maker.user_id]
+        maker_side = maker.side
+        if maker_side == "buy":
+            buyer_wallet = wallet_map[maker.user_id]
+            seller_wallet = wallet_map[taker_user_id]
         else:
-            str(maker.user_id)
-            seller_wallet = maker_wallet
-            buyer_wallet = await db.execute(
-                select(Wallet).where(Wallet.user_id == taker_user_id).with_for_update()
-            )
-            buyer_wallet = buyer_wallet.scalar_one_or_none()
+            seller_wallet = wallet_map[maker.user_id]
+            buyer_wallet = wallet_map[taker_user_id]
 
         if buyer_wallet:
             buyer_wallet.balance -= usdc_value

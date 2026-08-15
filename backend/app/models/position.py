@@ -11,7 +11,7 @@ class Position(Base, UUIDMixin, TimestampMixin):
         UniqueConstraint("user_id", "market_id", "outcome_id"),
         Index("ix_positions_user_id", "user_id"),
         Index("ix_positions_created_at", "created_at"),
-        Index("ix_positions_user_market", "user_id", "market_id"),
+        Index("ix_positions_user_market_outcome", "user_id", "market_id", "outcome_id"),
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

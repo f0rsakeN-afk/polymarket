@@ -4,17 +4,17 @@ import type {
   MarketDetailResponse,
   TradesResponse,
   MarketActivity,
-  CommentsResponse,
-  Comment,
   FAQ,
   MarketResponse,
   PriceHistoryPoint,
-} from "../types/api"
+} from "@/hooks/api/types/market"
+import type { Comment, CommentsResponse } from "@/hooks/api/types/comment"
 
 export function listMarkets(params?: {
   q?: string
   category?: string
   status?: string
+  sort?: string
   page?: number
   page_size?: number
 }) {
@@ -22,6 +22,7 @@ export function listMarkets(params?: {
   if (params?.q) qs.set("q", params.q)
   if (params?.category) qs.set("category", params.category)
   if (params?.status) qs.set("status", params.status)
+  if (params?.sort) qs.set("sort", params.sort)
   if (params?.page) qs.set("page", String(params.page))
   if (params?.page_size) qs.set("page_size", String(params.page_size))
   const query = qs.toString()
@@ -116,6 +117,22 @@ export function resolveMarket(slug: string, winning_outcome_id: string) {
   )
 }
 
+export function createMarket(data: {
+  question: string
+  description?: string
+  category?: string
+  slug: string
+  closes_at: string
+  initial_liquidity?: number
+  initial_probability?: number
+  outcomes_create?: { name: string; outcome_index: number }[]
+}) {
+  return api.post<{ success: boolean; data: { slug: string; id: string } }>(
+    "/api/v1/markets/",
+    data
+  )
+}
+
 export function getGlobalTrades(params?: {
   page?: number
   page_size?: number
@@ -127,4 +144,30 @@ export function getGlobalTrades(params?: {
   if (params?.market_slug) qs.set("market_slug", params.market_slug)
   const query = qs.toString()
   return api.get<TradesResponse>(`/api/v1/trades${query ? `?${query}` : ""}`)
+}
+
+export interface OrderBookEntry {
+  outcome_id: string
+  outcome: string
+  price: string
+  size: string
+}
+
+export interface OrderBook {
+  bids: OrderBookEntry[]
+  asks: OrderBookEntry[]
+}
+
+export function getOrderBook(slug: string) {
+  return api.get<OrderBook>(`/api/v1/markets/${slug}/orderbook`)
+}
+
+export interface ClaimResponse {
+  claimed: string
+}
+
+export function claimWinnings(slug: string) {
+  return api.post<{ success: boolean; data: ClaimResponse }>(
+    `/api/v1/markets/${slug}/claim`
+  )
 }

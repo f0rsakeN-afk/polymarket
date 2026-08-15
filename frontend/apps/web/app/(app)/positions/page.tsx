@@ -1,0 +1,7 @@
+import { PositionsPageClient } from "./PositionsPageClient"
+
+export const metadata = {
+  robots: { index: false, follow: false },
+}
+
+export default PositionsPageClient

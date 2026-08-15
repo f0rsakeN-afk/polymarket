@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react"
 import { useForm } from "react-hook-form"
-import { valibotResolver } from "@hookform/resolvers/valibot"
-import { object, pipe, number, minValue, maxValue, union, literal } from "valibot"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -15,27 +15,30 @@ import {
   DialogTrigger,
 } from "@workspace/ui/components/dialog"
 import { cn } from "@workspace/ui/lib/utils"
-import { useCreateAlert } from "@/hooks/use-alerts"
+import { useCreateAlert } from "@/hooks/api/use-alerts"
+import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
+import Link from "next/link"
 
-const AlertSchema = object({
-  outcome: union([literal("yes"), literal("no")]),
-  condition: union([literal("above"), literal("below")]),
-  trigger_price: pipe(number(), minValue(0.01, "Min 0.01"), maxValue(0.99, "Max 0.99")),
+const alertSchema = z.object({
+  outcome: z.enum(["yes", "no"]),
+  condition: z.enum(["above", "below"]),
+  trigger_price: z.number().min(0.01, "Min 0.01").max(0.99, "Max 0.99"),
 })
 
-type AlertInput = { outcome: "yes" | "no"; condition: "above" | "below"; trigger_price: number }
+type AlertInput = z.infer<typeof alertSchema>
 
 function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
   marketId: string
   currentYesPrice: number
   currentNoPrice: number
 }) {
+  const { data: currentUser } = useCurrentUser()
   const [open, setOpen] = useState(false)
   const { mutateAsync: createAlert, isPending } = useCreateAlert()
 
   const { register, handleSubmit, setValue, watch, formState: { errors }, reset } = useForm<AlertInput>({
-    resolver: valibotResolver(AlertSchema),
+    resolver: zodResolver(alertSchema),
     defaultValues: { outcome: "yes", condition: "above", trigger_price: currentYesPrice },
   })
 
@@ -59,13 +62,25 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger>
         <Button variant="outline" size="sm" className="w-full mt-3">
-          Create Price Alert
+          {currentUser ? "Create Price Alert" : "Sign in for Price Alerts"}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[380px]">
         <DialogHeader>
           <DialogTitle className="text-sm">Create Price Alert</DialogTitle>
         </DialogHeader>
+
+        {!currentUser ? (
+          <div className="py-4 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">Sign in to create price alerts</p>
+            <Link
+              href="/login"
+              className="block w-full rounded-md border border-primary bg-primary px-4 py-2 text-sm font-medium text-center text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Sign In
+            </Link>
+          </div>
+        ) : (
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Outcome */}
@@ -152,6 +167,7 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
             {isPending ? <Spinner className="size-4" /> : "Create Alert"}
           </Button>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   )

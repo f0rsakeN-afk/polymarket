@@ -1,5 +1,13 @@
 import { api } from "./client"
-import type { OrdersResponse, Order, QuoteResponse } from "../types/api"
+import { z } from "zod"
+import { placeOrderSchema } from "@/lib/schemas/trading"
+import type { OrdersResponse, Order, QuoteResponse } from "@/hooks/api/types/order"
+
+export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
+
+export function parseOrder(data: unknown): PlaceOrderPayload {
+  return placeOrderSchema.parse(data)
+}
 
 export function listOrders(params?: {
   page?: number
@@ -24,27 +32,50 @@ export function listOrders(params?: {
   return api.get<OrdersResponse>(`/api/v1/orders/${query ? `?${query}` : ""}`)
 }
 
-export function getOrder(orderId: string) {
-  return api.get<Order>(`/api/v1/orders/${orderId}`)
+export interface PlaceOrderResponse {
+  order_id: string
+  status: string
+  side: string
+  outcome: string
+  shares: string
+  price: string
+  price_before: string
+  price_after: string
+  yes_price_after: string
+  no_price_after: string
+  slippage: string
+  fee: string
+  wallet_balance: string
+  duplicate?: boolean
 }
 
-export interface PlaceOrderPayload {
+export interface SingleOrderResponse {
+  id: string
   market_id: string
+  market_slug: string
   outcome: string
-  side: "buy" | "sell"
-  order_type?: "market" | "limit" | "fill_or_kill"
-  amount: number
-  price?: number
-  expires_at?: string
-  post_only?: boolean
-  client_order_id?: string
-  max_slippage?: number
-  min_shares_out?: number
-  quote_id?: string
+  side: string
+  order_type: string
+  amount: string
+  remaining_amount: string
+  price: string
+  status: string
+  shares_bought: string | null
+  shares_sold: string | null
+  fees_paid: string | null
+  created_at: string
+  executed_at: string | null
+}
+
+export function getOrder(orderId: string) {
+  return api.get<{ success: boolean; data: SingleOrderResponse }>(`/api/v1/orders/${orderId}`)
 }
 
 export function placeOrder(order: PlaceOrderPayload) {
-  return api.post<Order>("/api/v1/orders/", order)
+  return api.post<{ success: boolean; data: PlaceOrderResponse }>(
+    "/api/v1/orders/",
+    placeOrderSchema.parse(order)
+  )
 }
 
 export function cancelOrder(orderId: string) {

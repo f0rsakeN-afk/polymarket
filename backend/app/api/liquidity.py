@@ -5,12 +5,12 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
+from app.schemas.liquidity import AddLiquidityRequest, RemoveLiquidityRequest
 from app.services.liquidity_service import LiquidityService
 
 logger = logging.getLogger("polymarket")
@@ -20,28 +20,24 @@ router = APIRouter(prefix="/markets", tags=["liquidity"])
 @router.post("/{market_id}/liquidity")
 async def add_liquidity(
     market_id: str,
-    amount: float,
+    data: AddLiquidityRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    if amount <= 0:
-        raise ValidationError("Amount must be positive")
-    result = await LiquidityService.add_liquidity(db, user, market_id, Decimal(str(amount)))
+    result = await LiquidityService.add_liquidity(db, user, market_id, Decimal(str(data.amount)))
     return success_response(result)
 
 
 @router.delete("/{market_id}/liquidity")
 async def remove_liquidity(
     market_id: str,
-    lp_tokens: float,
+    data: RemoveLiquidityRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    if lp_tokens <= 0:
-        raise ValidationError("LP tokens must be positive")
-    result = await LiquidityService.remove_liquidity(db, user, market_id, Decimal(str(lp_tokens)))
+    result = await LiquidityService.remove_liquidity(db, user, market_id, Decimal(str(data.lp_tokens)))
     return success_response(result)
 
 
