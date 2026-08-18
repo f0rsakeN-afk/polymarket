@@ -229,5 +229,5 @@ async def test_distribute_protocol_fees_empty(client: AsyncClient, admin_user):
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
-    assert data["data"]["total_distributed"] == 0.0
+    assert data["data"]["total_distributed"] == "0.0"
     assert data["data"]["markets"] == []

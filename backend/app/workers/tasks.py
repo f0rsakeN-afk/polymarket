@@ -7,6 +7,31 @@ from celery import shared_task
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+
+def celery_run(coro):
+    """
+    Run a coroutine from a Celery thread.
+
+    asyncio.run() creates and closes its own event loop, which breaks if called
+    from a thread that already has a loop — or if the same thread is reused by
+    Celery and something else already created a loop.
+
+    This reuses or creates the thread-local loop without closing it.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        _created_loop = True
+    else:
+        _created_loop = False
+
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        if _created_loop:
+            loop.close()
+
 from app.amm.engine import BinaryAMM
 from app.config import settings
 from app.models import (
@@ -35,9 +60,9 @@ engine = create_async_engine(settings.database_url, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def get_session():
-    async with async_session() as session:
-        yield session
+def get_session():
+    """Yield a fresh async session. Call inside celery_run(coro_with_db())."""
+    return async_session()
 
 
 @shared_task(bind=True, name="app.workers.tasks.expire_stale_orders")
@@ -46,7 +71,7 @@ def expire_stale_orders(self):
     logger.info("Running expire_stale_orders")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             now = datetime.now(UTC)
             result = await db.execute(
                 select(Order).where(
@@ -86,7 +111,7 @@ def expire_stale_orders(self):
 
             return f"Expired {len(expired_ids)} orders"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_limit_order_execution")
@@ -95,7 +120,7 @@ def check_limit_order_execution(self):
     logger.info("Running check_limit_order_execution")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             now = datetime.now(UTC)
             result = await db.execute(
                 select(Order).where(
@@ -186,7 +211,7 @@ def check_limit_order_execution(self):
                     if order_side == "buy":
                         if wallet.balance < remaining:
                             continue
-                        quote = amm.apply_trade(outcome.name.lower(), remaining)
+                        quote = amm.buy(outcome.name.lower(), remaining)
                         wallet.balance -= remaining
                         amm_shares = quote.shares_out
                         amm_price_val = quote.price
@@ -337,7 +362,7 @@ def check_limit_order_execution(self):
 
             return f"Executed {executed}/{len(orders)} limit orders"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.sync_amm_prices")
@@ -349,7 +374,7 @@ def sync_amm_prices(self):
         from app.models import LiquidityPool, Market
         from app.redis import get_redis
 
-        async with async_session() as db:
+        async with get_session() as db:
             result = await db.execute(
                 select(Market, LiquidityPool).join(
                     LiquidityPool, Market.id == LiquidityPool.market_id
@@ -360,14 +385,14 @@ def sync_amm_prices(self):
             if not rows:
                 return "No active markets"
 
-            r = get_redis()
+            r = await get_redis()
             pipe = r.pipeline()
 
             for market, pool in rows:
                 total = float(pool.yes_shares) + float(pool.no_shares)
                 if total > 0:
-                    yes_price = float(pool.no_shares) / total
-                    no_price = float(pool.yes_shares) / total
+                    yes_price = float(pool.yes_shares) / total
+                    no_price = float(pool.no_shares) / total
                 else:
                     yes_price, no_price = 0.5, 0.5
 
@@ -382,7 +407,7 @@ def sync_amm_prices(self):
             await pipe.execute()
             return f"Synced prices for {len(rows)} markets"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.snapshot_price_history")
@@ -391,7 +416,7 @@ def snapshot_price_history(self):
     logger.info("Running snapshot_price_history")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             result = await db.execute(
                 select(Market, LiquidityPool).join(
                     LiquidityPool, Market.id == LiquidityPool.market_id
@@ -449,7 +474,7 @@ def snapshot_price_history(self):
             await db.commit()
             return f"Snapshotted {len(snapshots)} price records for {len(rows)} markets"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_order_expiration")
@@ -458,7 +483,7 @@ def check_order_expiration(self):
     logger.info("Running check_order_expiration")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             now = datetime.now(UTC)
             result = await db.execute(
                 select(Order).where(
@@ -493,7 +518,7 @@ def check_order_expiration(self):
             await db.commit()
             return f"Cancelled {len(orders)} expired pending orders"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
@@ -502,7 +527,7 @@ def check_markets_ready_to_resolve(self):
     logger.info("Running check_markets_ready_to_resolve")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             now = datetime.now(UTC)
             result = await db.execute(
                 select(Market).where(
@@ -522,7 +547,7 @@ def check_markets_ready_to_resolve(self):
             await db.commit()
             return f"Closed {len(markets)} markets"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.process_stripe_deposit")
@@ -531,7 +556,7 @@ def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cent
     logger.info(f"Processing Stripe deposit: PI={payment_intent_id} user={user_id} amount={amount_cents}")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             # Idempotency check
             existing = await db.execute(
                 select(Transaction).where(
@@ -564,7 +589,7 @@ def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cent
             await db.commit()
             return f"Credited {amount} to user {user_id}"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(
@@ -582,7 +607,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
     logger.info(f"Running resolve_market: market={market_id} outcome={winning_outcome_id}")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             # Lock market row to prevent concurrent resolution
             market_result = await db.execute(
                 select(Market).where(Market.id == market_id).with_for_update()
@@ -683,28 +708,21 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     winners_credited += 1
 
             # Extract protocol fees to treasury before LP redemption
-            treasury_wallet = None
             if pool and float(pool.protocol_fees) > 0:
-                treasury_result = await db.execute(
-                    select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+                treasury_amount = pool.protocol_fees
+                treasury_wallet.balance += treasury_amount
+                pool.protocol_fees = Decimal(0)
+                treasury_tx = Transaction(
+                    user_id=treasury_user.id,
+                    wallet_id=treasury_wallet.id,
+                    type="protocol_fee",
+                    amount=float(treasury_amount),
+                    balance_after=treasury_wallet.balance,
+                    reference_id=str(market.id),
+                    reference_type="protocol_fee",
+                    status="completed",
                 )
-                treasury_wallet = treasury_result.scalar_one_or_none()
-
-                if treasury_wallet:
-                    treasury_amount = pool.protocol_fees
-                    treasury_wallet.balance += treasury_amount
-                    pool.protocol_fees = Decimal(0)
-                    treasury_tx = Transaction(
-                        user_id=treasury_user.id,
-                        wallet_id=treasury_wallet.id,
-                        type="protocol_fee",
-                        amount=float(treasury_amount),
-                        balance_after=treasury_wallet.balance,
-                        reference_id=str(market.id),
-                        reference_type="protocol_fee",
-                        status="completed",
-                    )
-                    db.add(treasury_tx)
+                db.add(treasury_tx)
 
             # Settle LP shares
                 lp_result = await db.execute(
@@ -739,10 +757,11 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     )
                     db.add(tx)
 
+            market.status = "resolved"
             await db.commit()
             return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_price_alerts")
@@ -751,7 +770,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
     logger.info(f"Running check_price_alerts: market={market_id} yes={yes_price:.4f} no={no_price:.4f}")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             result = await db.execute(
                 select(Alert).where(
                     Alert.market_id == market_id,
@@ -805,7 +824,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
             await db.commit()
             return f"Checked {len(alerts)} alerts, {triggered_count} triggered"
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.send_email", max_retries=3, default_retry_delay=60)
@@ -881,7 +900,7 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
         subject = "Your Polymarket code"
         body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
-    self.delay(to_email=email, subject=subject, body=body)
+    send_email.delay(to_email=email, subject=subject, body=body)
     logger.info(f"Auth email prepared for {email}, purpose={purpose}")
 
 
@@ -914,11 +933,11 @@ def enqueue_otp(self, email: str, purpose: str):
     import asyncio
     async def _store():
         from app.redis import get_redis, redis_cb
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(
             lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
         )
-    asyncio.run(_store())
+    celery_run(_store())
 
     # Build email content based on purpose
     if purpose == "verify":
@@ -945,12 +964,12 @@ def distribute_protocol_fees(self):
     logger.info("Running distribute_protocol_fees")
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             result = await LiquidityService.distribute_protocol_fees(db)
             logger.info(f"Protocol fees distributed: {result}")
             return result
 
-    return asyncio.run(_run())
+    return celery_run(_run())
 
 
 @shared_task(bind=True, name="app.workers.tasks.cleanup_expired_sessions")
@@ -962,7 +981,7 @@ def cleanup_expired_sessions(self):
     from datetime import UTC, datetime, timedelta
 
     async def _run():
-        async with async_session() as db:
+        async with get_session() as db:
             now = datetime.now(UTC)
 
             # Delete expired refresh tokens
@@ -993,4 +1012,4 @@ def cleanup_expired_sessions(self):
                 "sessions_revoked_old": old_count,
             }
 
-    return asyncio.run(_run())
+    return celery_run(_run())

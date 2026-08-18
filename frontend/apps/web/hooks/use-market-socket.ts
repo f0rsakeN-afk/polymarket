@@ -20,12 +20,21 @@ export function useMarketSocket({ marketId, onMessage, enabled = true }: UseMark
   const enabledRef = useRef(enabled)
   const marketIdRef = useRef(marketId)
   const mountedRef = useRef(true)
+  const connectRef = useRef<() => void>(() => {})
 
-  onMessageRef.current = onMessage
-  enabledRef.current = enabled
-  marketIdRef.current = marketId
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
 
-  const connect = useCallback(() => {
+  useEffect(() => {
+    enabledRef.current = enabled
+  }, [enabled])
+
+  useEffect(() => {
+    marketIdRef.current = marketId
+  }, [marketId])
+
+  const connect: () => void = useCallback(() => {
     if (!enabledRef.current || !marketIdRef.current) return
 
     setStatus("connecting")
@@ -54,7 +63,7 @@ export function useMarketSocket({ marketId, onMessage, enabled = true }: UseMark
       setStatus("disconnected")
       const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 30_000)
       retriesRef.current++
-      timeoutRef.current = setTimeout(connect, delay)
+      timeoutRef.current = setTimeout(connectRef.current, delay)
     }
 
     ws.onerror = () => {
@@ -63,6 +72,10 @@ export function useMarketSocket({ marketId, onMessage, enabled = true }: UseMark
       ws.close()
     }
   }, [])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     mountedRef.current = true

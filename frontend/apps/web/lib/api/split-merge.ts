@@ -2,20 +2,20 @@ import { api } from "./client"
 
 export interface SplitMergeResponse {
   market_id: string
-  amount: number
-  fee: number
-  balance_after: number
+  amount: string
+  fee: string
+  balance_after: string
 }
 
 export interface SplitResponse extends SplitMergeResponse {
-  yes_price: number
-  no_price: number
-  yes_shares: number
-  no_shares: number
+  yes_price: string
+  no_price: string
+  yes_shares: string
+  no_shares: string
 }
 
 export interface MergeResponse extends SplitMergeResponse {
-  amount_received: number
+  amount_received: string
 }
 
 export const splitMergeApi = {

@@ -22,8 +22,14 @@ async def verify_ws_token(token: str) -> str | None:
 
 
 @router.websocket("/ws/markets/{market_id}")
-async def market_websocket(websocket: WebSocket, market_id: str):
-    await manager.connect(websocket, market_id)
+async def market_websocket(websocket: WebSocket, market_id: str, token: str | None = Query(None)):
+    # Extract client IP for connection limit enforcement
+    client_ip = websocket.client[0] if websocket.client else None
+    user_id = await verify_ws_token(token) if token else None
+    accepted = await manager.connect(websocket, market_id, client_ip=client_ip, user_id=user_id)
+    if not accepted:
+        await websocket.close(code=1008, reason="Connection limit exceeded")
+        return
     # Also subscribe this server to the Redis channel for this market
     await redis_pubsub.subscribe_market(market_id)
 
@@ -40,16 +46,21 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                     await redis_pubsub.subscribe_market(new_market_id)
                     market_id = new_market_id
     except WebSocketDisconnect:
-        await manager.disconnect(websocket)
+        await manager.disconnect(websocket, client_ip=client_ip, user_id=user_id)
         logger.info(f"WS disconnected: market={market_id}")
     except Exception:
         logger.exception(f"WS error: market={market_id}")
-        await manager.disconnect(websocket)
+        await manager.disconnect(websocket, client_ip=client_ip, user_id=user_id)
 
 
 @router.websocket("/ws/trades")
-async def global_trades_websocket(websocket: WebSocket):
-    await manager.connect(websocket, "__global__")
+async def global_trades_websocket(websocket: WebSocket, token: str | None = Query(None)):
+    client_ip = websocket.client[0] if websocket.client else None
+    user_id = await verify_ws_token(token) if token else None
+    accepted = await manager.connect(websocket, "__global__", client_ip=client_ip, user_id=user_id)
+    if not accepted:
+        await websocket.close(code=1008, reason="Connection limit exceeded")
+        return
     await redis_pubsub.subscribe_global_trades()
 
     try:
@@ -58,11 +69,11 @@ async def global_trades_websocket(websocket: WebSocket):
             if data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        await manager.disconnect(websocket)
+        await manager.disconnect(websocket, client_ip=client_ip, user_id=user_id)
         logger.info("Global trades WS disconnected")
     except Exception:
         logger.exception("Global trades WS error")
-        await manager.disconnect(websocket)
+        await manager.disconnect(websocket, client_ip=client_ip, user_id=user_id)
 
 
 @router.websocket("/ws/notifications/{user_id}")

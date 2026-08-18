@@ -99,9 +99,9 @@ class LiquidityService:
         logger.info(f"Liquidity added: user={user.id} market={market.slug} amount={float(amount)} lp_tokens={float(lp_tokens_minted)}")
 
         return {
-            "lp_tokens_minted": float(lp_tokens_minted),
-            "pool_lp_token_supply": float(pool.lp_token_supply),
-            "wallet_balance": float(wallet.balance),
+            "lp_tokens_minted": str(lp_tokens_minted),
+            "pool_lp_token_supply": str(pool.lp_token_supply),
+            "wallet_balance": str(wallet.balance),
         }
 
     @staticmethod
@@ -136,6 +136,8 @@ class LiquidityService:
         if not wallet:
             raise ValidationError("Wallet not found")
 
+        if pool.lp_token_supply == 0:
+            raise ValidationError("No LP tokens outstanding")
         lp_fraction = lp_tokens / pool.lp_token_supply
         yes_redeemed = pool.yes_shares * lp_fraction
         no_redeemed = pool.no_shares * lp_fraction
@@ -166,10 +168,10 @@ class LiquidityService:
         logger.info(f"Liquidity removed: user={user.id} market={market.slug} lp_tokens={float(lp_tokens)} redeemed={float(total_redeemed)}")
 
         return {
-            "yes_redeemed": float(yes_redeemed),
-            "no_redeemed": float(no_redeemed),
-            "total_redeemed": float(total_redeemed),
-            "wallet_balance": float(wallet.balance),
+            "yes_redeemed": str(yes_redeemed),
+            "no_redeemed": str(no_redeemed),
+            "total_redeemed": str(total_redeemed),
+            "wallet_balance": str(wallet.balance),
         }
 
     @staticmethod
@@ -182,7 +184,7 @@ class LiquidityService:
         )
         pools = result.all()
         if not pools:
-            return {"markets": [], "total_distributed": 0.0}
+            return {"markets": [], "total_distributed": "0.0"}
 
         # Get or create system treasury user
         treasury_result = await db.execute(select(User).where(User.is_system.is_(True)).limit(1))
@@ -238,4 +240,4 @@ class LiquidityService:
             logger.info(f"Distributed protocol fees: market={market.slug} amount={float(amount)}")
 
         await db.commit()
-        return {"markets": distributed, "total_distributed": float(total)}
+        return {"markets": distributed, "total_distributed": str(total)}

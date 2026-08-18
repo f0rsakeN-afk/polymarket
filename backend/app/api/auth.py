@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
     ConflictError,
@@ -292,7 +293,7 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
         raise UnauthorizedError("Email not verified. Please register first.")
 
     token = str(uuid.uuid4())
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user.id), ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
@@ -307,7 +308,7 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
     if not token:
         raise UnauthorizedError("Missing token")
 
-    r = get_redis()
+    r = await get_redis()
     user_id = await redis_cb.call(lambda: r.get(f"magicurl:{token}"))
     if not user_id:
         raise UnauthorizedError("Invalid or expired link")
@@ -339,7 +340,7 @@ async def verify_magic_url_2fa(
     data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
 ):
     """Complete magic URL login when 2FA is enabled. Friction tracked by partial token + IP."""
-    r = get_redis()
+    r = await get_redis()
     user_id = await redis_cb.call(lambda: r.get(f"partial:{data.partial_token}"))
     if not user_id:
         raise UnauthorizedError("Session expired or invalid")
@@ -407,7 +408,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
     if user.is_2fa_enabled:
         if not data.totp_code:
             # Issue partial token so frontend can complete with TOTP without re-sending magic code
-            r = get_redis()
+            r = await get_redis()
             partial = str(uuid.uuid4())
             await redis_cb.call(lambda: r.set(f"magic_partial:{partial}", f"{user.id}:{data.email}", ex=300))
             raise UnauthorizedError(f"2FA code required:{partial}")
@@ -430,7 +431,7 @@ async def verify_magic_2fa(
     data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
 ):
     """Complete magic link login when 2FA is enabled and magic code was already verified."""
-    r = get_redis()
+    r = await get_redis()
     stored = await redis_cb.call(lambda: r.get(f"magic_partial:{data.partial_token}"))
     if not stored:
         raise UnauthorizedError("Session expired. Please sign in again.")
@@ -483,7 +484,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     user.is_2fa_pending = True
     await db.commit()
 
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(
         lambda: r.set(f"2fa_pending:{user.id}", "1", ex=settings.totp_setup_expire_seconds)
     )
@@ -493,11 +494,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     await AuthAuditService.log_2fa_setup_requested(db, str(user.id), ip, ua)
 
     logger.info(f"2FA setup initiated: {user.email}")
-    return success_response(TwoFactorSetupResponse(
-        secret=secret,
-        uri=uri,
-        base32=secret,
-    ).model_dump())
+    return success_response(TwoFactorSetupResponse(uri=uri).model_dump())
 
 
 @router.post("/2fa/enable", summary="Confirm and enable 2FA")
@@ -512,7 +509,7 @@ async def enable_2fa(
     if not (user.totp_secret_encrypted and user.is_2fa_pending):
         raise ValidationError("No active 2FA setup. Call /2fa/setup first.")
 
-    r = get_redis()
+    r = await get_redis()
     pending = await redis_cb.call(lambda: r.get(f"2fa_pending:{user.id}"))
     if not pending:
         user.is_2fa_pending = False
@@ -559,7 +556,7 @@ async def disable_2fa(
     user.is_2fa_pending = False
     await db.commit()
 
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(lambda: r.delete(f"2fa_pending:{user.id}"))
     await AuthAuditService.log_2fa_disabled(db, str(user.id), ip, ua)
 
@@ -835,11 +832,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("No refresh token")
 
     result = await db.execute(
-        select(RefreshToken).where(
+        select(RefreshToken)
+        .where(
             RefreshToken.token_hash == refresh_token,
             RefreshToken.revoked.is_(False),
             RefreshToken.expires_at > datetime.now(UTC),
         )
+        .options(selectinload(RefreshToken.current_session))
+        .with_for_update()
     )
     token_record = result.scalar_one_or_none()
     if not token_record:

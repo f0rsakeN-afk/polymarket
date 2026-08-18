@@ -195,7 +195,7 @@ export function LoginForm() {
         setIsLoading(false);
       }
     },
-    [magicPartialToken, otp, next] // eslint-disable-line react-hooks/exhaustive-deps
+    [magicPartialToken, otp, next]  
   );
 
   // ── Resend ───────────────────────────────────────────────────────────────

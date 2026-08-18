@@ -5,15 +5,38 @@ import redis.asyncio as redis
 
 from app.config import settings
 
+# ─── Shared Redis client (one connection pool per worker process) ────────────
+# Creating a new Redis client per call creates a new connection pool each time,
+# exhausting Redis file descriptors under load. A module-level singleton reuses
+# the pool safely within a single event loop.
+_redis_client: redis.Redis | None = None
+_redis_lock = asyncio.Lock()
 
-def get_redis() -> redis.Redis:
-    """For async FastAPI routes — each call gets a fresh client with its own pool.
 
-    redis.asyncio.Redis.from_url() creates an internal ConnectionPool, so this is
-    safe for concurrent use within a single event loop. The per-call pattern avoids
-    cross-test contamination since each test's app gets its own client instances.
-    """
-    return redis.Redis.from_url(settings.redis_url, decode_responses=True)
+async def get_redis() -> redis.Redis:
+    """Return the shared Redis client, creating it on first call."""
+    global _redis_client
+    if _redis_client is None:
+        async with _redis_lock:
+            if _redis_client is None:  # double-check under lock
+                _redis_client = redis.Redis.from_url(
+                    settings.redis_url,
+                    decode_responses=True,
+                    max_connections=settings.redis_max_connections,
+                )
+    return _redis_client
+
+
+def get_redis_sync() -> redis.Redis:
+    """Sync version for Celery tasks and non-async contexts."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=settings.celery_worker_redis_max_connections,
+        )
+    return _redis_client
 
 
 class RedisCircuitBreaker:

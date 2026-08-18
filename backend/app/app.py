@@ -160,7 +160,7 @@ async def health_ready():
     # Check Redis
     try:
         from app.redis import get_redis, redis_cb
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(lambda: r.ping())
         checks["redis"] = "ok"
     except Exception as e:

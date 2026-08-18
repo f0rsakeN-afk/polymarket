@@ -36,7 +36,7 @@ class OTPService:
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(
             lambda: r.set(key, f"{code}:{OTPService._hash_code(code, secret)}", ex=CODE_TTL)
         )
@@ -52,7 +52,7 @@ class OTPService:
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        r = get_redis()
+        r = await get_redis()
         stored = await redis_cb.call(lambda: r.get(key))
 
         if not stored:
@@ -71,5 +71,5 @@ class OTPService:
     @staticmethod
     async def invalidate(email: str, purpose: str):
         key = f"otp:{purpose}:{email}"
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(lambda: r.delete(key))

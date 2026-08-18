@@ -18,7 +18,6 @@ export function useDisputesForMarket(marketId: string) {
 }
 
 export function useCreateDispute() {
-  const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: CreateDisputeParams) => disputesApi.create(data),
     onSuccess: () => {
