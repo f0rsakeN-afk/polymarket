@@ -296,13 +296,13 @@ class OrderService:
                 else:
                     can_fill_amm = amm_price_f >= limit_price_f
 
+                if data.order_type == "fill_or_kill" and matched_shares < amount:
+                    raise ValidationError(
+                        f"Fill-or-kill could not be fully filled. "
+                        f"Matched: {float(matched_shares)}/{float(amount)} shares"
+                    )
+
                 if not can_fill_amm:
-                    if data.order_type == "fill_or_kill":
-                        raise ValidationError(
-                            f"Fill-or-kill could not be filled. "
-                            f"Matched: {float(matched_shares)} shares, "
-                            f"Remaining: {float(remaining)}"
-                        )
 
                     if data.side == "buy":
                         available = wallet.balance - wallet.locked_balance
@@ -642,7 +642,7 @@ class OrderService:
             )
             wallet = wallet.scalar_one_or_none()
             if wallet:
-                wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.amount)
+                wallet.locked_balance = max(Decimal(0), wallet.locked_balance - (order.amount - order.remaining_amount))
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")

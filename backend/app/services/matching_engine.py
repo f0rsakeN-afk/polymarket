@@ -71,7 +71,7 @@ class MatchingEngine:
         match_shares: Decimal,
         match_price: Decimal,
     ) -> dict:
-        outcome = await db.get(Outcome, maker.outcome_id)
+        outcome = await db.get(Outcome, maker.outcome_id, with_for_update=True)
         outcome_name = outcome.name.lower() if outcome else "unknown"
 
         usdc_value = match_shares * match_price

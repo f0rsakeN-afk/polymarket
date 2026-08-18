@@ -186,7 +186,7 @@ def check_limit_order_execution(self):
                     if order_side == "buy":
                         if wallet.balance < remaining:
                             continue
-                        quote = amm.apply_trade(outcome.name.lower(), remaining)
+                        quote = amm.buy(outcome.name.lower(), remaining)
                         wallet.balance -= remaining
                         amm_shares = quote.shares_out
                         amm_price_val = quote.price
@@ -683,28 +683,21 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     winners_credited += 1
 
             # Extract protocol fees to treasury before LP redemption
-            treasury_wallet = None
             if pool and float(pool.protocol_fees) > 0:
-                treasury_result = await db.execute(
-                    select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+                treasury_amount = pool.protocol_fees
+                treasury_wallet.balance += treasury_amount
+                pool.protocol_fees = Decimal(0)
+                treasury_tx = Transaction(
+                    user_id=treasury_user.id,
+                    wallet_id=treasury_wallet.id,
+                    type="protocol_fee",
+                    amount=float(treasury_amount),
+                    balance_after=treasury_wallet.balance,
+                    reference_id=str(market.id),
+                    reference_type="protocol_fee",
+                    status="completed",
                 )
-                treasury_wallet = treasury_result.scalar_one_or_none()
-
-                if treasury_wallet:
-                    treasury_amount = pool.protocol_fees
-                    treasury_wallet.balance += treasury_amount
-                    pool.protocol_fees = Decimal(0)
-                    treasury_tx = Transaction(
-                        user_id=treasury_user.id,
-                        wallet_id=treasury_wallet.id,
-                        type="protocol_fee",
-                        amount=float(treasury_amount),
-                        balance_after=treasury_wallet.balance,
-                        reference_id=str(market.id),
-                        reference_type="protocol_fee",
-                        status="completed",
-                    )
-                    db.add(treasury_tx)
+                db.add(treasury_tx)
 
             # Settle LP shares
                 lp_result = await db.execute(
@@ -739,6 +732,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     )
                     db.add(tx)
 
+            market.status = "resolved"
             await db.commit()
             return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
 
@@ -881,7 +875,7 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
         subject = "Your Polymarket code"
         body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
-    self.delay(to_email=email, subject=subject, body=body)
+    send_email.delay(to_email=email, subject=subject, body=body)
     logger.info(f"Auth email prepared for {email}, purpose={purpose}")
 
 

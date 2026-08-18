@@ -24,8 +24,7 @@ STRIPE_TOLERANCE = 300  # 5 minutes
 async def verify_stripe_signature(payload: bytes, sig: str, secret: str) -> bool:
     """Verify Stripe webhook signature using HMAC."""
     if not secret:
-        logger.warning("Stripe webhook secret not configured — skipping verification in dev")
-        return True
+        raise ValueError("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
 
     try:
         # Parse signature header: "t=timestamp,v1=signature"

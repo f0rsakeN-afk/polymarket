@@ -87,7 +87,7 @@ async def is_token_blacklisted(jti: str) -> bool:
         result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
         return result is not None
     except Exception:
-        return False  # Fail open — if Redis is down, don't block tokens
+        raise UnauthorizedError("Token blacklist check unavailable")  # Fail closed
 
 
 async def blacklist_token(jti: str, ttl_seconds: int):
@@ -96,7 +96,7 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         r = get_redis()
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
-        pass  # Best-effort — if Redis is down, token won't be blacklisted but auth still works
+        raise RuntimeError("Failed to blacklist token")  # Fail closed
 
 
 async def get_current_user(

@@ -170,7 +170,7 @@ class RateLimitService:
             over_limit, remaining = int(script_result[0]), int(script_result[1])
         except Exception as e:
             logger.warning(f"Rate limit Redis error (check): {e}")
-            return RateLimitResult(allowed=True, limit=limit, remaining=limit, retry_after=None, is_slowdown=False)
+            return RateLimitResult(allowed=False, limit=limit, remaining=0, retry_after=60, is_slowdown=True)  # Fail closed
 
         if over_limit:
             return RateLimitResult(

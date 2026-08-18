@@ -45,25 +45,24 @@ def test_no_heavily_backed_no_price_high():
 # ── Buy — state mutation ───────────────────────────────────────────────────────
 
 def test_buy_yes_mutates_state():
-    """Buying YES increases YES shares, decreases NO shares."""
+    """Buying YES increases YES shares, no_shares unchanged. Fee leaves pool, no shares minted for it."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     initial_yes, initial_no = amm.yes_shares, amm.no_shares
 
     amm.buy("yes", Decimal("10"))
 
     assert amm.yes_shares > initial_yes
-    assert amm.no_shares < initial_no
-    # k is preserved with 0 fee (fee is removed from pool as protocol fee)
-    # k = 60 * 41.67 ≈ 2500 ≈ initial 50*50
-    assert abs(amm.yes_shares * amm.no_shares - initial_yes * initial_no) < Decimal("0.01")
+    assert amm.no_shares == initial_no  # no side unchanged in corrected buy
 
 
 def test_buy_yes_returns_shares():
-    """Buyer receives YES shares."""
+    """Buyer receives YES shares at fair price (C*(1-fee)/price(YES))."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     result = amm.buy("yes", Decimal("10"))
     assert result.shares_out > 0
     assert result.collateral_in == Decimal("10")
+    # At 50/50 odds, $10 buys ~20 shares (fair price = $0.50/share)
+    assert float(result.shares_out) == pytest.approx(20.0, abs=0.01)
 
 
 def test_buy_yes_fee_deducted():
@@ -79,38 +78,38 @@ def test_buy_yes_fee_deducted():
 
 
 def test_buy_yes_price_effect():
-    """After buying YES: YES price falls, NO price rises (more YES shares稀释NO side)."""
+    """After buying YES: YES price rises, NO price falls."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     yes_before = float(amm.price("yes"))
     no_before = float(amm.price("no"))
 
     amm.buy("yes", Decimal("20"))
 
-    assert float(amm.price("yes")) < yes_before
-    assert float(amm.price("no")) > no_before
+    assert float(amm.price("yes")) > yes_before
+    assert float(amm.price("no")) < no_before
 
 
 def test_buy_no_mutates_state():
-    """Buying NO increases NO shares, decreases YES shares."""
+    """Buying NO increases NO shares, YES shares unchanged."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     initial_yes, initial_no = amm.yes_shares, amm.no_shares
 
     amm.buy("no", Decimal("10"))
 
     assert amm.no_shares > initial_no
-    assert amm.yes_shares < initial_yes
+    assert amm.yes_shares == initial_yes
 
 
 def test_buy_no_price_effect():
-    """After buying NO: NO price falls, YES price rises."""
+    """After buying NO: NO price rises, YES price falls."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     yes_before = float(amm.price("yes"))
     no_before = float(amm.price("no"))
 
     amm.buy("no", Decimal("20"))
 
-    assert float(amm.price("no")) < no_before
-    assert float(amm.price("yes")) > yes_before
+    assert float(amm.price("no")) > no_before
+    assert float(amm.price("yes")) < yes_before
 
 
 # ── Sell — state mutation ─────────────────────────────────────────────────────
@@ -210,7 +209,7 @@ def test_quote_has_all_fields():
 
 
 def test_multiple_trades_accumulate():
-    """Multiple buys change price incrementally."""
+    """Multiple buys change price incrementally (YES price rises with demand)."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     p1 = float(amm.price("yes"))
     amm.buy("yes", Decimal("10"))
@@ -218,8 +217,8 @@ def test_multiple_trades_accumulate():
     amm.buy("yes", Decimal("10"))
     p3 = float(amm.price("yes"))
 
-    assert p2 < p1  # price fell
-    assert p3 < p2  # continued to fall
+    assert p2 > p1  # price rose
+    assert p3 > p2  # continued to rise
 
 
 # ── Password strength ──────────────────────────────────────────────────────────

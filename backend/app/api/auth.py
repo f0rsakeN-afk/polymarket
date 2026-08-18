@@ -494,11 +494,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     await AuthAuditService.log_2fa_setup_requested(db, str(user.id), ip, ua)
 
     logger.info(f"2FA setup initiated: {user.email}")
-    return success_response(TwoFactorSetupResponse(
-        secret=secret,
-        uri=uri,
-        base32=secret,
-    ).model_dump())
+    return success_response(TwoFactorSetupResponse(uri=uri).model_dump())
 
 
 @router.post("/2fa/enable", summary="Confirm and enable 2FA")
@@ -843,6 +839,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
             RefreshToken.expires_at > datetime.now(UTC),
         )
         .options(selectinload(RefreshToken.current_session))
+        .with_for_update()
     )
     token_record = result.scalar_one_or_none()
     if not token_record:

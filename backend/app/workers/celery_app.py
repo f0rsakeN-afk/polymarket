@@ -54,8 +54,4 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_order_expiration",
         "schedule": 30.0,
     },
-    "check-markets-ready-to-resolve": {
-        "task": "app.workers.tasks.check_markets_ready_to_resolve",
-        "schedule": 60.0,
-    },
 }

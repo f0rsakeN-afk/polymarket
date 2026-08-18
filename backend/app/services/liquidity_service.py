@@ -136,6 +136,8 @@ class LiquidityService:
         if not wallet:
             raise ValidationError("Wallet not found")
 
+        if pool.lp_token_supply == 0:
+            raise ValidationError("No LP tokens outstanding")
         lp_fraction = lp_tokens / pool.lp_token_supply
         yes_redeemed = pool.yes_shares * lp_fraction
         no_redeemed = pool.no_shares * lp_fraction

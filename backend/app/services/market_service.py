@@ -78,7 +78,7 @@ class MarketService:
         r = get_redis()
 
         try:
-            acquired = await redis_cb.call(lambda: r.setnx(lock_key, "1"))
+            acquired = await redis_cb.call(lambda: r.setnx(lock_key, "1", ex=30))
             if acquired:
                 try:
                     prices = await MarketService.get_market_prices_from_db(market_id)
