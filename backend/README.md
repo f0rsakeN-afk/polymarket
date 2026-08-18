@@ -4,34 +4,129 @@ FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery — a prediction market 
 
 ---
 
-## Table of Contents
+## Commands & Scripts
 
-- [Quick Start](#quick-start)
-- [Architecture Overview](#architecture-overview)
-- [AMM Engine — Constant Product Market Maker](#amm-engine--constant-product-market-maker)
-- [Order Types & Execution](#order-types--execution)
-- [Orderbook](#orderbook)
-- [Liquidity Provision](#liquidity-provision)
-- [Wallet & Transactions](#wallet--transactions)
-- [Market Resolution & Settlement](#market-resolution--settlement)
-- [WebSocket & Real-Time Updates](#websocket--real-time-updates)
-- [Redis Pub/Sub System](#redis-pubsub-system)
-- [Celery Workers](#celery-workers)
-- [Authentication & JWT](#authentication--jwt)
-- [Stripe Deposit Flow](#stripe-deposit-flow)
-- [Referral System](#referral-system)
-- [Price Alerts](#price-alerts)
-- [API Endpoints Reference](#api-endpoints-reference)
-- [Database Models & Relationships](#database-models--relationships)
-- [Data Flow Diagrams](#data-flow-diagrams)
-- [Environment Variables](#environment-variables)
-- [Testing APIs with cURL](#testing-apis-with-curl)
+### Local Development
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Start PostgreSQL + Redis (Docker)
+docker run -d -p 5435:5432 --name postgres -e POSTGRES_USER=myuser -e POSTGRES_PASSWORD=mypassword -e POSTGRES_DB=mydatabase postgres:16-alpine
+docker run -d -p 6382:6379 --name redis redis:7-alpine
+
+# 3. Run migrations
+uv run alembic upgrade head
+
+# 4. Start API + Celery (3 terminals)
+./start.sh              # Terminal 1: API (8 workers) + auto-starts celery worker + beat
+./start-workers.sh      # Terminal 2: Celery worker + beat (if not started by start.sh)
+```
+
+### Docker Compose (Production-ready)
+
+```bash
+# Start everything (API × 4 replicas, celery × 2 workers, postgres, redis, nginx)
+cp .env.example .env    # fill in secrets
+docker compose up --build -d
+
+# Watch logs
+docker compose logs -f api
+docker compose logs -f celery_worker
+
+# Stop everything
+docker compose down
+
+# Restart after code changes
+docker compose up --build -d
+```
+
+### Load Testing
+
+```bash
+# Install locust
+pip install locust websocket-client
+
+# Web UI
+locust -f scripts/locustfile.py --host=http://localhost:8000
+
+# Headless — 50k users, 100/sec ramp, 60s
+locust -f scripts/locustfile.py --host=http://localhost:8000 \
+    --users=50000 --spawn-rate=100 --run-time=60s --headless
+
+# REST API only — 10k users
+locust -f scripts/locustfile.py --host=http://localhost:8000 \
+    --users=10000 --spawn-rate=200 --run-time=60s --headless \
+    --class-picker RestAPIUser
+
+# WebSocket only — 50k connections
+locust -f scripts/locustfile.py --host=http://localhost:8000 \
+    --users=50000 --spawn-rate=500 --run-time=30s --headless \
+    --class-picker WebSocketUser
+```
+
+### Database
+
+```bash
+# Run migrations
+uv run alembic upgrade head
+
+# Create migration (after model changes)
+uv run alembic revision --autogenerate -m "describe change"
+
+# Rollback
+uv run alembic downgrade -1
+
+# Drop and recreate (dev only)
+uv run alembic downgrade base && uv run alembic upgrade head
+```
+
+### Celery
+
+```bash
+# Worker only
+uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=8
+
+# Beat scheduler only
+uv run celery -A app.workers.celery_app beat --loglevel=info
+
+# Inspect tasks (while running)
+uv run celery -A app.workers.celery_app inspect active
+uv run celery -A app.workers.celery_app inspect scheduled
+uv run celery -A app.workers.celery_app inspect stats
+```
+
+### Code Quality
+
+```bash
+# Lint
+uv run ruff check app/ tests/ --fix
+
+# Type check
+uv run pyright app/
+
+# Format
+uv run ruff format app/ tests/
+```
+
+### Environment
+
+```bash
+# Copy env and edit
+cp .env.example .env
+
+# For Docker deployment, update these in .env:
+# DATABASE_URL=postgresql+asyncpg://myuser:mypassword@postgres:5432/mydatabase
+# REDIS_URL=redis://redis:6379/0
+# CELERY_BROKER_URL=redis://redis:6379/1
+```
+
+---
 
 ---
 
 ## Quick Start
-
-```bash
 # 1. Install dependencies
 uv sync
 
@@ -49,6 +144,100 @@ uv run celery -A app.workers.celery_app beat
 ```
 
 Swagger UI: http://localhost:8000/docs
+
+---
+
+## Docker Production Stack
+
+### Architecture
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │              nginx :8000                │
+                    │         (load balancer / reverse proxy)   │
+                    └─────────────────┬───────────────────────┘
+                                      │
+              ┌───────────────────────┼───────────────────────┐
+              │                       │                       │
+         ┌────┴────┐           ┌────┴────┐           ┌────┴────┐
+         │  api1   │           │  api2   │           │  api3   │
+         │ (4 wks) │           │ (4 wks) │           │ (4 wks) │
+         └────┬────┘           └────┬────┘           └────┬────┘
+              │                       │                       │
+              └───────────────────────┼───────────────────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+               ┌────┴────┐      ┌────┴────┐      ┌────┴────┐
+               │postgres │      │  redis  │      │ celery  │
+               │   :5432 │      │  :6379  │      │ workers │
+               └─────────┘      └─────────┘      └─────────┘
+```
+
+### Services
+
+| Service | Replicas | Workers Each | Total WS Capacity |
+|---------|----------|--------------|-------------------|
+| `api` | 4 | 4 | 50k WebSocket connections |
+| `celery_worker` | 2 | 8 concurrency | — |
+| `celery_beat` | 1 | — | — |
+| `postgres` | 1 | — | — |
+| `redis` | 1 | — | — |
+| `nginx` | 1 | — | — |
+
+### Resource Limits (per container)
+
+| Service | Memory | File Descriptors |
+|---------|--------|-----------------|
+| `api` | 2GB max / 512MB reserved | 65536 |
+| `celery_worker` | 1GB | 65536 |
+| `postgres` | 1GB | — |
+| `redis` | 768MB | — |
+| `nginx` | — | 65536 |
+
+### Files
+
+```
+backend/
+├── Dockerfile              # API image (uvicorn 4 workers)
+├── Dockerfile.worker       # Celery worker image
+├── docker-compose.yml      # Full stack
+├── nginx/nginx.conf       # Load balancer config
+└── scripts/postgres.conf  # PostgreSQL tuning
+```
+
+### Deploy
+
+```bash
+# 1. Copy and fill env
+cp .env.example .env
+# Edit .env — set all *change-me* secrets
+
+# 2. Build and start
+docker compose up --build -d
+
+# 3. Watch
+docker compose logs -f api
+docker compose logs -f celery_worker
+
+# 4. Stop
+docker compose down
+
+# 5. Scale API (requires more RAM/CPU)
+docker compose up -d --scale api=8
+```
+
+### Nginx Config Highlights
+
+- **Load balancing**: `least_conn` — routes to the least busy worker
+- **WebSocket**: `Upgrade` + `Connection: upgrade` headers forwarded
+- **WS keepalive**: 7-day timeout for long-lived connections
+- **Rate limiting**: 60 req/min per IP on `/`, 5 req/min on `/auth/**`
+- **No buffering**: `proxy_buffering off` on WS — critical for real-time
+
+### Redis Pub/Sub with Multiple Workers
+
+Each `api` container runs its own Redis pub/sub listener (started in FastAPI lifespan). When a trade executes on any worker, `redis.publish()` fans out to all workers' listeners, which broadcast to their local WebSocket clients. This ensures WS clients receive events regardless of which API container handles the trade.
 
 ---
 
@@ -1270,3 +1459,75 @@ curl http://localhost:8000/api/v1/markets/btc-100k/activity \
 # WebSocket connection (via wscat)
 wscat -c ws://localhost:8000/ws/markets/<MARKET_ID>
 ```
+
+---
+
+## Troubleshooting
+
+### WebSocket connections timing out
+
+- Nginx default keepalive is 65s — WS routes use `proxy_read_timeout 7d` to handle long connections
+- If using Docker, make sure `nginx` container has `nofile` limit raised (set in docker-compose.yml)
+
+### "Connection limit exceeded" errors on WebSocket
+
+- `ConnectionManager` enforces max 10 connections per IP, 5 per authenticated user
+- Check logs: `WS rejected: too many connections from IP <ip>`
+
+### Celery tasks not running
+
+```bash
+# Verify workers are up
+uv run celery -A app.workers.celery_app inspect active
+
+# Check scheduled tasks (beat)
+uv run celery -A app.workers.celery_app inspect scheduled
+
+# Verify beat is writing to schedule
+cat celerybeat-schedule
+```
+
+### Redis connection errors
+
+- Circuit breaker opens after 5 consecutive Redis failures — auto-recovers after 30s
+- Check Redis is running: `redis-cli -p 6382 ping`
+
+### PostgreSQL connection pool exhausted
+
+- Symptoms: `QueuePool limit exceeded` errors
+- Fix: increase `DB_POOL_SIZE` and `DB_MAX_OVERFLOW` in `.env`
+- For 50k users: pool_size=100, max_overflow=50
+
+### Tests hanging on `pytest`
+
+- The `conftest.py` tries to connect to PostgreSQL at collection time
+- Run specific tests directly: `.venv/bin/python -c "from app.amm.engine import BinaryAMM; .."`
+- Or use a test database: `DATABASE_URL=postgresql+asyncpg://... pytest tests/`
+
+---
+
+## Scaling to 50k Concurrent Users
+
+### What was done
+
+| Component | Fix | Effect |
+|-----------|-----|--------|
+| WebSocket manager | Per-market locks, fire-and-forget broadcasts | 50k connections don't block each other |
+| WebSocket routes | IP/user connection limits (10/IP, 5/user) | Prevents FD exhaustion |
+| Redis client | Shared singleton per worker (was: new client per call) | No more FD leaks |
+| DB pool | 50 → 100, overflow 30 → 50 | Handles more concurrent DB ops |
+| Redis pub/sub listener | Non-blocking (fire-and-forget) | Listener never stalls |
+| API workers | 1 → 8 uvicorn workers (8 total) | 8× throughput |
+| PostgreSQL | Tuned `max_connections=500`, shared_buffers, `effective_io_concurrency=200` | Handles 50k connections |
+| Celery | 2 workers × 8 concurrency = 16 task handlers | Background job throughput |
+
+### What you still need
+
+| Item | When Required | How |
+|------|--------------|-----|
+| Redis Sentinel/Cluster | >10k WS connections per Redis instance | Add 1 replica, promote to master on failure |
+| PostgreSQL read replica | >5k read-heavy queries/sec | Set `DATABASE_REPLICA_URL` in `.env` |
+| CDN (Cloudflare/Fastly) | Static assets, orderbook snapshots | Point at nginx, cache at edge |
+| Vertical scaling (more RAM/CPU) | Bottleneck on single box | Scale API containers horizontally first |
+| Separate Celery queues | Different task SLAs | Split `check_markets_ready_to_resolve` into its own queue |
+

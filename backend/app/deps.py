@@ -18,7 +18,7 @@ ALGORITHM = "HS256"
 
 
 async def cache_get(key: str) -> dict | list | None:
-    r = get_redis()
+    r = await get_redis()
     data = await redis_cb.call(lambda: r.get(f"cache:{key}"))
     if data:
         import json
@@ -27,7 +27,7 @@ async def cache_get(key: str) -> dict | list | None:
 
 
 async def cache_set(key: str, data: dict | list, ttl: int = 30):
-    r = get_redis()
+    r = await get_redis()
     import json
     def json_dumps(obj):
         return json.dumps(obj, default=str)
@@ -35,13 +35,13 @@ async def cache_set(key: str, data: dict | list, ttl: int = 30):
 
 
 async def cache_invalidate(key: str):
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(lambda: r.delete(f"cache:{key}"))
 
 
 async def cache_invalidate_pattern(pattern: str):
     """Delete all keys matching pattern (uses SCAN to avoid blocking)."""
-    r = get_redis()
+    r = await get_redis()
     cursor = 0
     while True:
         cursor, keys = await redis_cb.call(lambda: r.scan(cursor, match=f"cache:{pattern}", count=100))
@@ -83,7 +83,7 @@ def decode_token(token: str) -> dict:
 
 async def is_token_blacklisted(jti: str) -> bool:
     try:
-        r = get_redis()
+        r = await get_redis()
         result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
         return result is not None
     except Exception:
@@ -93,7 +93,7 @@ async def is_token_blacklisted(jti: str) -> bool:
 async def blacklist_token(jti: str, ttl_seconds: int):
     """Add a token's jti to the blacklist for its remaining TTL."""
     try:
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
         raise RuntimeError("Failed to blacklist token")  # Fail closed

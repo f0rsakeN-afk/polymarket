@@ -23,23 +23,23 @@ def test_empty_pool_defaults_to_half():
 
 def test_yes_heavily_backed_yes_price_high():
     """
-    price(YES) = no / (yes + no).
-    If YES is heavily backed (yes >> no), YES price → 0.
-    If YES is heavily backed, NO price → 1 (inverse).
+    price(YES) = yes / (yes + no).
+    If YES is heavily backed (yes >> no), YES price → 1.
+    If YES is heavily backed, NO price → 0 (inverse).
     """
     amm = BinaryAMM(yes_shares=Decimal("900"), no_shares=Decimal("100"), fee_rate=Decimal("0"))
-    assert float(amm.price("yes")) < 0.2   # heavily backed YES → low price
-    assert float(amm.price("no")) > 0.8   # inverse
+    assert float(amm.price("yes")) > 0.8   # heavily backed YES → high price
+    assert float(amm.price("no")) < 0.2   # inverse
 
 
 def test_no_heavily_backed_no_price_high():
     """
-    price(NO) = yes / (yes + no).
-    If NO is heavily backed (no >> yes), NO price → 0.
+    price(NO) = no / (yes + no).
+    If NO is heavily backed (no >> yes), NO price → 1.
     """
     amm = BinaryAMM(yes_shares=Decimal("100"), no_shares=Decimal("900"), fee_rate=Decimal("0"))
-    assert float(amm.price("no")) < 0.2   # heavily backed NO → low price
-    assert float(amm.price("yes")) > 0.8  # inverse
+    assert float(amm.price("no")) > 0.8   # heavily backed NO → high price
+    assert float(amm.price("yes")) < 0.2  # inverse
 
 
 # ── Buy — state mutation ───────────────────────────────────────────────────────
@@ -115,27 +115,27 @@ def test_buy_no_price_effect():
 # ── Sell — state mutation ─────────────────────────────────────────────────────
 
 def test_sell_yes_mutates_state():
-    """Selling YES decreases YES shares, increases NO shares."""
+    """Selling YES decreases YES shares, NO shares unchanged."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     initial_yes, initial_no = amm.yes_shares, amm.no_shares
 
     result = amm.sell("yes", Decimal("10"))
 
     assert amm.yes_shares < initial_yes
-    assert amm.no_shares > initial_no
+    assert amm.no_shares == initial_no  # NO side unchanged
     assert result.shares_out == Decimal("10")
     assert result.collateral_in > 0  # positive collateral received
 
 
 def test_sell_no_mutates_state():
-    """Selling NO decreases NO shares, increases YES shares."""
+    """Selling NO decreases NO shares, YES shares unchanged."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     initial_yes, initial_no = amm.yes_shares, amm.no_shares
 
     result = amm.sell("no", Decimal("10"))
 
     assert amm.no_shares < initial_no
-    assert amm.yes_shares > initial_yes
+    assert amm.yes_shares == initial_yes  # YES side unchanged
     assert result.shares_out == Decimal("10")
     assert result.collateral_in > 0
 
@@ -167,15 +167,15 @@ def test_sell_yes_fee_deducted():
 
 
 def test_sell_yes_price_effect():
-    """After selling YES: YES price rises, NO price falls."""
+    """After selling YES: YES price falls, NO price rises."""
     amm = BinaryAMM(yes_shares=Decimal("50"), no_shares=Decimal("50"), fee_rate=Decimal("0"))
     yes_before = float(amm.price("yes"))
     no_before = float(amm.price("no"))
 
     amm.sell("yes", Decimal("10"))
 
-    assert float(amm.price("yes")) > yes_before
-    assert float(amm.price("no")) < no_before
+    assert float(amm.price("yes")) < yes_before  # YES price falls
+    assert float(amm.price("no")) > no_before    # NO price rises (inverse)
 
 
 # ── Slippage guards ──────────────────────────────────────────────────────────

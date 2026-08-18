@@ -18,7 +18,7 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.config import settings
-from app.deps import cache_invalidate
+from app.services.cache_service import cache_invalidate_market, cache_invalidate_market_lists
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
@@ -61,7 +61,7 @@ class OrderService:
         total = float(pool.yes_shares) + float(pool.no_shares)
         if total == 0:
             return 0.5, 0.5
-        return float(pool.no_shares) / total, float(pool.yes_shares) / total
+        return float(pool.yes_shares) / total, float(pool.no_shares) / total
 
     @staticmethod
     async def compute_quote(
@@ -130,7 +130,7 @@ class OrderService:
         }
 
         try:
-            r = get_redis()
+            r = await get_redis()
             await redis_cb.call(lambda: r.set(
                 f"quote:{quote_id}",
                 json.dumps(payload),
@@ -216,7 +216,7 @@ class OrderService:
 
         if data.quote_id:
             try:
-                r = get_redis()
+                r = await get_redis()
                 raw = await redis_cb.call(lambda: r.get(f"quote:{data.quote_id}"))
                 if raw:
                     quote = json.loads(raw)
@@ -261,10 +261,17 @@ class OrderService:
             db, market, outcome, data.side, amount, limit_price, str(user.id),
         )
 
+        # Compute remaining shares to fill the order
         if data.side == "buy":
-            remaining = amount - matched_usdc
+            remaining_shares = amount - matched_shares
         else:
-            remaining = amount - matched_shares
+            remaining_shares = amount - matched_shares
+
+        # USDC needed for remaining shares (for BUY, locked at limit price; for SELL, not applicable)
+        if data.side == "buy":
+            remaining_usdc = remaining_shares * (limit_price or Decimal(1))
+        else:
+            remaining_usdc = Decimal(0)
 
         amm_shares = Decimal(0)
         amm_price_val = Decimal(0)
@@ -272,9 +279,9 @@ class OrderService:
         amm_slippage = Decimal(0)
         sell_proceeds_amm = Decimal(0)
 
-        if remaining > 0:
+        if remaining_shares > 0:
             if data.order_type in ("limit", "fill_or_kill"):
-                # Check post_only BEFORE AMM touches remaining — post_only means don't cross the spread
+                # Check post_only BEFORE AMM fills — post_only means don't cross the spread
                 if data.post_only and limit_price is not None:
                     current_amm_price = float(amm.price(data.outcome))
                     limit_price_f = float(limit_price)
@@ -296,22 +303,23 @@ class OrderService:
                 else:
                     can_fill_amm = amm_price_f >= limit_price_f
 
-                if data.order_type == "fill_or_kill" and matched_shares < amount:
-                    raise ValidationError(
-                        f"Fill-or-kill could not be fully filled. "
-                        f"Matched: {float(matched_shares)}/{float(amount)} shares"
-                    )
-
                 if not can_fill_amm:
+                    # AMM price is worse than limit — skip AMM leg, leave as pending
+                    if data.order_type == "fill_or_kill":
+                        raise ValidationError(
+                            f"Fill-or-kill could not be fully filled. "
+                            f"Book matched: {float(matched_shares)}/{float(amount)} shares, "
+                            f"AMM price {amm_price_f:.4f} would exceed limit {limit_price_f:.4f}"
+                        )
 
                     if data.side == "buy":
                         available = wallet.balance - wallet.locked_balance
-                        if available < remaining:
+                        if available < remaining_usdc:
                             raise InsufficientBalanceError({
                                 "available": float(wallet.balance),
-                                "required": float(remaining),
+                                "required": float(remaining_usdc),
                             })
-                        wallet.locked_balance += remaining
+                        wallet.locked_balance += remaining_usdc
 
                     order = Order(
                         user_id=user.id,
@@ -321,7 +329,7 @@ class OrderService:
                         order_type=data.order_type,
                         amount=amount,
                         price=limit_price,
-                        remaining_amount=remaining,
+                        remaining_amount=remaining_shares,
                         status="pending" if matched_shares == 0 else "partial",
                         expires_at=data.expires_at,
                         client_order_id=data.client_order_id,
@@ -353,13 +361,14 @@ class OrderService:
                     )
 
             if data.side == "buy":
-                if wallet.balance < remaining:
+                if wallet.balance < remaining_usdc:
                     raise InsufficientBalanceError({
                         "available": float(wallet.balance),
-                        "required": float(remaining),
+                        "required": float(remaining_usdc),
                     })
-                quote = amm.buy(data.outcome, remaining)
-                wallet.balance -= remaining
+                # remaining_shares = number of shares to buy, remaining_usdc = USDC to pay
+                quote = amm.buy(data.outcome, remaining_usdc)
+                wallet.balance -= remaining_usdc
                 amm_shares = quote.shares_out
                 amm_price_val = quote.price
                 amm_fee = quote.fee
@@ -373,25 +382,25 @@ class OrderService:
                     ).with_for_update()
                 )
                 tmp_pos = tmp_position.scalar_one_or_none()
-                if not tmp_pos or tmp_pos.shares_held < remaining:
+                if not tmp_pos or tmp_pos.shares_held < remaining_shares:
                     raise ValidationError(
                         f"Insufficient {data.outcome} shares after orderbook match. "
                         f"Held: {float(tmp_pos.shares_held) if tmp_pos else 0}, "
-                        f"Requested: {float(remaining)}"
+                        f"Requested: {float(remaining_shares)}"
                     )
-                quote = amm.sell(data.outcome, remaining)
-                cost_basis = tmp_pos.average_price * remaining
+                quote = amm.sell(data.outcome, remaining_shares)
+                cost_basis = tmp_pos.average_price * remaining_shares
                 sell_proceeds_amm = quote.collateral_in
                 realized_pnl = sell_proceeds_amm - cost_basis
-                tmp_pos.shares_held -= remaining
+                tmp_pos.shares_held -= remaining_shares
                 tmp_pos.realized_pnl += realized_pnl
                 wallet.balance += sell_proceeds_amm
-                amm_shares = remaining
+                amm_shares = remaining_shares
                 amm_price_val = quote.price
                 amm_fee = quote.fee
                 amm_slippage = quote.slippage
 
-            trade_value = remaining * amm_price_val
+            trade_value = remaining_usdc if data.side == "buy" else sell_proceeds_amm
             protocol_fee = trade_value * Decimal("0.01")
             pool.protocol_fees += protocol_fee
 
@@ -399,7 +408,14 @@ class OrderService:
             pool.no_shares = amm.no_shares
 
         total_shares = matched_shares + amm_shares
-        total_usdc_spent = matched_usdc + (remaining if data.side == "buy" else Decimal(0))
+        total_usdc_spent = matched_usdc + (remaining_usdc if data.side == "buy" else Decimal(0))
+
+        # FOK atomicity: if FOK couldn't fill the full amount, raise instead of creating pending order
+        if data.order_type == "fill_or_kill" and total_shares < amount:
+            raise ValidationError(
+                f"Fill-or-kill could not be fully filled. "
+                f"Total filled: {float(total_shares)}/{float(amount)} shares"
+            )
         total_usdc_received = matched_usdc + sell_proceeds_amm
 
         # ── Step 6: Slippage validation ──
@@ -491,14 +507,14 @@ class OrderService:
             )
             db.add(t)
 
-        if remaining > 0:
+        if remaining_shares > 0:
             t = Trade(
                 user_id=user.id,
                 market_id=market.id,
                 outcome=data.outcome,
                 side=data.side,
                 price=amm_price_val,
-                amount=total_shares,
+                amount=amm_shares,
                 executed_at=datetime.now(UTC),
             )
             db.add(t)
@@ -579,7 +595,8 @@ class OrderService:
                 "username": user.username,
             })
             await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", {})
-            await cache_invalidate(f"markets:orderbook:{market.slug}")
+            await cache_invalidate_market(str(market.id))
+            await cache_invalidate_market_lists()
         except Exception:
             pass
 
@@ -597,8 +614,8 @@ class OrderService:
         avg_price = total_usdc_spent / total_shares if total_shares > 0 else Decimal(0)
 
         after_total = amm.yes_shares + amm.no_shares
-        yes_price_after = amm.no_shares / after_total if after_total > 0 else Decimal(0)
-        no_price_after = amm.yes_shares / after_total if after_total > 0 else Decimal(0)
+        yes_price_after = amm.yes_shares / after_total if after_total > 0 else Decimal(0)
+        no_price_after = amm.no_shares / after_total if after_total > 0 else Decimal(0)
 
         return OrderResult(
             order_id=str(order.id),

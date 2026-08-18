@@ -360,14 +360,14 @@ def sync_amm_prices(self):
             if not rows:
                 return "No active markets"
 
-            r = get_redis()
+            r = await get_redis()
             pipe = r.pipeline()
 
             for market, pool in rows:
                 total = float(pool.yes_shares) + float(pool.no_shares)
                 if total > 0:
-                    yes_price = float(pool.no_shares) / total
-                    no_price = float(pool.yes_shares) / total
+                    yes_price = float(pool.yes_shares) / total
+                    no_price = float(pool.no_shares) / total
                 else:
                     yes_price, no_price = 0.5, 0.5
 
@@ -908,7 +908,7 @@ def enqueue_otp(self, email: str, purpose: str):
     import asyncio
     async def _store():
         from app.redis import get_redis, redis_cb
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(
             lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
         )
