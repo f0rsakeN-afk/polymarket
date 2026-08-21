@@ -117,6 +117,7 @@ async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_use
         "evidence": "My dispute evidence",
     })
 
+    client.cookies.set("access_token", _token(admin_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     assert resp.status_code == 200
     data = resp.json()
@@ -130,6 +131,7 @@ async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_use
 async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Admin upholds dispute and market is resolved to proposed outcome."""
     from app.models.dispute import Dispute
+    from unittest.mock import patch
 
     outcome_yes = next(o for o in test_market.outcomes if o.name == "Yes")
     outcome_no = next(o for o in test_market.outcomes if o.name == "No")
@@ -150,11 +152,12 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
     })
     dispute_id = d_resp.json()["data"]["id"]
 
-    # Adjudicate — uphold
+    # Adjudicate — uphold (mock Celery delay since no broker is running)
     client.cookies.set("access_token", _token(admin_user.id))
-    resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
-        "ruling": "upheld",
-    })
+    with patch("app.workers.tasks.resolve_market.delay"):
+        resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
+            "ruling": "upheld",
+        })
     assert resp.status_code == 200
     data = resp.json()
     assert data["data"]["ruling"] == "upheld"

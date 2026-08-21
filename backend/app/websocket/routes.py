@@ -22,10 +22,13 @@ async def verify_ws_token(token: str) -> str | None:
 
 
 @router.websocket("/ws/markets/{market_id}")
-async def market_websocket(websocket: WebSocket, market_id: str, token: str | None = Query(None)):
-    # Extract client IP for connection limit enforcement
+async def market_websocket(websocket: WebSocket, market_id: str, token: str = Query(...)):
+    # Auth required — reject unauthenticated connections to prevent public market-data scraping
     client_ip = websocket.client[0] if websocket.client else None
-    user_id = await verify_ws_token(token) if token else None
+    user_id = await verify_ws_token(token)
+    if not user_id:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
     accepted = await manager.connect(websocket, market_id, client_ip=client_ip, user_id=user_id)
     if not accepted:
         await websocket.close(code=1008, reason="Connection limit exceeded")
@@ -42,6 +45,7 @@ async def market_websocket(websocket: WebSocket, market_id: str, token: str | No
             elif msg_type == "subscribe":
                 new_market_id = data.get("market_id")
                 if new_market_id and new_market_id != market_id:
+                    await redis_pubsub.unsubscribe_market(market_id)
                     await manager.switch_market(websocket, new_market_id)
                     await redis_pubsub.subscribe_market(new_market_id)
                     market_id = new_market_id

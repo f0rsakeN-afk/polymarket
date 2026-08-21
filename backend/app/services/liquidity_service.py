@@ -176,7 +176,9 @@ class LiquidityService:
 
     @staticmethod
     async def distribute_protocol_fees(db: AsyncSession) -> dict:
-        """Withdraw all accumulated protocol fees to the treasury and reset pool.protocol_fees to 0."""
+        """Withdraw all accumulated protocol fees to the treasury and reset pool.protocol_fees to 0.
+        Idempotent: if already distributed (pools have protocol_fees=0), returns empty.
+        """
         result = await db.execute(
             select(LiquidityPool, Market).join(Market, LiquidityPool.market_id == Market.id)
             .where(LiquidityPool.protocol_fees > 0)

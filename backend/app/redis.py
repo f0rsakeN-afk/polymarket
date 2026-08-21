@@ -1,42 +1,94 @@
 import asyncio
+import logging
 import time
 
 import redis.asyncio as redis
+from redis.asyncio.sentinel import Sentinel
 
 from app.config import settings
 
+logger = logging.getLogger("polymarket")
+
 # ─── Shared Redis client (one connection pool per worker process) ────────────
-# Creating a new Redis client per call creates a new connection pool each time,
-# exhausting Redis file descriptors under load. A module-level singleton reuses
-# the pool safely within a single event loop.
+# Sentinel-backed: if REDIS_SENTINEL_URLS is set, clients connect via Sentinel
+# for automatic failover. Falls back to direct URL otherwise.
 _redis_client: redis.Redis | None = None
-_redis_lock = asyncio.Lock()
+_redis_client_sync: redis.Redis | None = None
+_redis_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def get_redis() -> redis.Redis:
-    """Return the shared Redis client, creating it on first call."""
-    global _redis_client
-    if _redis_client is None:
-        async with _redis_lock:
-            if _redis_client is None:  # double-check under lock
-                _redis_client = redis.Redis.from_url(
-                    settings.redis_url,
-                    decode_responses=True,
-                    max_connections=settings.redis_max_connections,
-                )
+    """Return the shared Redis client, recreating if the event loop has changed."""
+    global _redis_client, _redis_client_loop
+    current_loop = asyncio.get_running_loop()
+    if _redis_client is None or _redis_client_loop is not current_loop:
+        if _redis_client is not None:
+            try:
+                await _redis_client.aclose()
+            except Exception:
+                pass
+        _redis_client = await _create_redis_client()
+        _redis_client_loop = current_loop
     return _redis_client
+
+
+async def _create_redis_client() -> redis.Redis:
+    sentinel_urls = _parse_sentinel_urls()
+    if sentinel_urls:
+        logger.info(f"Connecting to Redis via Sentinel: service={settings.redis_sentinel_service_name}")
+        sentinel = Sentinel(
+            sentinel_urls,
+            sentinel_kwargs={"socket_connect_timeout": 2},
+            decode_responses=True,
+        )
+        # Master-for-read gives us the current primary; Sentinel manages failover
+        client = sentinel.master_for(
+            settings.redis_sentinel_service_name,
+            redis_class=redis.Redis,
+            connection_kwargs={"max_connections": settings.redis_max_connections},
+        )
+    else:
+        logger.info(f"Connecting to Redis directly: {settings.redis_url}")
+        client = redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=settings.redis_max_connections,
+            socket_connect_timeout=5,
+        )
+    return client
+
+
+def _parse_sentinel_urls() -> list[str]:
+    """Parse REDIS_SENTINEL_URLS env var (comma-separated) into a list of sentinel URLs."""
+    raw = settings.redis_sentinel_urls
+    if not raw:
+        return []
+    return [url.strip() for url in raw.split(",") if url.strip()]
 
 
 def get_redis_sync() -> redis.Redis:
-    """Sync version for Celery tasks and non-async contexts."""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis.Redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            max_connections=settings.celery_worker_redis_max_connections,
-        )
-    return _redis_client
+    """Sync Redis client for Celery tasks and non-async contexts. Sentinel-aware."""
+    global _redis_client_sync
+    if _redis_client_sync is None:
+        sentinel_urls = _parse_sentinel_urls()
+        if sentinel_urls:
+            import redis as sync_redis
+            sentinel = sync_redis.Sentinel(
+                sentinel_urls,
+                socket_connect_timeout=2,
+            )
+            _redis_client_sync = sentinel.master_for(
+                settings.redis_sentinel_service_name,
+                redis_class=sync_redis.Redis,
+                connection_kwargs={"max_connections": settings.celery_worker_redis_max_connections},
+            )
+        else:
+            _redis_client_sync = redis.Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                max_connections=settings.celery_worker_redis_max_connections,
+            )
+    return _redis_client_sync
 
 
 class RedisCircuitBreaker:

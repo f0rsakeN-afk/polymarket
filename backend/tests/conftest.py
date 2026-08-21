@@ -9,8 +9,8 @@ import os
 import uuid
 
 # MUST be before any app imports
-os.environ["DATABASE_URL"] = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase_test"
-os.environ["REDIS_URL"] = "redis://localhost:6382/15"
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5433/mydatabase_test"
+os.environ["REDIS_URL"] = "redis://localhost:6380/15"
 
 import pytest
 import pytest_asyncio
@@ -49,6 +49,47 @@ async def _fresh_db():
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
+
+
+# ── Reset Redis global state between tests ────────────────────────────────────
+# Modules like rate_limit_service.py and deps.py do `from app.redis import get_redis`
+# at import time, binding directly to the original function. Simply patching
+# app.redis.get_redis won't update those cached references. Instead, reset the
+# actual _redis_client and _redis_client_sync globals and rely on the fact that
+# get_redis recreates them on next call.
+
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def _reset_redis():
+    import app.redis as rm
+
+    old_client = rm._redis_client
+    old_client_sync = rm._redis_client_sync
+
+    # Null out so get_redis() creates fresh ones in this test's event loop
+    rm._redis_client = None
+    rm._redis_client_sync = None
+
+    # Reset circuit breaker state
+    rm.redis_cb._state = "closed"
+    rm.redis_cb._failures = 0
+
+    yield
+
+    # Close clients from this test
+    if rm._redis_client is not None:
+        try:
+            await rm._redis_client.aclose()
+        except Exception:
+            pass
+    if rm._redis_client_sync is not None:
+        try:
+            rm._redis_client_sync.aclose()
+        except Exception:
+            pass
+
+    # Restore previous clients (from the module's original init)
+    rm._redis_client = old_client
+    rm._redis_client_sync = old_client_sync
 
 
 @pytest_asyncio.fixture

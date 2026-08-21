@@ -106,7 +106,7 @@ export function getPriceHistory(slug: string, params?: { interval?: string; from
 
 export function getRelatedMarkets(slug: string, limit = 5) {
   return api.get<{ success: boolean; data: MarketResponse[] }>(
-    `/api/v1/markets/${slug}/related/?limit=${limit}`
+    `/api/v1/markets/${slug}/related?limit=${limit}`
   )
 }
 
@@ -159,7 +159,7 @@ export interface OrderBook {
 }
 
 export function getOrderBook(slug: string) {
-  return api.get<OrderBook>(`/api/v1/markets/${slug}/orderbook`)
+  return api.get<{ success: boolean; data: OrderBook }>(`/api/v1/markets/${slug}/orderbook`)
 }
 
 export interface ClaimResponse {

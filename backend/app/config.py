@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6382/0"
+    # Sentinel HA: comma-separated sentinel URLs, e.g. "redis://localhost:6380,redis://localhost:6381"
+    # When set, app connects via Sentinel for automatic failover instead of direct redis_url.
+    redis_sentinel_urls: str = ""
+    redis_sentinel_service_name: str = "mymaster"  # Sentinel master group name
     redis_max_connections: int = 100
     celery_worker_redis_max_connections: int = 20
 

@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/app/.venv/bin:$PATH"
 
 # Install Python deps
 COPY pyproject.toml uv.lock* ./
@@ -20,5 +21,6 @@ RUN pip install uv && uv sync --frozen --no-dev
 # Copy app
 COPY . .
 
-# Run: uvicorn with multiple workers (8 per container)
-CMD ["python", "-m", "uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Run: single worker (Docker compose deploy.replicas handles horizontal scaling)
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000"]
+

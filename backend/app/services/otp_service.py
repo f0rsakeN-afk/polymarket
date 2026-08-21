@@ -8,12 +8,15 @@ from app.redis import get_redis, redis_cb
 logger = logging.getLogger("polymarket")
 
 CODE_TTL = 600  # 10 minutes
+RATE_LIMIT_KEY_TTL = 300  # 5-minute verification attempt window
 
 
 class OTPService:
     @staticmethod
     def _generate_code() -> str:
-        return str(random.randint(100000, 999999))
+        # 8-digit base32-compatible (A-Z, 0-9) = 2.8 trillion combos — brute-force infeasible
+        import secrets
+        return str(secrets.randbelow(10**8)).zfill(8)
 
     @staticmethod
     def _hash_code(code: str, secret: str) -> str:
@@ -43,16 +46,44 @@ class OTPService:
         logger.info(f"OTP issued for {email}, purpose={purpose}")
         return code
 
+    # Atomic rate-limit: INCR + TTL set + check in one Lua script — no concurrent bypass
+    _RATE_LIMIT_SCRIPT = """
+    local key = KEYS[1]
+    local limit = tonumber(ARGV[1])
+    local ttl = tonumber(ARGV[2])
+    local count = redis.call('INCR', key)
+    if count == 1 then
+        redis.call('EXPIRE', key, ttl)
+    end
+    if count > limit then
+        return -1
+    end
+    return count
+    """
+
     @staticmethod
     async def verify_code(email: str, purpose: str, code: str) -> bool:
         """
         Verify a code against stored hash. Deletes on success.
         Returns True if valid, False otherwise.
         """
+        r = await get_redis()
+
+        # Atomic brute-force rate limit: max 5 attempts per email+purpose per window
+        rate_key = f"otp_attempts:{purpose}:{email}"
+        result = await redis_cb.call(
+            lambda: r.eval(
+                OTPService._RATE_LIMIT_SCRIPT, 1,
+                rate_key, 5, RATE_LIMIT_KEY_TTL,
+            )
+        )
+        if result == -1:
+            logger.warning(f"OTP brute-force attempt detected for {email}, purpose={purpose}")
+            return False
+
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        r = await get_redis()
         stored = await redis_cb.call(lambda: r.get(key))
 
         if not stored:
@@ -66,6 +97,7 @@ class OTPService:
 
         # Invalidate after successful use
         await redis_cb.call(lambda: r.delete(key))
+        await redis_cb.call(lambda: r.delete(rate_key))
         return True
 
     @staticmethod

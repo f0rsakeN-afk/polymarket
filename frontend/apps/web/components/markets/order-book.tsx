@@ -18,8 +18,8 @@ function OrderBook({ slug }: { slug: string }) {
     refetchInterval: 5000,
   })
 
-  const bids: OrderBookEntry[] = data?.bids ?? []
-  const asks: OrderBookEntry[] = data?.asks ?? []
+  const bids: OrderBookEntry[] = data?.data?.bids ?? []
+  const asks: OrderBookEntry[] = data?.data?.asks ?? []
 
   const maxDepth = Math.max(
     ...bids.map((b) => n(b.size)),

@@ -351,6 +351,15 @@ class RedisPubSub:
                 await self._pubsub.subscribe(ch)
                 self._subscribed.add(ch)
 
+    async def unsubscribe_market(self, market_id: str):
+        """Unsubscribe from market channels and clean up tracked subscription."""
+        if not self._pubsub:
+            return
+        for ch in (f"market:{market_id}:price", f"market:{market_id}:events"):
+            if ch in self._subscribed:
+                await self._pubsub.unsubscribe(ch)
+                self._subscribed.discard(ch)
+
     async def subscribe_user(self, user_id: str):
         if not self._pubsub:
             return

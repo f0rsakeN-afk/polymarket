@@ -42,7 +42,8 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
 
     setStatus("connecting")
 
-    const ws = new WebSocket(`${config.wsUrl}/ws/notifications/${userIdRef.current}`)
+    const token = document.cookie.split("; ").find((r) => r.startsWith("access_token="))?.split("=")[1] ?? ""
+    const ws = new WebSocket(`${config.wsUrl}/ws/notifications/${userIdRef.current}?token=${encodeURIComponent(token)}`)
     wsRef.current = ws
 
     ws.onopen = () => {

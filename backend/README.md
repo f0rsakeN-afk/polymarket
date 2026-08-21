@@ -27,7 +27,7 @@ uv run alembic upgrade head
 ### Docker Compose (Production-ready)
 
 ```bash
-# Start everything (API × 4 replicas, celery × 2 workers, postgres, redis, nginx)
+# Start everything (API × 4 replicas, celery × 2 workers, postgres, redis)
 cp .env.example .env    # fill in secrets
 docker compose up --build -d
 
@@ -152,16 +152,10 @@ Swagger UI: http://localhost:8000/docs
 ### Architecture
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │              nginx :8000                │
-                    │         (load balancer / reverse proxy)   │
-                    └─────────────────┬───────────────────────┘
-                                      │
-              ┌───────────────────────┼───────────────────────┐
+              ┌───────────────────────┬───────────────────────┐
               │                       │                       │
          ┌────┴────┐           ┌────┴────┐           ┌────┴────┐
          │  api1   │           │  api2   │           │  api3   │
-         │ (4 wks) │           │ (4 wks) │           │ (4 wks) │
          └────┬────┘           └────┬────┘           └────┬────┘
               │                       │                       │
               └───────────────────────┼───────────────────────┘
@@ -183,7 +177,6 @@ Swagger UI: http://localhost:8000/docs
 | `celery_beat` | 1 | — | — |
 | `postgres` | 1 | — | — |
 | `redis` | 1 | — | — |
-| `nginx` | 1 | — | — |
 
 ### Resource Limits (per container)
 
@@ -193,16 +186,14 @@ Swagger UI: http://localhost:8000/docs
 | `celery_worker` | 1GB | 65536 |
 | `postgres` | 1GB | — |
 | `redis` | 768MB | — |
-| `nginx` | — | 65536 |
 
 ### Files
 
 ```
 backend/
-├── Dockerfile              # API image (uvicorn 4 workers)
+├── Dockerfile              # API image (uvicorn)
 ├── Dockerfile.worker       # Celery worker image
 ├── docker-compose.yml      # Full stack
-├── nginx/nginx.conf       # Load balancer config
 └── scripts/postgres.conf  # PostgreSQL tuning
 ```
 
@@ -1467,7 +1458,7 @@ wscat -c ws://localhost:8000/ws/markets/<MARKET_ID>
 ### WebSocket connections timing out
 
 - Nginx default keepalive is 65s — WS routes use `proxy_read_timeout 7d` to handle long connections
-- If using Docker, make sure `nginx` container has `nofile` limit raised (set in docker-compose.yml)
+- If using Docker, make sure `api` container has `nofile` limit raised (set in docker-compose.yml)
 
 ### "Connection limit exceeded" errors on WebSocket
 
@@ -1527,7 +1518,7 @@ cat celerybeat-schedule
 |------|--------------|-----|
 | Redis Sentinel/Cluster | >10k WS connections per Redis instance | Add 1 replica, promote to master on failure |
 | PostgreSQL read replica | >5k read-heavy queries/sec | Set `DATABASE_REPLICA_URL` in `.env` |
-| CDN (Cloudflare/Fastly) | Static assets, orderbook snapshots | Point at nginx, cache at edge |
+| CDN (Cloudflare/Fastly) | Static assets, orderbook snapshots | Point at API, cache at edge |
 | Vertical scaling (more RAM/CPU) | Bottleneck on single box | Scale API containers horizontally first |
 | Separate Celery queues | Different task SLAs | Split `check_markets_ready_to_resolve` into its own queue |
 

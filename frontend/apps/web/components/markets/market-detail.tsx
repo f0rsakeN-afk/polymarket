@@ -282,7 +282,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
                       <div className="text-lg font-bold text-green-500">${Number(market.yes_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.bids?.[0] ? `${Number(orderbookData.bids[0].size).toFixed(0)} shares` : ""}
+                        {orderbookData?.data?.bids?.[0] ? `${Number(orderbookData.data.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
@@ -290,7 +290,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
                       <div className="text-lg font-bold text-red-500">${Number(market.no_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.asks?.[0] ? `${Number(orderbookData.asks[0].size).toFixed(0)} shares` : ""}
+                        {orderbookData?.data?.asks?.[0] ? `${Number(orderbookData.data.asks[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                   </>

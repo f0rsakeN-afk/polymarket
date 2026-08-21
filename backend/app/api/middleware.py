@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from collections.abc import Callable
 
@@ -11,22 +12,31 @@ from app.services.rate_limit_service import LimitType, RateLimitService
 
 logger = logging.getLogger("polymarket")
 
+# Trusted proxy chain — only honour X-Forwarded-For when the request came from one of these.
+# In Docker/K8s: set TRUSTED_PROXY_IPS="10.0.0.0/8,172.16.0.0/12" etc.
+_TRUSTED_PROXIES: list[str] = [
+    ip.strip()
+    for ip in os.environ.get("TRUSTED_PROXY_IPS", "").split(",")
+    if ip.strip()
+]
+
 
 def _get_client_ip(request: Request) -> str:
     """
-    Get real client IP, accounting for proxies.
-    X-Forwarded-For format: <client>, <proxy1>, <proxy2>
-    Leftmost is the original client (unless trust proxy is configured).
-    Falls back to request.client.host.
+    Get real client IP.  X-Forwarded-For is only trusted when the direct
+    connection is from a known proxy IP — spoofing is otherwise trivially easy.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # Leftmost IP is the original client
-        client_ip = forwarded.split(",")[0].strip()
-        return RateLimitService._normalize_ip(client_ip)
-    if request.client:
-        return RateLimitService._normalize_ip(request.client.host)
-    return "unknown"
+    # If request came from a trusted proxy, use X-Forwarded-For; otherwise ignore it.
+    direct_ip = request.client.host if request.client else None
+
+    if direct_ip in _TRUSTED_PROXIES:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+            return RateLimitService._normalize_ip(client_ip)
+
+    # Fall back to direct connection IP (or "unknown" for Unix sockets)
+    return RateLimitService._normalize_ip(direct_ip or "unknown")
 
 
 def _get_auth_limit_type(path: str) -> LimitType:

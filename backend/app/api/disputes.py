@@ -10,7 +10,7 @@ from app.api.responses import success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.dispute import Dispute
-from app.models.market import Market
+from app.models.market import Market, Outcome
 from app.models.user import User
 from app.schemas.dispute import (
     AdjudicateDisputeRequest,
@@ -18,6 +18,7 @@ from app.schemas.dispute import (
     DisputeResponse,
     ProposeResolutionRequest,
 )
+from app.services.cache_service import cache_invalidate_market, cache_invalidate_market_lists
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("polymarket")
@@ -53,6 +54,10 @@ async def create_dispute(
     market.status = "dispute_window"
     await db.commit()
     await db.refresh(dispute)
+
+    # Invalidate market cache so clients see the updated status immediately
+    await cache_invalidate_market(str(market.id))
+    await cache_invalidate_market_lists()
 
     await NotificationService.dispatch(
         db,
@@ -90,12 +95,22 @@ async def propose_resolution(
     if market.status != "active":
         raise ValidationError("Market must be active to resolve")
 
+    # Validate that the proposed outcome belongs to this market
+    outcome_result = await db.execute(
+        select(Outcome).where(Outcome.id == req.outcome_id, Outcome.market_id == req.market_id)
+    )
+    if not outcome_result.scalar_one_or_none():
+        raise ValidationError("Outcome does not belong to this market")
+
     market.proposed_outcome_id = req.outcome_id
     market.resolution_source = req.resolution_source
     market.resolution_proposed_at = datetime.now(UTC)
     market.dispute_deadline = datetime.now(UTC) + timedelta(hours=DISPUTE_WINDOW_HOURS)
     market.status = "dispute_window"
     await db.commit()
+
+    await cache_invalidate_market(str(market.id))
+    await cache_invalidate_market_lists()
 
     return success_response({"message": "Resolution proposed, dispute window open for 48 hours"})
 
@@ -108,6 +123,8 @@ async def get_disputes_for_market(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    if not current_user.is_admin:
+        raise ForbiddenError("Admin access required to view disputes")
     result = await db.execute(
         select(Dispute, User.username)
         .join(User, Dispute.user_id == User.id)
@@ -157,6 +174,8 @@ async def adjudicate_dispute(
     await db.commit()
 
     if req.ruling == "upheld":
+        from app.workers.tasks import resolve_market  # avoid top-level circular import
+
         market_result = await db.execute(select(Market).where(Market.id == dispute.market_id))
         market = market_result.scalar_one_or_none()
         if market and market.proposed_outcome_id:
@@ -164,6 +183,9 @@ async def adjudicate_dispute(
             market.winning_outcome_id = market.proposed_outcome_id
             market.resolved_at = datetime.now(UTC)
             await db.commit()
+
+            # Dispatch settlement in background — payout/settlement is async
+            resolve_market.delay(str(market.id), str(market.proposed_outcome_id))
 
             await NotificationService.dispatch(
                 db,

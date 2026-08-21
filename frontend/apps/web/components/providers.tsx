@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useState } from "react"
 import { AuthProvider } from "@/hooks/use-auth-context"
+import { MarketSocketProvider } from "@/hooks/use-market-socket"
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -20,7 +21,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   )
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>{children}</AuthProvider>
+      <AuthProvider>
+        <MarketSocketProvider>{children}</MarketSocketProvider>
+      </AuthProvider>
     </QueryClientProvider>
   )
 }

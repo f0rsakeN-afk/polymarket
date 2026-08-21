@@ -271,7 +271,7 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
 
     data = {"bids": bids, "asks": asks}
     await cache_set_orderbook(str(market.id), data, ttl=60)
-    return data
+    return success_response(data)
 
 
 @router.post("/")

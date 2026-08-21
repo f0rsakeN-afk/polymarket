@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
+
+logger = logging.getLogger("polymarket")
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -87,7 +90,11 @@ async def is_token_blacklisted(jti: str) -> bool:
         result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
         return result is not None
     except Exception:
-        raise UnauthorizedError("Token blacklist check unavailable")  # Fail closed
+        # Fail-open: if Redis is unreachable, assume token is NOT blacklisted.
+        # Token will still be rejected at natural expiry (JWT `exp` claim).
+        # This prevents Redis outages from locking out all users.
+        logger.warning(f"Redis unavailable for blacklist check — allowing (jti={jti})")
+        return False
 
 
 async def blacklist_token(jti: str, ttl_seconds: int):
@@ -96,7 +103,10 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         r = await get_redis()
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
-        raise RuntimeError("Failed to blacklist token")  # Fail closed
+        # Fail-open: Redis/Sentinel outage must not block logout.
+        # Token remains valid until natural expiry (15min) — acceptable window.
+        # Authenticated requests continue to work; re-login required after TTL.
+        logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
 
 
 async def get_current_user(
