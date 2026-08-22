@@ -3,10 +3,14 @@ Scalable WebSocket connection manager for 50k+ concurrent users.
 
 Key design decisions for scale:
 - Per-market locks: broadcasts to different markets never block each other
+- Per-socket locks: concurrent subscribe/unsubscribe on same socket don't corrupt state
 - Fire-and-forget send: each socket send is an independent asyncio task,
   one slow socket doesn't block others
 - Async dead-socket cleanup: doesn't block the broadcast path
-- Connection caps per IP and per user: prevents resource exhaustion attacks
+- Connection caps per IP and per user: prevents file-descriptor exhaustion
+- Per-socket subscription registry with server-side filtering:
+  a client only receives updates for markets it explicitly subscribed to
+- Per-socket subscription cap: prevents memory exhaustion from malicious clients
 """
 
 import asyncio
@@ -54,17 +58,25 @@ class ConnectionManager:
 
     Scales to 50k+ connections by:
     1. Per-market locks — broadcasts to market A never block market B
-    2. Fire-and-forget send — each socket gets its own asyncio task
-    3. Connection limits — prevents file-descriptor exhaustion per IP/user
-    4. Async dead-socket cleanup — doesn't block active broadcasts
+    2. Per-socket locks — concurrent subscribe/unsubscribe on same socket are safe
+    3. Fire-and-forget send — each socket gets its own asyncio task
+    4. Connection limits — prevents file-descriptor exhaustion per IP/user
+    5. Per-socket subscription cap — prevents memory exhaustion attacks
+    6. Per-socket subscription registry — server-side filter so a client only
+       receives updates for markets it explicitly subscribed to
+    7. Async dead-socket cleanup — doesn't block active broadcasts
     """
 
     MAX_CONNECTIONS_PER_IP = 10
     MAX_CONNECTIONS_PER_USER = 5
+    MAX_SUBSCRIPTIONS_PER_SOCKET = 50  # cap per connection to prevent abuse
 
     def __init__(self):
         self._market_subs: dict[str, set[WebSocket]] = defaultdict(set)
-        self._ws_to_market: dict[WebSocket, str] = {}
+        # Per-socket subscription registry: which markets each WS is subscribed to
+        self._ws_subscriptions: dict[WebSocket, set[str]] = defaultdict(set)
+        # Per-socket lock: serialises subscribe/unsubscribe/disconnect for same WS
+        self._ws_locks: dict[WebSocket, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._ip_connections: dict[str, int] = defaultdict(int)
         self._user_connections: dict[str, int] = defaultdict(int)
 
@@ -75,7 +87,7 @@ class ConnectionManager:
         client_ip: str | None = None,
         user_id: str | None = None,
     ) -> bool:
-        """Accept a WS connection and subscribe to a market. Returns False if rejected."""
+        """Accept a WS connection and subscribe to initial market. Returns False if rejected."""
         if client_ip and self._ip_connections.get(client_ip, 0) >= self.MAX_CONNECTIONS_PER_IP:
             logger.warning(f"WS rejected: too many connections from IP {client_ip}")
             return False
@@ -84,10 +96,16 @@ class ConnectionManager:
             return False
 
         await websocket.accept()
+
+        # Add to market subscriber set
         lock = await _market_locks._get_lock(market_id)
         async with lock:
             self._market_subs[market_id].add(websocket)
-            self._ws_to_market[websocket] = market_id
+
+        # Register subscription under per-socket lock
+        ws_lock = self._ws_locks[websocket]
+        async with ws_lock:
+            self._ws_subscriptions[websocket].add(market_id)
 
         if client_ip:
             self._ip_connections[client_ip] += 1
@@ -97,47 +115,110 @@ class ConnectionManager:
         logger.info(f"WS connected: market={market_id} ip={client_ip} user={user_id}")
         return True
 
-    async def switch_market(self, websocket: WebSocket, new_market_id: str):
-        old = self._ws_to_market.get(websocket)
-        if old == new_market_id:
-            return
+    async def subscribe_to_market(
+        self, websocket: WebSocket, market_id: str, redis_pubsub_ref=None
+    ):
+        """
+        Add a market subscription without removing existing ones.
+        Idempotent — calling twice is safe.
+        Returns True if subscribed, False if rejected (cap reached or already subscribed).
+        """
+        ws_lock = self._ws_locks[websocket]
 
-        if old:
-            lock = await _market_locks._get_lock(old)
-            async with lock:
-                self._market_subs[old].discard(websocket)
-                if not self._market_subs[old]:
-                    del self._market_subs[old]
+        async with ws_lock:
+            subs = self._ws_subscriptions[websocket]
 
-        lock = await _market_locks._get_lock(new_market_id)
+            if market_id in subs:
+                return True  # already subscribed, idempotent
+
+            if len(subs) >= self.MAX_SUBSCRIPTIONS_PER_SOCKET:
+                logger.warning(
+                    f"WS subscription rejected: cap reached on socket {id(websocket)}"
+                )
+                return False
+
+            subs.add(market_id)
+
+        # Update market subscriber set (outside ws_lock to avoid deadlocking two socket locks)
+        lock = await _market_locks._get_lock(market_id)
         async with lock:
-            self._market_subs[new_market_id].add(websocket)
-            self._ws_to_market[websocket] = new_market_id
+            self._market_subs[market_id].add(websocket)
 
-        logger.info(f"WS switched: {old} -> {new_market_id}")
+        # Subscribe to Redis channel for this market (fire-and-forget)
+        if redis_pubsub_ref:
+            asyncio.create_task(redis_pubsub_ref.subscribe_market(market_id))
 
-    async def disconnect(self, websocket: WebSocket, client_ip: str | None = None, user_id: str | None = None):
-        market_id = self._ws_to_market.pop(websocket, None)
-        if market_id:
+        logger.debug(f"WS subscribed to market: {market_id}")
+        return True
+
+    async def unsubscribe_from_market(
+        self, websocket: WebSocket, market_id: str, redis_pubsub_ref=None
+    ):
+        """Remove a market subscription. Keeps other subscriptions intact. Idempotent."""
+        ws_lock = self._ws_locks[websocket]
+
+        async with ws_lock:
+            subs = self._ws_subscriptions.get(websocket)
+            if not subs or market_id not in subs:
+                return  # already unsubscribed, idempotent
+            subs.discard(market_id)
+
+        # Update market subscriber set (outside ws_lock)
+        lock = await _market_locks._get_lock(market_id)
+        async with lock:
+            self._market_subs[market_id].discard(websocket)
+            if not self._market_subs[market_id]:
+                del self._market_subs[market_id]
+
+        # Unsubscribe from Redis channel (fire-and-forget)
+        if redis_pubsub_ref:
+            asyncio.create_task(redis_pubsub_ref.unsubscribe_market(market_id))
+
+        logger.debug(f"WS unsubscribed from market: {market_id}")
+
+    async def disconnect(self, websocket: WebSocket, redis_pubsub_ref=None):
+        """Remove a WS connection and clean up all its subscriptions."""
+        ws_lock = self._ws_locks.pop(websocket, None)
+
+        if ws_lock:
+            async with ws_lock:
+                market_ids = list(self._ws_subscriptions.pop(websocket, set()))
+        else:
+            market_ids = list(self._ws_subscriptions.pop(websocket, set()))
+
+        # Clean up each market's subscriber set
+        for market_id in market_ids:
             lock = await _market_locks._get_lock(market_id)
             async with lock:
                 self._market_subs[market_id].discard(websocket)
                 if not self._market_subs[market_id]:
                     del self._market_subs[market_id]
 
-        if client_ip and self._ip_connections.get(client_ip, 0) > 0:
-            self._ip_connections[client_ip] -= 1
-        if user_id and self._user_connections.get(user_id, 0) > 0:
-            self._user_connections[user_id] -= 1
+        # Unsubscribe from all Redis channels this socket was listening to
+        if redis_pubsub_ref:
+            for market_id in market_ids:
+                asyncio.create_task(redis_pubsub_ref.unsubscribe_market(market_id))
 
-        logger.debug(f"WS disconnected: market={market_id}")
+        logger.debug(f"WS disconnected: {len(market_ids)} subscriptions cleaned up")
 
     async def broadcast_to_market(self, market_id: str, event: dict):
-        """Fire-and-forget broadcast — does not block on slow sockets."""
+        """
+        Fire-and-forget broadcast — only to sockets subscribed to this market.
+        Safely copies the socket list before iteration.
+        """
         lock = await _market_locks._get_lock(market_id)
         async with lock:
-            sockets = list(self._market_subs.get(market_id, set()))
+            raw_sockets = list(self._market_subs.get(market_id, set()))
 
+        if not raw_sockets:
+            return
+
+        # Filter: only send to connections that actually subscribed to this market
+        def is_subscribed(ws: WebSocket) -> bool:
+            subs = self._ws_subscriptions.get(ws)
+            return subs is not None and market_id in subs
+
+        sockets = [ws for ws in raw_sockets if is_subscribed(ws)]
         if not sockets:
             return
 
@@ -147,14 +228,15 @@ class ConnectionManager:
             except Exception:
                 pass
 
-        # Fire-and-forget: all sends run concurrently
+        # Fire-and-forget: all sends run concurrently, cleanup runs in background
         await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
-        # Cleanup dead sockets in background (non-blocking)
         asyncio.create_task(self._cleanup_dead(sockets))
 
     async def _cleanup_dead(self, sockets: list[WebSocket]):
+        """Ping dead sockets and disconnect if they don't respond."""
         for ws in sockets:
-            if ws not in self._ws_to_market:
+            # Skip if already disconnected
+            if ws not in self._ws_subscriptions:
                 continue
             try:
                 await ws.send_json({"type": "ping"})
@@ -162,6 +244,7 @@ class ConnectionManager:
                 await self.disconnect(ws)
 
     async def broadcast_global(self, event: dict):
+        """Broadcast to all connected sockets regardless of subscription."""
         all_sockets: list[WebSocket] = []
         async with _market_locks._global:
             for socks in self._market_subs.values():
@@ -183,7 +266,7 @@ class ConnectionManager:
         return len(self._market_subs.get(market_id, set()))
 
     def total_connections(self) -> int:
-        return len(self._ws_to_market)
+        return len(self._ws_subscriptions)
 
 
 manager = ConnectionManager()
@@ -244,7 +327,7 @@ class UserConnectionManager:
 user_manager = UserConnectionManager()
 
 
-# ── Redis Pub/Sub ───────────────────────────────────────────────────────────────
+# ── Redis Pub/Sub ─────────────────────────────────────────────────────────────
 
 
 class RedisPubSub:
@@ -391,7 +474,6 @@ class RedisPubSub:
                     if len(parts) >= 2:
                         prefix, target = parts[0], parts[1]
                         if prefix == "market":
-                            # Fire-and-forget: don't let a slow broadcast block the listener
                             asyncio.create_task(manager.broadcast_to_market(target, data))
                         elif prefix == "user":
                             asyncio.create_task(user_manager.broadcast_to_user(target, data))

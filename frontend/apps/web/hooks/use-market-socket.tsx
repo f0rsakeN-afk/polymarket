@@ -1,106 +1,192 @@
 "use client"
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { config } from "@/lib/config"
 
 export type WSStatus = "connecting" | "connected" | "disconnected" | "error"
 
-interface UseMarketSocketOptions {
-  marketId: string
-  onMessage: (data: unknown) => void
-  enabled?: boolean
-}
-
-// ─── Shared connection per market via module-level singleton ────────────────────
-
 type MessageHandler = (data: unknown) => void
 
-interface SharedSocket {
+// ─── Per-market subscription state ─────────────────────────────────────────────
+
+interface MarketSub {
+  /** Sequence number — incrementing counter used to discard stale messages */
+  seq: number
+  /** Set of handlers currently subscribed to this market */
+  handlers: Set<MessageHandler>
+  /** Whether a WS subscribe message has been sent to the server for this market */
+  wsSubscribed: boolean
+}
+
+// ─── Shared connection singleton ────────────────────────────────────────────────
+
+interface SharedConnection {
   ws: WebSocket | null
   status: WSStatus
-  handlers: Set<MessageHandler>
+  /** Per-market subscription metadata */
+  subs: Map<string, MarketSub>
+  /** Per-market mutex — prevents double-subscribe on rapid add/remove */
+  subLocks: Map<string, boolean>
   retries: number
-  timeout: ReturnType<typeof setTimeout> | null
-  marketId: string | null
+  reconnectTimer: ReturnType<typeof setTimeout> | null
+  /** All markets this WS is subscribed to on the server (re-subscribed on reconnect) */
+  serverSubs: Set<string>
+  /** Set of status-change handlers */
+  statusHandlers: Set<MessageHandler>
 }
 
-const sockets = new Map<string, SharedSocket>()
+// Module-level singleton — one WebSocket per browser tab
+let _conn: SharedConnection | null = null
 
-function getOrCreateSocket(marketId: string): SharedSocket {
-  if (!sockets.has(marketId)) {
-    sockets.set(marketId, {
+function getConnection(): SharedConnection {
+  if (!_conn) {
+    _conn = {
       ws: null,
       status: "disconnected",
-      handlers: new Set(),
+      subs: new Map(),
+      subLocks: new Map(),
       retries: 0,
-      timeout: null,
-      marketId,
-    })
+      reconnectTimer: null,
+      serverSubs: new Set(),
+      statusHandlers: new Set(),
+    }
   }
-  return sockets.get(marketId)!
+  return _conn
 }
 
-function closeSocket(sock: SharedSocket) {
-  if (sock.timeout) clearTimeout(sock.timeout)
-  sock.ws?.close()
-  sock.ws = null
-  sock.status = "disconnected"
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function setStatus(conn: SharedConnection, status: WSStatus) {
+  conn.status = status
+  for (const h of conn.statusHandlers) {
+    try { h({ type: "__ws_status__", status }) } catch { /* ignore */ }
+  }
 }
 
-function connectSocket(sock: SharedSocket) {
-  if (!sock.marketId) return
+function sendWs(conn: SharedConnection, data: unknown) {
+  if (conn.ws?.readyState === WebSocket.OPEN) {
+    conn.ws.send(JSON.stringify(data))
+  }
+}
 
-  sock.status = "connecting"
-  // Notify all subscribers of status change
-  notifyAll(sock, { type: "__ws_status__", status: "connecting" })
+/** Atomically subscribe to a market on the wire — mutex prevents double-send. */
+async function wsSubscribe(conn: SharedConnection, marketId: string): Promise<void> {
+  // Aquire per-market mutex
+  let locked = conn.subLocks.get(marketId)
+  while (locked) {
+    await new Promise((r) => setTimeout(r, 5))
+    locked = conn.subLocks.get(marketId)
+  }
+  conn.subLocks.set(marketId, true)
+  try {
+    const sub = conn.subs.get(marketId)
+    if (!sub || sub.wsSubscribed) return  // already sent
+    sendWs(conn, { type: "subscribe", market_id: marketId })
+    sub.wsSubscribed = true
+    conn.serverSubs.add(marketId)
+  } finally {
+    conn.subLocks.set(marketId, false)
+  }
+}
 
-  const ws = new WebSocket(`${config.wsUrl}/ws/markets/${sock.marketId}`)
-  sock.ws = ws
+/** Unsubscribe from a market on the wire. */
+function wsUnsubscribe(conn: SharedConnection, marketId: string) {
+  if (!conn.serverSubs.has(marketId)) return
+  sendWs(conn, { type: "unsubscribe", market_id: marketId })
+  conn.serverSubs.delete(marketId)
+  const sub = conn.subs.get(marketId)
+  if (sub) sub.wsSubscribed = false
+}
+
+// ─── Connect / Reconnect ────────────────────────────────────────────────────────
+
+function connect(conn: SharedConnection, firstMarketId: string) {
+  if (conn.ws) return  // already open or pending
+
+  const token = document.cookie
+    .split("; ")
+    .find((r) => r.startsWith("access_token="))
+    ?.split("=")[1] ?? ""
+
+  const ws = new WebSocket(
+    `${config.wsUrl}/ws/markets/${firstMarketId}?token=${encodeURIComponent(token)}`
+  )
+  conn.ws = ws
+  setStatus(conn, "connecting")
 
   ws.onopen = () => {
-    sock.status = "connected"
-    sock.retries = 0
-    notifyAll(sock, { type: "__ws_status__", status: "connected" })
+    conn.retries = 0
+    setStatus(conn, "connected")
+    // Re-subscribe to all markets we had active before the disconnect
+    for (const m of conn.serverSubs) {
+      ws.send(JSON.stringify({ type: "subscribe", market_id: m }))
+    }
+    // Also send any pending subscriptions that weren't yet ACKed
+    for (const [marketId, sub] of conn.subs) {
+      if (!sub.wsSubscribed) {
+        ws.send(JSON.stringify({ type: "subscribe", market_id: marketId }))
+        sub.wsSubscribed = true
+        conn.serverSubs.add(marketId)
+      }
+    }
   }
 
   ws.onmessage = (event) => {
+    let data: unknown
     try {
-      const data = JSON.parse(event.data as string)
-      sock.handlers.forEach((h) => h(data))
-    } catch { /* ignore parse errors */ }
+      data = typeof event.data === "string" ? JSON.parse(event.data) : event.data
+    } catch {
+      return  // ignore unparseable
+    }
+
+    const d = data as { market_id?: string; type?: string }
+    if (!d.market_id) return
+
+    const sub = conn.subs.get(d.market_id)
+    if (!sub) return  // no handler registered for this market — discard
+
+    // Increment seq so any in-flight messages from before an unsubscribe are dropped
+    sub.seq++
+
+    // Deliver to all handlers for this market — each in try/catch so one bad
+    // handler doesn't break the socket for other handlers or corrupt state
+    const currentSeq = sub.seq
+    for (const h of sub.handlers) {
+      try {
+        h(data)
+      } catch {
+        /* user handler threw — socket survives */
+      }
+      // If seq changed while iterating, a re-subscribe happened — stop delivering
+      // stale messages from before the re-subscribe
+      if (sub.seq !== currentSeq) break
+    }
   }
 
   ws.onclose = () => {
-    sock.status = "disconnected"
-    notifyAll(sock, { type: "__ws_status__", status: "disconnected" })
-    const delay = Math.min(1000 * Math.pow(2, sock.retries), 30_000)
-    sock.retries++
-    sock.timeout = setTimeout(() => connectSocket(sock), delay)
+    conn.ws = null
+    setStatus(conn, "disconnected")
+    const delay = Math.min(1000 * Math.pow(2, conn.retries), 30_000)
+    conn.retries++
+    conn.reconnectTimer = setTimeout(() => {
+      const first = conn.serverSubs.values().next().value
+        ?? conn.subs.keys().next().value
+        ?? "default"
+      connect(conn, first)
+    }, delay)
   }
 
   ws.onerror = () => {
-    sock.status = "error"
-    notifyAll(sock, { type: "__ws_status__", status: "error" })
+    setStatus(conn, "error")
     ws.close()
   }
-}
-
-function notifyAll(sock: SharedSocket, data: unknown) {
-  sock.handlers.forEach((h) => h(data))
 }
 
 // ─── Context ───────────────────────────────────────────────────────────────────
 
 interface MarketSocketCtx {
   subscribe: (marketId: string, handler: MessageHandler) => () => void
-  getStatus: (marketId: string) => WSStatus
+  getStatus: () => WSStatus
 }
 
 const MarketSocketContext = createContext<MarketSocketCtx>({
@@ -109,35 +195,59 @@ const MarketSocketContext = createContext<MarketSocketCtx>({
 })
 
 export function MarketSocketProvider({ children }: { children: React.ReactNode }) {
-  const handlersRef = useRef(new Map<string, Set<MessageHandler>>())
+  const conn = useRef<SharedConnection>(getConnection())
+  const [, tick] = useState(0)
 
   const subscribe = useCallback((marketId: string, handler: MessageHandler) => {
-    const sock = getOrCreateSocket(marketId)
+    const c = conn.current
 
-    // Attach handler (filter out the synthetic status events)
-    const wrapped: MessageHandler = (data) => {
-      if ((data as {type?: string}).type?.startsWith("__ws_")) return
-      handler(data)
+    // Initialise market sub if first subscriber
+    if (!c.subs.has(marketId)) {
+      c.subs.set(marketId, { seq: 0, handlers: new Set(), wsSubscribed: false })
     }
-    sock.handlers.add(wrapped)
+    const sub = c.subs.get(marketId)!
+    sub.handlers.add(handler)
 
-    // If this is the first handler for this market, open the socket
-    if (sock.handlers.size === 1) {
-      connectSocket(sock)
+    // If no WS open yet, connect to first subscribed market
+    if (!c.ws) {
+      connect(c, marketId)
+    } else {
+      // WS is open — subscribe on the wire if not already
+      wsSubscribe(c, marketId)
     }
 
     // Return unsubscribe
     return () => {
-      sock.handlers.delete(wrapped)
-      if (sock.handlers.size === 0) {
-        closeSocket(sock)
-        sockets.delete(marketId)
+      const currentSub = c.subs.get(marketId)
+      if (!currentSub) return
+
+      currentSub.handlers.delete(handler)
+
+      // Last handler for this market gone — unsubscribe from it on the wire
+      if (currentSub.handlers.size === 0) {
+        c.subs.delete(marketId)
+        wsUnsubscribe(c, marketId)
+
+        // If all markets desubscribed, close the WS
+        if (c.subs.size === 0) {
+          if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
+          c.ws?.close()
+          c.ws = null
+          setStatus(c, "disconnected")
+          c.retries = 0
+        }
       }
     }
   }, [])
 
-  const getStatus = useCallback((marketId: string) => {
-    return sockets.get(marketId)?.status ?? "disconnected"
+  const getStatus = useCallback(() => conn.current.status, [])
+
+  // Track status changes to force re-render so hooks see fresh status
+  useEffect(() => {
+    const c = conn.current
+    const statusHandler: MessageHandler = () => tick((n) => n + 1)
+    c.statusHandlers.add(statusHandler)
+    return () => { c.statusHandlers.delete(statusHandler) }
   }, [])
 
   return (
@@ -149,19 +259,21 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useMarketSocket({ marketId, onMessage, enabled = true }: UseMarketSocketOptions) {
+export function useMarketSocket({
+  marketId,
+  onMessage,
+  enabled = true,
+}: {
+  marketId: string
+  onMessage: (data: unknown) => void
+  enabled?: boolean
+}) {
   const [status, setStatus] = useState<WSStatus>("disconnected")
   const onMessageRef = useRef(onMessage)
-  const enabledRef = useRef(enabled)
   const marketIdRef = useRef(marketId)
 
-  // Keep refs fresh without re-subscribing
   useEffect(() => { onMessageRef.current = onMessage }, [onMessage])
-  useEffect(() => { enabledRef.current = enabled }, [enabled])
   useEffect(() => { marketIdRef.current = marketId }, [marketId])
-
-  const handlerRef = useRef<MessageHandler>(() => {})
-  handlerRef.current = (data: unknown) => onMessageRef.current(data)
 
   const ctx = useContext(MarketSocketContext)
 
@@ -169,24 +281,19 @@ export function useMarketSocket({ marketId, onMessage, enabled = true }: UseMark
     if (!enabled || !marketId) return () => {}
 
     const statusHandler: MessageHandler = (data) => {
-      const d = data as {type?: string; status?: WSStatus}
-      if (d.type === "__ws_status__" && d.status) {
-        setStatus(d.status)
-      }
+      const d = data as { type?: string; status?: WSStatus }
+      if (d.type === "__ws_status__" && d.status) setStatus(d.status)
     }
 
-    // Subscribe to both the user's message handler and status updates
-    const unsub = ctx.subscribe(marketId, handlerRef.current)
+    const unsubMsg = ctx.subscribe(marketId, (data) => onMessageRef.current(data))
     const unsubStatus = ctx.subscribe(marketId, statusHandler)
-
-    // Set initial status
-    setStatus(ctx.getStatus(marketId))
+    setStatus(ctx.getStatus())
 
     return () => {
-      unsub()
+      unsubMsg()
       unsubStatus()
     }
-  }, [enabled, marketId, ctx]) // intentionally NOT including onMessage
+  }, [enabled, marketId, ctx])
 
   return { status }
 }
