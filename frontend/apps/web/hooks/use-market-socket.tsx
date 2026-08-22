@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { config } from "@/lib/config"
 
 export type WSStatus = "connecting" | "connected" | "disconnected" | "error"
@@ -33,6 +33,8 @@ interface SharedConnection {
   serverSubs: Set<string>
   /** Set of status-change handlers */
   statusHandlers: Set<MessageHandler>
+  /** Market used in WS URL — the most recently active market for reconnect path */
+  lastConnectedMarket: string | null
 }
 
 // Module-level singleton — one WebSocket per browser tab
@@ -49,6 +51,7 @@ function getConnection(): SharedConnection {
       reconnectTimer: null,
       serverSubs: new Set(),
       statusHandlers: new Set(),
+      lastConnectedMarket: null,
     }
   }
   return _conn
@@ -103,14 +106,15 @@ function wsUnsubscribe(conn: SharedConnection, marketId: string) {
 function connect(conn: SharedConnection, firstMarketId: string) {
   if (conn.ws) return  // already open or pending
 
-  const token = document.cookie
-    .split("; ")
-    .find((r) => r.startsWith("access_token="))
-    ?.split("=")[1] ?? ""
+  // Clear any pending reconnect timer — prevents duplicate connections on rapid calls
+  if (conn.reconnectTimer) {
+    clearTimeout(conn.reconnectTimer)
+    conn.reconnectTimer = null
+  }
 
-  const ws = new WebSocket(
-    `${config.wsUrl}/ws/markets/${firstMarketId}?token=${encodeURIComponent(token)}`
-  )
+  // Auth: access_token cookie is sent automatically by the browser on WS handshake
+  conn.lastConnectedMarket = firstMarketId
+  const ws = new WebSocket(`${config.wsUrl}/ws/markets/${firstMarketId}`)
   conn.ws = ws
   setStatus(conn, "connecting")
 
@@ -168,12 +172,12 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     setStatus(conn, "disconnected")
     const delay = Math.min(1000 * Math.pow(2, conn.retries), 30_000)
     conn.retries++
-    conn.reconnectTimer = setTimeout(() => {
-      const first = conn.serverSubs.values().next().value
-        ?? conn.subs.keys().next().value
-        ?? "default"
-      connect(conn, first)
-    }, delay)
+    // Reconnect to the market the user is currently viewing — not the first subscribed
+    const market = conn.lastConnectedMarket
+      ?? conn.serverSubs.values().next().value
+      ?? conn.subs.keys().next().value
+      ?? "default"
+    conn.reconnectTimer = setTimeout(() => connect(conn, market), delay)
   }
 
   ws.onerror = () => {
@@ -189,9 +193,12 @@ interface MarketSocketCtx {
   getStatus: () => WSStatus
 }
 
+const NOOP_SUBSCRIBE = () => () => {}
+const NOOP_GET_STATUS = () => "disconnected" as WSStatus
+
 const MarketSocketContext = createContext<MarketSocketCtx>({
-  subscribe: () => () => {},
-  getStatus: () => "disconnected",
+  subscribe: NOOP_SUBSCRIBE,
+  getStatus: NOOP_GET_STATUS,
 })
 
 export function MarketSocketProvider({ children }: { children: React.ReactNode }) {
@@ -212,6 +219,8 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
     if (!c.ws) {
       connect(c, marketId)
     } else {
+      // Update the reconnect target to the most recently active market
+      c.lastConnectedMarket = marketId
       // WS is open — subscribe on the wire if not already
       wsSubscribe(c, marketId)
     }
@@ -226,6 +235,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
       // Last handler for this market gone — unsubscribe from it on the wire
       if (currentSub.handlers.size === 0) {
         c.subs.delete(marketId)
+        c.subLocks.delete(marketId)  // ponytail: prevent subLocks Map leak
         wsUnsubscribe(c, marketId)
 
         // If all markets desubscribed, close the WS
@@ -242,6 +252,8 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
 
   const getStatus = useCallback(() => conn.current.status, [])
 
+  const ctxValue = useMemo(() => ({ subscribe, getStatus }), [subscribe, getStatus])
+
   // Track status changes to force re-render so hooks see fresh status
   useEffect(() => {
     const c = conn.current
@@ -251,7 +263,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
   }, [])
 
   return (
-    <MarketSocketContext.Provider value={{ subscribe, getStatus }}>
+    <MarketSocketContext.Provider value={ctxValue}>
       {children}
     </MarketSocketContext.Provider>
   )

@@ -71,27 +71,52 @@ async def get_market_activity(
     )
     outcomes = outcomes_result.scalars().all()
 
-    # Group top holders by outcome
-    top_holders_by_outcome = {}
-    for outcome in outcomes:
-        holders_result = await db.execute(
-            select(Position, User.username)
-            .join(User, Position.user_id == User.id)
-            .where(Position.market_id == market.id, Position.outcome_id == outcome.id)
-            .order_by(Position.shares_held.desc())
-            .limit(10)
+    # Batch-fetch all top holders across all outcomes in two queries:
+    # 1. Windowed rank per outcome, 2. Join back to get usernames
+    outcome_ids = [o.id for o in outcomes]
+    outcome_name_map = {str(o.id): o.name for o in outcomes}
+
+    if outcome_ids:
+        from sqlalchemy import func, over
+        from sqlalchemy.orm import aliased
+
+        # Rank positions per outcome, fetch top 10 per outcome
+        ranked = (
+            select(
+                Position,
+                over(func.row_number(), partition_by=Position.outcome_id, order_by=Position.shares_held.desc()).label("rank")
+            )
+            .where(Position.market_id == market.id, Position.outcome_id.in_(outcome_ids))
+            .subquery()
         )
-        holders = []
-        for pos, username in holders_result:
-            holders.append({
+        top_positions = (
+            select(Position, User.username, ranked.c.rank)
+            .select_from(Position)
+            .join(User, Position.user_id == User.id)
+            .join(ranked, Position.id == ranked.c.id)
+            .where(ranked.c.rank <= 10)
+            .order_by(Position.outcome_id, ranked.c.rank)
+        )
+        positions_result = await db.execute(top_positions)
+    else:
+        positions_result = None
+
+    # Group by outcome
+    top_holders_by_outcome = {}
+    if positions_result:
+        for pos, username, _ in positions_result.all():
+            outcome_name = outcome_name_map.get(str(pos.outcome_id))
+            if not outcome_name:
+                continue
+            if outcome_name not in top_holders_by_outcome:
+                top_holders_by_outcome[outcome_name] = []
+            top_holders_by_outcome[outcome_name].append({
                 "user_id": str(pos.user_id),
                 "username": username,
                 "shares_held": str(pos.shares_held),
                 "average_price": str(pos.average_price),
                 "realized_pnl": str(pos.realized_pnl),
             })
-        if holders:
-            top_holders_by_outcome[outcome.name] = holders
 
     # Recent trades
     trades_result = await db.execute(

@@ -33,7 +33,9 @@ async def create_dispute(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    market_result = await db.execute(select(Market).where(Market.id == req.market_id))
+    market_result = await db.execute(
+        select(Market).where(Market.id == req.market_id).with_for_update()
+    )
     market = market_result.scalar_one_or_none()
     if not market:
         raise NotFoundError("Market not found")
@@ -182,10 +184,16 @@ async def adjudicate_dispute(
             market.status = "resolved"
             market.winning_outcome_id = market.proposed_outcome_id
             market.resolved_at = datetime.now(UTC)
-            await db.commit()
 
-            # Dispatch settlement in background — payout/settlement is async
-            resolve_market.delay(str(market.id), str(market.proposed_outcome_id))
+            # Queue settlement BEFORE commit — if broker is down we fail before
+            # the market is marked resolved in the DB, preventing orphaned resolution
+            try:
+                resolve_market.delay(str(market.id), str(market.proposed_outcome_id))
+            except Exception as e:
+                logger.error(f"Failed to enqueue settlement task for market {market.id}: {e}")
+                raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
+
+            await db.commit()
 
             await NotificationService.dispatch(
                 db,

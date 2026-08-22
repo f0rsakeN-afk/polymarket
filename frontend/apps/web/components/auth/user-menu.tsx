@@ -14,19 +14,13 @@ import {
 import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar";
 import { Button } from "@workspace/ui/components/button";
 import { useAuth } from "@/hooks/use-auth-context";
-import { authApi } from "@/lib/api/auth";
 
 export function UserMenu() {
   const { user, logout } = useAuth();
   const router = useRouter();
 
   const handleLogout = useCallback(async () => {
-    try {
-      await authApi.logout();
-    } catch {
-      // ignore
-    }
-    await logout();
+    await logout();  // logout() already calls authApi.logout() internally
     router.push("/");
   }, [logout, router]);
 
@@ -38,7 +32,7 @@ export function UserMenu() {
     );
   }
 
-  const initials = user.username
+  const initials = (user.username ?? user.email ?? "?")
     .split(/[_\- ]/)
     .map((p) => p[0] ?? "")
     .join("")

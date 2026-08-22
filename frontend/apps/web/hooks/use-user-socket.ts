@@ -42,8 +42,8 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
 
     setStatus("connecting")
 
-    const token = document.cookie.split("; ").find((r) => r.startsWith("access_token="))?.split("=")[1] ?? ""
-    const ws = new WebSocket(`${config.wsUrl}/ws/notifications/${userIdRef.current}?token=${encodeURIComponent(token)}`)
+    // Auth: access_token cookie is sent automatically by browser on WS handshake
+    const ws = new WebSocket(`${config.wsUrl}/ws/notifications/${userIdRef.current}`)
     wsRef.current = ws
 
     ws.onopen = () => {
@@ -83,6 +83,15 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
   }, [connect])
 
   useEffect(() => {
+    if (!enabled) {
+      // enabled flipped to false — close the socket immediately
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+      wsRef.current?.close()
+      wsRef.current = null
+      setStatus("disconnected")
+      return
+    }
+
     mountedRef.current = true
     connect()
 
@@ -92,7 +101,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [connect])
+  }, [connect, enabled])
 
   const send = useCallback((data: unknown) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

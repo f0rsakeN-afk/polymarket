@@ -96,18 +96,31 @@ def _issue_tokens(
 
 async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
     """
-    Revoke all non-revoked refresh tokens for a user.
+    Revoke all non-revoked refresh tokens for a user in a single UPDATE.
     Optionally keep one token (used by change-password to preserve current session).
     """
-    query = select(RefreshToken).where(
-        RefreshToken.user_id == user_id,
-        RefreshToken.revoked.is_(False),
+    from sqlalchemy import update
+    stmt = (
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked.is_(False),
+            # Conditionally exclude the token to keep (handled in Python for the hash check)
+        )
     )
-    result = await db.execute(query)
-    for token in result.scalars().all():
-        if keep_token_hash and token.token_hash == keep_token_hash:
-            continue
-        token.revoked = True
+    if keep_token_hash:
+        # We still fetch to filter in Python since we only have the hash, not the token value
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked.is_(False),
+            )
+        )
+        for token in result.scalars().all():
+            if token.token_hash != keep_token_hash:
+                token.revoked = True
+    else:
+        await db.execute(stmt.values(revoked=True))
 
 
 def _get_client_ip(request: Request) -> str:
@@ -594,12 +607,10 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request, db: Asy
 
 @router.post("/reset-password", summary="Reset password with code")
 async def reset_password(data: ResetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    strong, reason = PasswordStrengthService.check(data.new_password)
-    if not strong:
-        raise ValidationError(reason)
-
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
+
+    # Rate limit before OTP check
     rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
     if is_slowed and rl_result.retry_after:
         from fastapi import HTTPException
@@ -608,18 +619,26 @@ async def reset_password(data: ResetPasswordRequest, request: Request, db: Async
         from fastapi import HTTPException
         raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
 
+    # OTP verification must come BEFORE password strength check —
+    # prevents brute-forcing password policy without a valid OTP
     if not await OTPService.verify_code(data.email, _OTP_RESET, data.code):
         await RateLimitService.record_failure(data.email, ip)
         raise UnauthorizedError("Invalid or expired code")
 
     await RateLimitService.reset_friction(data.email, ip)
+
+    # Password strength check after OTP is verified
+    strong, reason = PasswordStrengthService.check(data.new_password)
+    if not strong:
+        raise ValidationError(reason)
+
     user_result = await db.execute(select(User).where(User.email == data.email))
     user = user_result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError("User not found")
 
     user.password_hash = hash_password(data.new_password)
-    _revoke_all_refresh_tokens(db, str(user.id))
+    await _revoke_all_refresh_tokens(db, str(user.id))
     await db.commit()
 
     await AuthAuditService.log_password_reset_success(db, data.email, str(user.id), ip, ua)
@@ -813,11 +832,9 @@ async def change_password(
     await _blacklist_access_token(request)
     current_refresh = request.cookies.get("refresh_token")
     await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
-    await db.commit()
-
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
-
     new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    # Single atomic commit: password change + token revocation + new tokens + audit log
     await db.commit()
     set_auth_cookies(response, new_access, new_refresh)
 

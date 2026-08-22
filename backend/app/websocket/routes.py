@@ -10,8 +10,10 @@ logger = logging.getLogger("polymarket")
 router = APIRouter(tags=["websocket"])
 
 
-async def verify_ws_token(token: str) -> str | None:
-    """Verify WS token and return user_id or None."""
+async def verify_ws_token(token: str | None) -> str | None:
+    """Verify WS token and return user_id or None. Token may be None (optional auth)."""
+    if not token:
+        return None
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
         if payload.get("type") != "access":
@@ -21,11 +23,25 @@ async def verify_ws_token(token: str) -> str | None:
         return None
 
 
+def _get_token_from_request(websocket: WebSocket) -> str | None:
+    """
+    Extract auth token from cookie first (secure), then query param (fallback).
+    Cookies are sent with WebSocket handshake in modern browsers.
+    """
+    # HttpOnly cookie set by set_auth_cookies
+    cookie_token = websocket.cookies.get("access_token")
+    if cookie_token:
+        return cookie_token
+    # Fallback: query param (for convenience / legacy compatibility)
+    return websocket.query_params.get("token")
+
+
 @router.websocket("/ws/markets/{market_id}")
-async def market_websocket(websocket: WebSocket, market_id: str, token: str = Query(...)):
+async def market_websocket(websocket: WebSocket, market_id: str):
     """
     Single multiplexed WebSocket connection per client.
 
+    Auth: access_token cookie (preferred) or ?token= query param (fallback).
     On connect the client is subscribed to `market_id`.
     The client may then send:
       - {type: "subscribe", market_id: "..."}  — add a market subscription
@@ -35,6 +51,7 @@ async def market_websocket(websocket: WebSocket, market_id: str, token: str = Qu
     The server enforces MAX_SUBSCRIPTIONS_PER_SOCKET (50) per connection.
     """
     client_ip = websocket.client[0] if websocket.client else None
+    token = _get_token_from_request(websocket)
     user_id = await verify_ws_token(token)
     if not user_id:
         await websocket.close(code=4001, reason="Unauthorized")
@@ -86,10 +103,11 @@ async def market_websocket(websocket: WebSocket, market_id: str, token: str = Qu
 
 
 @router.websocket("/ws/trades")
-async def global_trades_websocket(websocket: WebSocket, token: str | None = Query(None)):
+async def global_trades_websocket(websocket: WebSocket):
     """Global trades feed — streams all new trades across the platform."""
     client_ip = websocket.client[0] if websocket.client else None
-    user_id = await verify_ws_token(token) if token else None
+    token = _get_token_from_request(websocket)
+    user_id = await verify_ws_token(token)
     accepted = await manager.connect(
         websocket, "__global_trades__", client_ip=client_ip, user_id=user_id
     )
@@ -112,8 +130,9 @@ async def global_trades_websocket(websocket: WebSocket, token: str | None = Quer
 
 
 @router.websocket("/ws/notifications/{user_id}")
-async def user_notifications_websocket(websocket: WebSocket, user_id: str, token: str = Query(...)):
+async def user_notifications_websocket(websocket: WebSocket, user_id: str):
     """User notification channel — requires valid access token matching user_id."""
+    token = _get_token_from_request(websocket)
     authenticated_user_id = await verify_ws_token(token)
     if not authenticated_user_id or authenticated_user_id != user_id:
         await websocket.close(code=4001, reason="Unauthorized")

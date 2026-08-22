@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, memo } from "react"
+import { useState, useRef, useEffect, memo } from "react"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -74,6 +74,14 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
     onMessage: handleWSMessage,
     enabled: !!marketId,
   })
+
+  // Cancel RAF loop on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current)
+      animRef.current.clear()
+    }
+  }, [])
 
   return (
     <div className="relative h-12 overflow-hidden">

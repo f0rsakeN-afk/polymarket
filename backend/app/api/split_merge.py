@@ -89,7 +89,7 @@ async def split(
             ).with_for_update()
         )
         pos = pos_result.scalar_one_or_none()
-        if pos:
+        if pos is not None:
             total_cost = pos.average_price * pos.shares_held + amount_after_fee
             pos.shares_held += amount_after_fee
             pos.average_price = total_cost / pos.shares_held

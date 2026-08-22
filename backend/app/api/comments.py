@@ -111,13 +111,19 @@ async def list_comments(
     )
     rows = result.all()
 
-    # Count replies for each top-level comment
+    # Fetch all reply counts in a single batch query — avoids N queries
+    comment_ids = [c.id for c, _ in rows]
+    reply_counts: dict[str, int] = {}
+    if comment_ids:
+        reply_result = await db.execute(
+            select(Comment.parent_id, func.count(Comment.id))
+            .where(Comment.parent_id.in_(comment_ids))
+            .group_by(Comment.parent_id)
+        )
+        reply_counts = {str(parent_id): count for parent_id, count in reply_result.all()}
+
     comments_out = []
     for comment, username in rows:
-        reply_count_result = await db.execute(
-            select(func.count(Comment.id)).where(Comment.parent_id == comment.id)
-        )
-        reply_count = reply_count_result.scalar() or 0
 
         comments_out.append({
             "id": str(comment.id),
@@ -128,7 +134,7 @@ async def list_comments(
             "content": comment.content,
             "depth": comment.depth,
             "is_deleted": comment.is_deleted,
-            "reply_count": reply_count,
+            "reply_count": reply_counts.get(str(comment.id), 0),
             "created_at": comment.created_at,
             "updated_at": comment.updated_at,
         })

@@ -1,7 +1,7 @@
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,14 +82,27 @@ async def get_lp_position(
 @router.get("/liquidity/analytics")
 async def get_lp_analytics(
     request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
     user = await get_current_user(request, db)
+
+    # Count total for pagination
+    count_result = await db.execute(
+        select(LPShare)
+        .join(LiquidityPool, LPShare.pool_id == LiquidityPool.id)
+        .where(LPShare.user_id == user.id, LPShare.lp_tokens > 0)
+    )
+    total = len(count_result.all())  # small table, acceptable
+
     lp_result = await db.execute(
         select(LPShare, LiquidityPool, Market)
         .join(LiquidityPool, LPShare.pool_id == LiquidityPool.id)
         .join(Market, LiquidityPool.market_id == Market.id)
         .where(LPShare.user_id == user.id, LPShare.lp_tokens > 0)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     rows = lp_result.all()
 
@@ -126,6 +139,10 @@ async def get_lp_analytics(
 
     return success_response({
         "positions": positions,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (page * page_size) < total,
         "total_value": str(total_value),
         "total_deposited": str(sum(p["collateral_deposited"] for p in positions)),
         "total_pnl": str(total_value - Decimal(str(sum(p["collateral_deposited"] for p in positions)))),
