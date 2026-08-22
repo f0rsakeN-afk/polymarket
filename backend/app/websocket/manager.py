@@ -194,10 +194,13 @@ class ConnectionManager:
                 if not self._market_subs[market_id]:
                     del self._market_subs[market_id]
 
-        # Unsubscribe from all Redis channels this socket was listening to
+        # Unsubscribe from all Redis channels this socket was listening to.
+        # __global_trades__ and __notifications__ prefixes are not real market IDs
+        # and were subscribed via subscribe_global_trades / subscribe_user — skip them.
         if redis_pubsub_ref:
             for market_id in market_ids:
-                asyncio.create_task(redis_pubsub_ref.unsubscribe_market(market_id))
+                if not market_id.startswith("__"):
+                    asyncio.create_task(redis_pubsub_ref.unsubscribe_market(market_id))
 
         logger.debug(f"WS disconnected: {len(market_ids)} subscriptions cleaned up")
 

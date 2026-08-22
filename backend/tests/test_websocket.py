@@ -36,6 +36,7 @@ def test_market_websocket_connect_and_ping(ws_client, test_market, test_user):
     token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
@@ -48,6 +49,7 @@ def test_market_websocket_reconnect_subscribes_different_market(ws_client, test_
     token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         with ws_client.websocket_connect(f"/ws/markets/{new_market_id}?token={token}") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
@@ -60,6 +62,7 @@ def test_market_websocket_disconnect(ws_client, test_market, test_user):
     token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             pass  # context exits cleanly
 
@@ -70,6 +73,7 @@ def test_global_trades_websocket_connect_and_ping(ws_client):
     """WS connects to global trades feed and responds to ping."""
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         with ws_client.websocket_connect("/ws/trades") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
@@ -124,6 +128,7 @@ def test_market_websocket_unknown_message_type(ws_client, test_market, test_user
     token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "unknown_type", "data": "ignored"})
             # Should not raise — connection stays open
