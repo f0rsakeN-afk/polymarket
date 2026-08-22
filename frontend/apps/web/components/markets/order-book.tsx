@@ -10,6 +10,97 @@ function n(v: string | number | null | undefined, fallback = 0): number {
   return isNaN(parsed) ? fallback : parsed
 }
 
+function OutcomeOrderbook({
+  name,
+  bids,
+  asks,
+}: {
+  name: string
+  bids: OrderBookEntry[]
+  asks: OrderBookEntry[]
+}) {
+  const maxDepth = Math.max(
+    ...bids.map((b) => n(b.size)),
+    ...asks.map((a) => n(a.size)),
+    1
+  )
+
+  const bestBid = bids[0] ? n(bids[0].price) : null
+  const bestAsk = asks[0] ? n(asks[asks.length - 1].price) : null
+  const spread =
+    bestBid !== null && bestAsk !== null
+      ? ((bestAsk - bestBid) * 100).toFixed(2)
+      : null
+
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center justify-between px-1 mb-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground">{name}</span>
+        {spread !== null && (
+          <span className="text-[10px] text-muted-foreground">Spread {spread}%</span>
+        )}
+      </div>
+
+      {/* Column headers */}
+      <div className="flex items-center justify-between px-1 mb-1 text-[9px] uppercase tracking-wider text-muted-foreground">
+        <span>Bid</span>
+        <span>Price</span>
+        <span>Ask</span>
+      </div>
+
+      {/* Combined asks + bids rows */}
+      <div className="flex flex-col gap-0.5">
+        {/* Asks (sell orders) — lowest ask at bottom, shown right side */}
+        {[...asks].reverse().map((ask, i) => (
+          <div key={`ask-${i}`} className="relative h-5 overflow-hidden rounded-[3px]">
+            <div
+              className="absolute inset-y-0 right-0 bg-red-500/25"
+              style={{ width: `${(n(ask.size) / maxDepth) * 100}%` }}
+              aria-hidden="true"
+            />
+            <div className="absolute inset-y-0 flex items-center justify-between px-1.5 text-[10px]">
+              <span className="w-12 text-right text-red-400/60 font-medium">
+                {n(ask.size) > 0 ? n(ask.size).toFixed(0) : ""}
+              </span>
+              <span className="w-12 text-center font-semibold text-red-400">
+                ${n(ask.price).toFixed(3)}
+              </span>
+              <span className="w-12" />
+            </div>
+          </div>
+        ))}
+
+        {/* Spread divider */}
+        <div className="flex items-center justify-center py-0.5 my-0.5 rounded bg-muted/50">
+          <span className="text-[9px] font-semibold text-muted-foreground">
+            {spread !== null ? `${spread}% spread` : bestBid !== null ? "Bid side only" : "Ask side only"}
+          </span>
+        </div>
+
+        {/* Bids (buy orders) — highest bid at top */}
+        {bids.map((bid, i) => (
+          <div key={`bid-${i}`} className="relative h-5 overflow-hidden rounded-[3px]">
+            <div
+              className="absolute inset-y-0 right-0 bg-green-500/25"
+              style={{ width: `${(n(bid.size) / maxDepth) * 100}%` }}
+              aria-hidden="true"
+            />
+            <div className="absolute inset-y-0 flex items-center justify-between px-1.5 text-[10px]">
+              <span className="w-12 text-right text-green-400/60 font-medium">
+                {n(bid.size) > 0 ? n(bid.size).toFixed(0) : ""}
+              </span>
+              <span className="w-12 text-center font-semibold text-green-400">
+                ${n(bid.price).toFixed(3)}
+              </span>
+              <span className="w-12" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function OrderBook({ slug }: { slug: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["orderbook", slug] as const,
@@ -18,14 +109,7 @@ function OrderBook({ slug }: { slug: string }) {
     refetchInterval: 5000,
   })
 
-  const bids: OrderBookEntry[] = data?.data?.bids ?? []
-  const asks: OrderBookEntry[] = data?.data?.asks ?? []
-
-  const maxDepth = Math.max(
-    ...bids.map((b) => n(b.size)),
-    ...asks.map((a) => n(a.size)),
-    1
-  )
+  const outcomes = data?.data?.outcomes ?? {}
 
   if (isLoading) {
     return (
@@ -35,7 +119,8 @@ function OrderBook({ slug }: { slug: string }) {
     )
   }
 
-  if (bids.length === 0 && asks.length === 0) {
+  const outcomeNames = Object.keys(outcomes)
+  if (outcomeNames.length === 0) {
     return (
       <div className="py-10 text-center text-xs text-muted-foreground">
         No orders yet
@@ -43,97 +128,36 @@ function OrderBook({ slug }: { slug: string }) {
     )
   }
 
-  const bestBid = n(bids[0]?.price)
-  const bestAsk = n(asks[asks.length - 1]?.price)
-  const spread =
-    bids.length > 0 && asks.length > 0
-      ? ((bestAsk - bestBid) * 100).toFixed(2)
-      : null
+  // Two-column grid for binary markets, single column for multi-outcome
+  const isBinary = outcomeNames.length === 2
 
   return (
-    <section aria-label="Order book" className="space-y-2">
-      {/* Column headers */}
-      <div className="flex items-center justify-between px-1 mb-1">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          Price
-        </span>
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          Size
-        </span>
-      </div>
-
-      {/* Asks (sells) — reversed so lowest ask is at bottom */}
-      <div role="list" aria-label="Sell orders">
-        {[...asks]
-          .reverse()
-          .map((ask, i) => (
-            <div
-              key={`ask-${i}`}
-              role="listitem"
-              className="relative h-6 overflow-hidden rounded-sm"
-              aria-label={`Sell at $${n(ask.price).toFixed(3)}, size ${n(
-                ask.size
-              ).toFixed(0)}`}
-            >
-              <div
-                className="absolute inset-y-0 right-0 bg-red-500/20"
-                style={{ width: `${(n(ask.size) / maxDepth) * 100}%` }}
-                aria-hidden="true"
-              />
-              <div className="absolute inset-y-0 flex items-center justify-between px-2 text-xs">
-                <span className="text-red-400 font-medium">
-                  ${n(ask.price).toFixed(3)}
-                </span>
-                <span className="font-semibold text-red-400">
-                  {n(ask.size).toFixed(0)}
-                </span>
-              </div>
-            </div>
-          ))}
-      </div>
-
-      {/* Spread indicator */}
-      <div
-        className="flex items-center justify-center py-1"
-        role="status"
-        aria-label={spread ? `Spread ${spread}%` : "No spread"}
-      >
-        <span className="rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-          {spread
-            ? `Spread: ${spread}%`
-            : bids.length > 0
-              ? "Bid side"
-              : "Ask side"}
-        </span>
-      </div>
-
-      {/* Bids (buys) */}
-      <div role="list" aria-label="Buy orders">
-        {bids.map((bid, i) => (
-          <div
-            key={`bid-${i}`}
-            role="listitem"
-            className="relative h-6 overflow-hidden rounded-sm"
-            aria-label={`Buy at $${n(bid.price).toFixed(3)}, size ${n(
-              bid.size
-            ).toFixed(0)}`}
-          >
-            <div
-              className="absolute inset-y-0 right-0 bg-green-500/20"
-              style={{ width: `${(n(bid.size) / maxDepth) * 100}%` }}
-              aria-hidden="true"
+    <section aria-label="Order book" className="space-y-4">
+      {isBinary ? (
+        // Binary: YES and NO side by side
+        <div className="grid grid-cols-2 gap-6">
+          {outcomeNames.map((name) => (
+            <OutcomeOrderbook
+              key={name}
+              name={name}
+              bids={outcomes[name]?.bids ?? []}
+              asks={outcomes[name]?.asks ?? []}
             />
-            <div className="absolute inset-y-0 flex items-center justify-between px-2 text-xs">
-              <span className="text-green-400 font-medium">
-                ${n(bid.price).toFixed(3)}
-              </span>
-              <span className="font-semibold text-green-400">
-                {n(bid.size).toFixed(0)}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        // Multi-outcome: stacked
+        <div className="grid grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
+          {outcomeNames.map((name) => (
+            <OutcomeOrderbook
+              key={name}
+              name={name}
+              bids={outcomes[name]?.bids ?? []}
+              asks={outcomes[name]?.asks ?? []}
+            />
+          ))}
+        </div>
+      )}
     </section>
   )
 }

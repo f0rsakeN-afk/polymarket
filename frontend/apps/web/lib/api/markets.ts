@@ -147,15 +147,12 @@ export function getGlobalTrades(params?: {
 }
 
 export interface OrderBookEntry {
-  outcome_id: string
-  outcome: string
   price: string
   size: string
 }
 
 export interface OrderBook {
-  bids: OrderBookEntry[]
-  asks: OrderBookEntry[]
+  outcomes: Record<string, { bids: OrderBookEntry[]; asks: OrderBookEntry[] }>
 }
 
 export function getOrderBook(slug: string) {

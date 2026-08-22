@@ -237,6 +237,7 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
     pending = await db.execute(
         select(
             Order.outcome_id,
+            Order.side,
             Order.price,
             func.sum(Order.remaining_amount).label("total_size"),
         )
@@ -245,31 +246,35 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
             Order.status == "pending",
             Order.order_type.in_(["limit", "fill_or_kill"]),
         )
-        .group_by(Order.outcome_id, Order.price)
-        .order_by(Order.price.desc())
+        .group_by(Order.outcome_id, Order.side, Order.price)
+        .order_by(Order.outcome_id, Order.side, Order.price.desc())
     )
     rows = pending.all()
 
     outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id)
+        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
     )
-    outcome_names = {str(o.id): o.name.lower() for o in outcomes_result.scalars().all()}
+    outcomes = outcomes_result.scalars().all()
+    outcome_names = {str(o.id): o.name.lower() for o in outcomes}
 
-    bids = []
-    asks = []
+    # Structure: { outcome_name: { bids: [], asks: [] } }
+    outcome_orderbook: dict[str, dict[str, list[dict]]] = {
+        o.name.lower(): {"bids": [], "asks": []} for o in outcomes
+    }
     for row in rows:
+        outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
+        if outcome_name not in outcome_orderbook:
+            continue
         entry = {
-            "outcome_id": str(row.outcome_id),
-            "outcome": outcome_names.get(str(row.outcome_id), "unknown"),
             "price": str(row.price),
             "size": str(row.total_size),
         }
-        if entry["outcome"] == "yes":
-            bids.append(entry)
+        if row.side == "buy":
+            outcome_orderbook[outcome_name]["bids"].append(entry)
         else:
-            asks.append(entry)
+            outcome_orderbook[outcome_name]["asks"].append(entry)
 
-    data = {"bids": bids, "asks": asks}
+    data = {"outcomes": outcome_orderbook}
     await cache_set_orderbook(str(market.id), data, ttl=60)
     return success_response(data)
 
