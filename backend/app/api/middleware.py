@@ -71,8 +71,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for header, value in SECURITY_HEADERS.items():
             response.headers[header] = value
-        # HSTS only on HTTPS (prod)
-        if not settings.debug:
+        # HSTS only when running as production
+        if settings.app_env == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 

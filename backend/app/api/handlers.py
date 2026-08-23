@@ -1,4 +1,7 @@
 import logging
+import os
+import re
+from typing import Any
 
 from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +12,22 @@ from app.api.exceptions import AppException
 from app.api.responses import error_response
 
 logger = logging.getLogger("polymarket")
+
+# Read once at import time — does not change at runtime, only at startup.
+# Never use for security decisions; only for information exposure.
+_APP_ENV = os.environ.get("APP_ENV", "development")
+
+
+def _sanitise_for_client(message: str) -> str:
+    """Strip DB constraint names, file paths, and internal details from prod error messages."""
+    if _APP_ENV == "production":
+        # Remove constraint/key names from PostgreSQL errors (e.g. "Key (user_id)=(x) already exists")
+        message = re.sub(r'Key \([^)]+\)=\([^)]+\)', "[key]", message)
+        # Remove file path segments (e.g. /app/app/models/...)
+        message = re.sub(r'(?:\S*/){2,}\S*', "[internal]", message)
+        # Collapse whitespace
+        message = " ".join(message.split())
+    return message
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -49,7 +68,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 async def integrity_error_handler(request: Request, exc: IntegrityError):
+    # Log the full detail internally (including constraint name, table name)
     logger.error(f"DB integrity error: {exc} | path={request.url.path}")
+    # Client gets a sanitised message — never reveal constraint/key names in prod
+    sanitised = _sanitise_for_client(str(exc))
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content=error_response("Resource already exists or constraint violated", "DB_CONSTRAINT_ERROR"),
@@ -57,8 +79,17 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 
 
 async def generic_exception_handler(request: Request, exc: Exception):
+    # Always log the full stack trace internally
     logger.exception(f"Unhandled exception: {exc} | path={request.url.path}")
+    # In prod: hide exception type and message from client — only show generic text
+    if _APP_ENV == "production":
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_response("Internal server error", "INTERNAL_ERROR"),
+        )
+    # In dev/staging: include a safe hint (not the full traceback) so devs can debug
+    hint = _sanitise_for_client(str(exc))
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=error_response("Internal server error", "INTERNAL_ERROR"),
+        content=error_response("Internal server error — see server logs", "INTERNAL_ERROR", {"hint": hint}),
     )
