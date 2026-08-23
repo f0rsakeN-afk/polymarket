@@ -17,6 +17,26 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # DLQ: rejected / max-retries exceeded tasks go here for manual inspection
+    task_queues={
+        "celery": {
+            "exchange": "celery",
+            "routing_key": "celery",
+            "arguments": {
+                "x-dead-letter-exchange": "celery.dlx",
+                "x-dead-letter-routing-key": "celery.dlx",
+            },
+        },
+    },
+    # Declare the DLX so RabbitMQ creates it automatically
+    broker_transport_options={
+        "master_name": "rabbitmq-master",
+    },
+    # Fallback: Redis broker doesn't support DLX natively — this is a no-op there,
+    # but docker-compose / production should use RabbitMQ with the dlx arguments above.
+    worker_send_task_events=True,
+    task_send_sent_event=True,
     worker_prefetch_multiplier=1,
     worker_concurrency=4,  # cap to avoid overwhelming the DB; separate processes = separate connection pools
 )

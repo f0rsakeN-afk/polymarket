@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
@@ -523,37 +523,56 @@ async def resolve_market_endpoint(
     if market.status == "resolved":
         raise ValidationError("Market is already resolved")
 
-    outcome_result = await db.execute(
-        select(Outcome).where(
-            Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id
-        )
-    )
-    outcome = outcome_result.scalar_one_or_none()
-    if not outcome:
-        raise ValidationError("Winning outcome does not belong to this market")
-
-    market.status = "resolved"
-    market.winning_outcome_id = outcome.id
-    market.resolved_at = datetime.now(UTC)
-    await db.commit()
+    # Distributed lock: prevent two API pods from both resolving the same market.
+    # Uses Redis SETNX with TTL — lock is auto-released if this pod dies.
+    r = await get_redis()
+    lock_key = f"resolve_lock:{market.id}"
+    lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=30)
+    if not lock_acquired:
+        raise ConflictError("Market resolution is already in progress")
 
     try:
-        resolve_market.delay(str(market.id), str(outcome.id))
-    except Exception:
-        logger.exception(
-            f"Failed to queue market resolution task: market_id={market.id}"
+        outcome_result = await db.execute(
+            select(Outcome).where(
+                Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id
+            )
         )
+        outcome = outcome_result.scalar_one_or_none()
+        if not outcome:
+            raise ValidationError("Winning outcome does not belong to this market")
 
-    logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
-    await cache_invalidate_market(str(market.id))
-    await cache_invalidate_market_lists()
-    return success_response(
-        {
-            "slug": slug,
-            "winning_outcome_id": str(outcome.id),
-            "winning_outcome_name": outcome.name,
-        }
-    )
+        market.status = "resolved"
+        market.winning_outcome_id = outcome.id
+        market.resolved_at = datetime.now(UTC)
+        await db.commit()
+
+        # Queue-level idempotency: prevent two API workers from both enqueueing
+        # the resolve task.  SET NX returns False if key already exists (1h TTL).
+        task_dedup_key = f"resolve_task:{market.id}"
+        if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
+            raise ConflictError("Resolution task already enqueued")
+
+        try:
+            resolve_market.delay(str(market.id), str(outcome.id))
+        except Exception:
+            logger.exception(
+                f"Failed to queue market resolution task: market_id={market.id}"
+            )
+
+        logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
+        await cache_invalidate_market(str(market.id))
+        await cache_invalidate_market_lists()
+        return success_response(
+            {
+                "slug": slug,
+                "winning_outcome_id": str(outcome.id),
+                "winning_outcome_name": outcome.name,
+            }
+        )
+    finally:
+        # Release the distributed lock; 30s TTL is a safety net if we crash
+        # before this runs (lock auto-expires and market stays "resolved" — safe).
+        await r.delete(lock_key)
 
 
 @router.post("/{slug}/claim")

@@ -291,6 +291,8 @@ class UserConnectionManager:
         self._user_socks: dict[str, set[WebSocket]] = defaultdict(set)
         self._ws_to_user: dict[WebSocket, str] = {}
         self._user_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Track pending cleanup tasks so they can be awaited on shutdown
+        self._pending_cleanups: set[asyncio.Task[None]] = set()
 
     async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
