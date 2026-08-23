@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -61,6 +62,11 @@ _OTP_MAGIC = "magic"
 _OTP_RESET = "resetpwd"
 
 
+def _hash_refresh_token(token: str) -> str:
+    """Hash refresh token before storing — plaintext token never touches the DB."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def _issue_tokens(
     response: Response,
     user_id: str,
@@ -76,7 +82,7 @@ def _issue_tokens(
     token_record = RefreshToken(
         id=refresh_token_id,
         user_id=user_id,
-        token_hash=refresh_token_id,
+        token_hash=_hash_refresh_token(refresh_token_id),
         expires_at=expires_at,
         device_info=ua,
     )
@@ -129,6 +135,28 @@ def _get_client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _ip_matches(stored_ip: str, current_ip: str) -> bool:
+    """
+    Compare IPs with tolerance for NAT/proxies.
+    IPv4: compare first two octets (e.g. 1.2.x.x and 1.2.y.y match).
+    IPv6: compare first 64 bits.
+    """
+    def _normalized_parts(ip: str) -> list[str]:
+        # Strip port if present
+        ip = ip.split(",")[0].strip().split(":")[0]
+        parts = ip.split(".")
+        if len(parts) == 4:
+            return parts  # IPv4
+        return []  # skip IPv6 comparison for simplicity
+
+    stored = _normalized_parts(stored_ip)
+    current = _normalized_parts(current_ip)
+    if not stored or not current:
+        # Fallback: exact match required for unknown formats
+        return stored_ip == current_ip
+    return stored[:2] == current[:2]
 
 
 async def _blacklist_access_token(request: Request):
@@ -296,7 +324,7 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/magic-link/url", summary="Request one-click magic link URL via email")
-async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_db)):
+async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
@@ -305,9 +333,12 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
     if not user.is_email_verified:
         raise UnauthorizedError("Email not verified. Please register first.")
 
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent", "")[:200]
     token = str(uuid.uuid4())
     r = await get_redis()
-    await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user.id), ex=900))
+    # Store as "user_id:ip:ua" for IP-binding on verification
+    await redis_cb.call(lambda: r.set(f"magicurl:{token}", f"{user.id}:{ip}:{ua}", ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
@@ -322,8 +353,22 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         raise UnauthorizedError("Missing token")
 
     r = await get_redis()
-    user_id = await redis_cb.call(lambda: r.get(f"magicurl:{token}"))
-    if not user_id:
+    stored = await redis_cb.call(lambda: r.get(f"magicurl:{token}"))
+    if not stored:
+        raise UnauthorizedError("Invalid or expired link")
+
+    # Stored as "user_id:ip:ua" — split carefully since UUID has no colons
+    ip = _get_client_ip(request)
+    first_colon = stored.find(":")
+    user_id = stored[:first_colon] if first_colon != -1 else stored
+    rest = stored[first_colon + 1:] if first_colon != -1 else ""
+    second_colon = rest.find(":")
+    stored_ip = rest[:second_colon] if second_colon != -1 else rest
+    stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""
+
+    # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
+    if stored_ip and not _ip_matches(stored_ip, ip):
+        await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
         raise UnauthorizedError("Invalid or expired link")
 
     await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
@@ -339,7 +384,6 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         await redis_cb.call(lambda: r.set(f"partial:{partial}", user_id, ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
-    ip = _get_client_ip(request)
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
@@ -712,7 +756,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
         result = await db.execute(
-            select(RefreshToken).where(RefreshToken.token_hash == refresh_token)
+            select(RefreshToken).where(RefreshToken.token_hash == _hash_refresh_token(refresh_token))
         )
         token_record = result.scalar_one_or_none()
         if token_record:
@@ -831,7 +875,7 @@ async def change_password(
 
     await _blacklist_access_token(request)
     current_refresh = request.cookies.get("refresh_token")
-    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
+    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=_hash_refresh_token(current_refresh) if current_refresh else None)
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
     new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
     # Single atomic commit: password change + token revocation + new tokens + audit log
@@ -851,7 +895,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     result = await db.execute(
         select(RefreshToken)
         .where(
-            RefreshToken.token_hash == refresh_token,
+            RefreshToken.token_hash == _hash_refresh_token(refresh_token),
             RefreshToken.revoked.is_(False),
             RefreshToken.expires_at > datetime.now(UTC),
         )
@@ -873,7 +917,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     new_record = RefreshToken(
         id=new_refresh,
         user_id=token_record.user_id,
-        token_hash=new_refresh,
+        token_hash=_hash_refresh_token(new_refresh),
         expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
     )
     db.add(new_record)

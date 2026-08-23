@@ -1,5 +1,8 @@
 import asyncio
+import json
 import logging
+import time
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -68,65 +71,87 @@ def get_session():
 @shared_task(bind=True, name="app.workers.tasks.expire_stale_orders")
 def expire_stale_orders(self):
     """Cancel limit orders that have passed their expiry time."""
-    logger.info("Running expire_stale_orders")
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                now = datetime.now(UTC)
+                result = await db.execute(
+                    select(Order).where(
+                        Order.order_type.in_(["limit", "fill_or_kill"]),
+                        Order.status.in_(["pending", "partial"]),
+                        Order.expires_at <= now,
+                    ).with_for_update()
+                )
+                orders = result.scalars().all()
 
-    async def _run():
-        async with get_session() as db:
-            now = datetime.now(UTC)
-            result = await db.execute(
-                select(Order).where(
-                    Order.order_type.in_(["limit", "fill_or_kill"]),
-                    Order.status.in_(["pending", "partial"]),
-                    Order.expires_at <= now,
-                ).with_for_update()
-            )
-            orders = result.scalars().all()
+                if not orders:
+                    return "No orders to expire"
 
-            if not orders:
-                return "No orders to expire"
+                expired_ids = []
+                for order in orders:
+                    order.status = "expired"
+                    order.executed_at = datetime.now(UTC)
+                    if order.side == "buy" and order.amount:
+                        wallet_result = await db.execute(
+                            select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
+                        )
+                        wallet = wallet_result.scalar_one_or_none()
+                        if wallet:
+                            wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                    expired_ids.append(str(order.id))
 
-            expired_ids = []
-            for order in orders:
-                order.status = "expired"
-                order.executed_at = datetime.now(UTC)
-                if order.side == "buy" and order.amount:
-                    wallet_result = await db.execute(
-                        select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
-                    )
-                    wallet = wallet_result.scalar_one_or_none()
-                    if wallet:
-                        wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
-                expired_ids.append(str(order.id))
+                await db.commit()
 
-            await db.commit()
+                # Notify WebSocket clients
+                for order in orders:
+                    try:
+                        await redis_pubsub.publish_market_event(
+                            str(order.market_id), "order:expired", {"order_id": str(order.id)}
+                        )
+                    except Exception:
+                        pass
 
-            # Notify WebSocket clients
-            for order in orders:
-                try:
-                    await redis_pubsub.publish_market_event(
-                        str(order.market_id), "order:expired", {"order_id": str(order.id)}
-                    )
-                except Exception:
-                    pass
+                return f"Expired {len(expired_ids)} orders"
 
-            return f"Expired {len(expired_ids)} orders"
-
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_limit_order_execution")
 def check_limit_order_execution(self):
     """Check pending/partial limit orders and execute those whose price condition is met."""
-    logger.info("Running check_limit_order_execution")
-
-    async def _run():
-        async with get_session() as db:
-            now = datetime.now(UTC)
-            result = await db.execute(
-                select(Order).where(
-                    Order.order_type.in_(["limit", "fill_or_kill"]),
-                    Order.status.in_(["pending", "partial"]),
-                    Order.remaining_amount > 0,
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                now = datetime.now(UTC)
+                result = await db.execute(
+                    select(Order).where(
+                        Order.order_type.in_(["limit", "fill_or_kill"]),
+                        Order.status.in_(["pending", "partial"]),
+                        Order.remaining_amount > 0,
                 ).with_for_update()
             )
             orders = result.scalars().all()
@@ -370,24 +395,40 @@ def check_limit_order_execution(self):
 
             return f"Executed {executed}/{len(orders)} limit orders"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.sync_amm_prices")
 def sync_amm_prices(self):
     """Sync AMM prices from DB to Redis for fast reads."""
-    logger.info("Running sync_amm_prices")
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            from app.models import LiquidityPool, Market
+            from app.redis import get_redis
 
-    async def _run():
-        from app.models import LiquidityPool, Market
-        from app.redis import get_redis
-
-        async with get_session() as db:
-            result = await db.execute(
-                select(Market, LiquidityPool).join(
-                    LiquidityPool, Market.id == LiquidityPool.market_id
-                ).where(Market.status == "active")
-            )
+            async with get_session() as db:
+                result = await db.execute(
+                    select(Market, LiquidityPool).join(
+                        LiquidityPool, Market.id == LiquidityPool.market_id
+                    ).where(Market.status == "active")
+                )
             rows = result.all()
 
             if not rows:
@@ -415,22 +456,38 @@ def sync_amm_prices(self):
             await pipe.execute()
             return f"Synced prices for {len(rows)} markets"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.snapshot_price_history")
 def snapshot_price_history(self):
     """Snapshot current prices to price_history table for charting."""
-    logger.info("Running snapshot_price_history")
-
-    async def _run():
-        async with get_session() as db:
-            result = await db.execute(
-                select(Market, LiquidityPool).join(
-                    LiquidityPool, Market.id == LiquidityPool.market_id
-                ).where(Market.status == "active")
-            )
-            rows = result.all()
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                result = await db.execute(
+                    select(Market, LiquidityPool).join(
+                        LiquidityPool, Market.id == LiquidityPool.market_id
+                    ).where(Market.status == "active")
+                )
+                rows = result.all()
 
             if not rows:
                 return "No active markets"
@@ -482,22 +539,38 @@ def snapshot_price_history(self):
             await db.commit()
             return f"Snapshotted {len(snapshots)} price records for {len(rows)} markets"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_order_expiration")
 def check_order_expiration(self):
     """Cancel pending orders that have passed their expiry time."""
-    logger.info("Running check_order_expiration")
-
-    async def _run():
-        async with get_session() as db:
-            now = datetime.now(UTC)
-            result = await db.execute(
-                select(Order).where(
-                    Order.status == "pending",
-                    Order.expires_at.isnot(None),
-                    Order.expires_at <= now,
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                now = datetime.now(UTC)
+                result = await db.execute(
+                    select(Order).where(
+                        Order.status == "pending",
+                        Order.expires_at.isnot(None),
+                        Order.expires_at <= now,
                 ).with_for_update()
             )
             orders = result.scalars().all()
@@ -526,22 +599,38 @@ def check_order_expiration(self):
             await db.commit()
             return f"Cancelled {len(orders)} expired pending orders"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
 def check_markets_ready_to_resolve(self):
     """Close markets that have passed their close time but are not yet resolved."""
-    logger.info("Running check_markets_ready_to_resolve")
-
-    async def _run():
-        async with get_session() as db:
-            now = datetime.now(UTC)
-            result = await db.execute(
-                select(Market).where(
-                    Market.status == "active",
-                    Market.closes_at <= now,
-                    Market.winning_outcome_id.is_(None),
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                now = datetime.now(UTC)
+                result = await db.execute(
+                    select(Market).where(
+                        Market.status == "active",
+                        Market.closes_at <= now,
+                        Market.winning_outcome_id.is_(None),
                 )
             )
             markets = result.scalars().all()
@@ -555,22 +644,42 @@ def check_markets_ready_to_resolve(self):
             await db.commit()
             return f"Closed {len(markets)} markets"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.process_stripe_deposit")
 def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cents: int, payment_intent_id: str):
     """Process Stripe deposit (called by webhook handler as Celery task)."""
-    logger.info(f"Processing Stripe deposit: PI={payment_intent_id} user={user_id} amount={amount_cents}")
-
-    async def _run():
-        async with get_session() as db:
-            # Idempotency check
-            existing = await db.execute(
-                select(Transaction).where(
-                    Transaction.reference_id == payment_intent_id,
-                    Transaction.type == "deposit",
-                )
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "stripe_event_id": stripe_event_id,
+        "user_id": user_id,
+        "amount_cents": amount_cents,
+        "payment_intent_id": payment_intent_id,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                # Idempotency check
+                existing = await db.execute(
+                    select(Transaction).where(
+                        Transaction.reference_id == payment_intent_id,
+                        Transaction.type == "deposit",
+                    )
             )
             if existing.scalar_one_or_none():
                 return "Already processed"
@@ -597,7 +706,17 @@ def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cent
             await db.commit()
             return f"Credited {amount} to user {user_id}"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(
@@ -612,17 +731,25 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
     Settle a resolved market: credit winning positions and LP shares.
     Retries up to 3 times with exponential backoff on failure.
     """
-    logger.info(f"Running resolve_market: market={market_id} outcome={winning_outcome_id}")
-
-    async def _run():
-        async with get_session() as db:
-            # Lock market row to prevent concurrent resolution
-            market_result = await db.execute(
-                select(Market).where(Market.id == market_id).with_for_update()
-            )
-            market = market_result.scalar_one_or_none()
-            if not market:
-                return f"Market {market_id} not found"
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "market_id": market_id,
+        "winning_outcome_id": winning_outcome_id,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                # Lock market row to prevent concurrent resolution
+                market_result = await db.execute(
+                    select(Market).where(Market.id == market_id).with_for_update()
+                )
+                market = market_result.scalar_one_or_none()
+                if not market:
+                    return f"Market {market_id} not found"
             if market.status in ("resolving", "resolved"):
                 # Already being processed or already settled — skip to prevent double-settlement
                 return f"Market {market_id} already resolving/resolved (status={market.status})"
@@ -775,22 +902,41 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
             await db.commit()
             return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.check_price_alerts")
 def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
     """Check untriggered alerts when price updates and broadcast triggered ones via WebSocket."""
-    logger.info(f"Running check_price_alerts: market={market_id} yes={yes_price:.4f} no={no_price:.4f}")
-
-    async def _run():
-        async with get_session() as db:
-            result = await db.execute(
-                select(Alert).where(
-                    Alert.market_id == market_id,
-                    not Alert.triggered,
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "market_id": market_id,
+        "yes_price": yes_price,
+        "no_price": no_price,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                result = await db.execute(
+                    select(Alert).where(
+                        Alert.market_id == market_id,
+                        not Alert.triggered,
+                    )
                 )
-            )
             alerts = result.scalars().all()
             if not alerts:
                 return "No active alerts"
@@ -838,12 +984,31 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
             await db.commit()
             return f"Checked {len(alerts)} alerts, {triggered_count} triggered"
 
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.send_email", max_retries=3, default_retry_delay=60)
 def send_email(self, to_email: str, subject: str, body: str):
     """Send transactional email via Resend or Mailtrap SMTP."""
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "to_email": to_email,
+        "subject": subject,
+    }))
+    start = time.perf_counter()
     try:
         if settings.smtp_host:
             # Mailtrap / SMTP fallback
@@ -871,8 +1036,25 @@ def send_email(self, to_email: str, subject: str, body: str):
             })
             logger.info(f"Email sent via Resend to {to_email}: {subject}")
     except Exception as exc:
-        logger.error(f"Failed to send email to {to_email}: {exc}")
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_error",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "error_type": type(exc).__name__,
+            "error_message": str(exc)[:200],
+        }))
         raise self.retry(exc=exc)
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": "sent",
+        }))
 
 
 @shared_task(
@@ -886,36 +1068,55 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
     - magic     → login code OR magic URL
     - resetpwd  → password reset code
     """
-    if purpose == "verify":
-        subject = "Your Polymarket verification code"
-        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
-    elif purpose == "magic" and magic_url:
-        subject = "Your Polymarket login link"
-        body = (
-            f"Click this link to sign in: {magic_url}\n\n"
-            f"This link expires in 15 minutes. "
-            f"If you didn't request this, you can safely ignore this email."
-        )
-    elif purpose == "magic":
-        subject = "Your Polymarket login code"
-        body = (
-            f"Your login code is: {code}\n"
-            f"This code expires in 10 minutes. "
-            f"If you didn't request this, you can safely ignore this email."
-        )
-    elif purpose == "resetpwd":
-        subject = "Your Polymarket password reset code"
-        body = (
-            f"Your password reset code is: {code}\n"
-            f"This code expires in 10 minutes. "
-            f"If you didn't request this, your account is safe."
-        )
-    else:
-        subject = "Your Polymarket code"
-        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "email": email,
+        "purpose": purpose,
+    }))
+    start = time.perf_counter()
+    try:
+        if purpose == "verify":
+            subject = "Your Polymarket verification code"
+            body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+        elif purpose == "magic" and magic_url:
+            subject = "Your Polymarket login link"
+            body = (
+                f"Click this link to sign in: {magic_url}\n\n"
+                f"This link expires in 15 minutes. "
+                f"If you didn't request this, you can safely ignore this email."
+            )
+        elif purpose == "magic":
+            subject = "Your Polymarket login code"
+            body = (
+                f"Your login code is: {code}\n"
+                f"This code expires in 10 minutes. "
+                f"If you didn't request this, you can safely ignore this email."
+            )
+        elif purpose == "resetpwd":
+            subject = "Your Polymarket password reset code"
+            body = (
+                f"Your password reset code is: {code}\n"
+                f"This code expires in 10 minutes. "
+                f"If you didn't request this, your account is safe."
+            )
+        else:
+            subject = "Your Polymarket code"
+            body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
-    send_email.delay(to_email=email, subject=subject, body=body)
-    logger.info(f"Auth email prepared for {email}, purpose={purpose}")
+        send_email.delay(to_email=email, subject=subject, body=body)
+        logger.info(f"Auth email prepared for {email}, purpose={purpose}")
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": "prepared",
+        }))
 
 
 @shared_task(bind=True, name="app.workers.tasks.enqueue_otp")
@@ -924,66 +1125,101 @@ def enqueue_otp(self, email: str, purpose: str):
     Store OTP in Redis and dispatch the appropriate email via the send_email task.
     Called by auth routes as a fire-and-forget Celery task.
     """
-    import hashlib
-    import hmac
-    import random
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+        "email": email,
+        "purpose": purpose,
+    }))
+    start = time.perf_counter()
+    try:
+        import hashlib
+        import hmac
+        import random
 
-    def _get_secret(e: str, p: str) -> str:
-        import app.config
-        base = f"{app.config.settings.jwt_secret}:{e}:{p}"
-        return hashlib.sha256(base.encode()).hexdigest()[:32]
+        def _get_secret(e: str, p: str) -> str:
+            import app.config
+            base = f"{app.config.settings.jwt_secret}:{e}:{p}"
+            return hashlib.sha256(base.encode()).hexdigest()[:32]
 
-    def _hash_code(code: str, secret: str) -> str:
-        return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
+        def _hash_code(code: str, secret: str) -> str:
+            return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
 
-    def _generate_code() -> str:
-        return str(random.randint(100000, 999999))
+        def _generate_code() -> str:
+            return str(random.randint(100000, 999999))
 
-    code = _generate_code()
-    secret = _get_secret(email, purpose)
-    key = f"otp:{purpose}:{email}"
+        code = _generate_code()
+        secret = _get_secret(email, purpose)
+        key = f"otp:{purpose}:{email}"
 
-    # Store in Redis synchronously inside the task
-    import asyncio
-    async def _store():
-        from app.redis import get_redis, redis_cb
-        r = await get_redis()
-        await redis_cb.call(
-            lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
-        )
-    celery_run(_store())
+        # Store in Redis synchronously inside the task
+        import asyncio
+        async def _store():
+            from app.redis import get_redis, redis_cb
+            r = await get_redis()
+            await redis_cb.call(
+                lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
+            )
+        celery_run(_store())
 
-    # Build email content based on purpose
-    if purpose == "verify":
-        subject = "Your Polymarket verification code"
-        body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
-    elif purpose == "magic":
-        subject = "Your Polymarket login code"
-        body = f"Your login code is: {code}\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email."
-    elif purpose == "resetpwd":
-        subject = "Your Polymarket password reset code"
-        body = f"Your password reset code is: {code}\nThis code expires in 10 minutes. If you didn't request this, your account is safe."
-    else:
-        subject = "Your Polymarket code"
-        body = f"Your code is: {code}\nThis code expires in 10 minutes."
+        # Build email content based on purpose
+        if purpose == "verify":
+            subject = "Your Polymarket verification code"
+            body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
+        elif purpose == "magic":
+            subject = "Your Polymarket login code"
+            body = f"Your login code is: {code}\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email."
+        elif purpose == "resetpwd":
+            subject = "Your Polymarket password reset code"
+            body = f"Your password reset code is: {code}\nThis code expires in 10 minutes. If you didn't request this, your account is safe."
+        else:
+            subject = "Your Polymarket code"
+            body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
-    send_email.delay(to_email=email, subject=subject, body=body)
-    logger.info(f"OTP enqueued for {email}, purpose={purpose}")
+        send_email.delay(to_email=email, subject=subject, body=body)
+        logger.info(f"OTP enqueued for {email}, purpose={purpose}")
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": "enqueued",
+        }))
 
 
 
 @shared_task(bind=True, name="app.workers.tasks.distribute_protocol_fees")
 def distribute_protocol_fees(self):
     """Distribute accumulated protocol fees from all markets to the treasury."""
-    logger.info("Running distribute_protocol_fees")
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        async def _run():
+            async with get_session() as db:
+                result = await LiquidityService.distribute_protocol_fees(db)
+                logger.info(f"Protocol fees distributed: {result}")
+                return result
 
-    async def _run():
-        async with get_session() as db:
-            result = await LiquidityService.distribute_protocol_fees(db)
-            logger.info(f"Protocol fees distributed: {result}")
-            return result
-
-    return celery_run(_run())
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result
 
 
 @shared_task(bind=True, name="app.workers.tasks.cleanup_expired_sessions")
@@ -992,38 +1228,56 @@ def cleanup_expired_sessions(self):
     Delete expired sessions and refresh tokens from the DB.
     Runs daily to prevent table bloat.
     """
-    from datetime import UTC, datetime, timedelta
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    try:
+        from datetime import UTC, datetime, timedelta
 
-    async def _run():
-        async with get_session() as db:
-            now = datetime.now(UTC)
+        async def _run():
+            async with get_session() as db:
+                now = datetime.now(UTC)
 
-            # Delete expired refresh tokens
-            del_rt = await db.execute(
-                delete(RefreshToken).where(RefreshToken.expires_at < now)
-            )
-            rt_count = del_rt.rowcount
-
-            # Delete expired sessions
-            del_sess = await db.execute(
-                delete(Session).where(Session.expires_at < now)
-            )
-            sess_count = del_sess.rowcount
-
-            # Also delete revoked sessions older than 30 days
-            del_old = await db.execute(
-                delete(Session).where(
-                    Session.revoked.is_(True),
-                    Session.created_at < datetime.now(UTC) - timedelta(days=30),
+                # Delete expired refresh tokens
+                del_rt = await db.execute(
+                    delete(RefreshToken).where(RefreshToken.expires_at < now)
                 )
-            )
-            old_count = del_old.rowcount
+                rt_count = del_rt.rowcount
 
-            await db.commit()
-            return {
-                "refresh_tokens_expired": rt_count,
-                "sessions_expired": sess_count,
-                "sessions_revoked_old": old_count,
-            }
+                # Delete expired sessions
+                del_sess = await db.execute(
+                    delete(Session).where(Session.expires_at < now)
+                )
+                sess_count = del_sess.rowcount
 
-    return celery_run(_run())
+                # Also delete revoked sessions older than 30 days
+                del_old = await db.execute(
+                    delete(Session).where(
+                        Session.revoked.is_(True),
+                        Session.created_at < datetime.now(UTC) - timedelta(days=30),
+                    )
+                )
+                old_count = del_old.rowcount
+
+                await db.commit()
+                return {
+                    "refresh_tokens_expired": rt_count,
+                    "sessions_expired": sess_count,
+                    "sessions_revoked_old": old_count,
+                }
+
+        result = celery_run(_run())
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result

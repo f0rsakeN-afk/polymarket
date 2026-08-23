@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -32,8 +33,9 @@ def _get_client_ip(request: Request) -> str:
     if direct_ip in _TRUSTED_PROXIES:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            client_ip = forwarded.split(",")[0].strip()
-            return RateLimitService._normalize_ip(client_ip)
+            # Cap at 45 chars to prevent logging/storage abuse
+            raw = forwarded.split(",")[0].strip()[:45]
+            return RateLimitService._normalize_ip(raw)
 
     # Fall back to direct connection IP (or "unknown" for Unix sockets)
     return RateLimitService._normalize_ip(direct_ip or "unknown")
@@ -80,11 +82,21 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         start = time.perf_counter()
         method = request.method
         path = request.url.path
+        client_ip = _get_client_ip(request)
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            f"{method} {path} | status={response.status_code} duration={duration_ms:.1f}ms"
-        )
+
+        log_data = {
+            "request_id": getattr(request.state, "request_id", None),
+            "trace_id": getattr(request.state, "request_id", None),
+            "user_id": getattr(request.state, "user_id", None),
+            "method": method,
+            "path": path,
+            "status_code": response.status_code,
+            "latency_ms": round(duration_ms, 2),
+            "client_ip": client_ip,
+        }
+        logger.info(json.dumps(log_data, default=str))
         return response
 
 

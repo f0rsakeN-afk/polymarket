@@ -9,6 +9,7 @@ logger = logging.getLogger("polymarket")
 
 CODE_TTL = 600  # 10 minutes
 RATE_LIMIT_KEY_TTL = 300  # 5-minute verification attempt window
+SEND_RATE_LIMIT = 5  # max OTP codes generated per email+purpose per window
 
 
 class OTPService:
@@ -34,12 +35,30 @@ class OTPService:
         """
         Generate a 6-digit code and store hash in Redis.
         Returns the plain code — email dispatch is handled by the Celery worker.
+        Rate-limited to SEND_RATE_LIMIT codes per email+purpose per window.
         """
+        r = await get_redis()
+
+        # Rate limit OTP generation to prevent email bombing
+        send_key = f"otp_send:{purpose}:{email}"
+        send_result = await redis_cb.call(
+            lambda: r.eval(
+                OTPService._RATE_LIMIT_SCRIPT, 1,
+                send_key, SEND_RATE_LIMIT, RATE_LIMIT_KEY_TTL,
+            )
+        )
+        if send_result == -1:
+            logger.warning(f"OTP send rate limit exceeded for {email}, purpose={purpose}")
+            from app.api.exceptions import ValidationError
+            raise ValidationError("Too many codes sent. Please wait before requesting another.")
+        elif send_result == -2:
+            # key didn't exist, set TTL first
+            await redis_cb.call(lambda: r.expire(send_key, RATE_LIMIT_KEY_TTL))
+
         code = OTPService._generate_code()
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        r = await get_redis()
         await redis_cb.call(
             lambda: r.set(key, f"{code}:{OTPService._hash_code(code, secret)}", ex=CODE_TTL)
         )

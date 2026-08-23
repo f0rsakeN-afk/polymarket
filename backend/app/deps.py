@@ -91,8 +91,10 @@ async def is_token_blacklisted(jti: str) -> bool:
         return result is not None
     except Exception:
         # Fail-open: if Redis is unreachable, assume token is NOT blacklisted.
-        # Token will still be rejected at natural expiry (JWT `exp` claim).
-        # This prevents Redis outages from locking out all users.
+        # Token will still be rejected at natural expiry (JWT `exp` claim, max 15 min).
+        # SECURITY NOTE: a stolen token works during Redis outage. Acceptable trade-off —
+        # a Redis outage must not lock out the entire user base. Mitigant: Redis should be
+        # deployed HA (Sentinel) so this window is near-zero in practice.
         logger.warning(f"Redis unavailable for blacklist check — allowing (jti={jti})")
         return False
 
@@ -104,8 +106,8 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
         # Fail-open: Redis/Sentinel outage must not block logout.
-        # Token remains valid until natural expiry (15min) — acceptable window.
-        # Authenticated requests continue to work; re-login required after TTL.
+        # Token remains valid until natural expiry (15min). Acceptable window —
+        # Redis HA (Sentinel) makes this near-zero in practice.
         logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
 
 

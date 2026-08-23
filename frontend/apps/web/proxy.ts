@@ -105,8 +105,11 @@ export default async function proxy(request: NextRequest) {
   if (pathname.startsWith("/login") || pathname.startsWith("/signup")) {
     const { user } = await validateSession(request);
     if (user) {
-      const next = request.nextUrl.searchParams.get("next") ?? "/portfolio";
-      return NextResponse.redirect(new URL(next, request.url));
+      const rawNext = request.nextUrl.searchParams.get("next") ?? "/portfolio";
+    if (!rawNext.startsWith("/") || rawNext.startsWith("//")) {
+      return NextResponse.redirect(new URL("/portfolio", request.url));
+    }
+    return NextResponse.redirect(new URL(rawNext, request.url));
     }
     const response = NextResponse.next();
     setSecurityHeaders(response, request);

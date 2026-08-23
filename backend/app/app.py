@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -40,6 +41,7 @@ from app.api.wallet import router as wallet_router
 from app.api.webhooks import router as webhook_router
 from app.config import settings
 from app.database import _get_engine, _get_replica_engine
+from app.middleware.request_id import RequestIDMiddleware
 from app.models import Base
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
@@ -53,9 +55,63 @@ logging.basicConfig(
 logger = logging.getLogger("polymarket")
 
 
+def json_log(record: logging.LogRecord, **extra: object) -> str:
+    """Format a log record as a JSON string with standard fields plus any extra fields."""
+    out = {
+        "timestamp": record.created,
+        "level": record.levelname,
+        "logger": record.name,
+        "message": record.getMessage(),
+    }
+    out.update(extra)
+    return json.dumps(out, default=str)
+
+
+class JSONFormatter(logging.Formatter):
+    """Format log records as JSON strings when not in debug mode."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return json_log(record)
+
+
+if not settings.debug:
+    _json_handler = logging.StreamHandler()
+    _json_handler.setFormatter(JSONFormatter())
+    logger.addHandler(_json_handler)
+    logger.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
+
+    # Fail fast: all secrets must be set via environment variables
+    if settings.totp_encryption_key == "change-me-in-production":
+        raise RuntimeError(
+            "totp_encryption_key is using its default placeholder value. "
+            "Set TOTP_ENCRYPTION_KEY environment variable to a secure random value before deploying."
+        )
+    if settings.jwt_secret == "change-me-in-production":
+        raise RuntimeError(
+            "jwt_secret is using its default placeholder value. "
+            "Set JWT_SECRET environment variable to a secure random value before deploying."
+        )
+    if settings.secret_key == "change-me-in-production":
+        raise RuntimeError(
+            "secret_key is using its default placeholder value. "
+            "Set SECRET_KEY environment variable to a secure random value before deploying."
+        )
+
+    # Warn if TRUSTED_PROXY_IPS is not set — IP-based rate limiting can be spoofed
+    # behind an untrusted proxy (the direct connection IP will be the proxy's IP, not the real client)
+    import os
+    if not settings.debug and not os.environ.get("TRUSTED_PROXY_IPS", "").strip():
+        logger.warning(
+            "TRUSTED_PROXY_IPS is not set. X-Forwarded-For will be ignored for IP identification. "
+            "Set TRUSTED_PROXY_IPS if running behind a reverse proxy (e.g. nginx, caddy, cloudflare). "
+            "Example: TRUSTED_PROXY_IPS=10.0.0.0/8,172.16.0.0/12"
+        )
+
     async with _get_engine().begin() as conn:
         existing_tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         if not existing_tables:
@@ -85,9 +141,9 @@ app = FastAPI(
     description="Polymarket-style prediction market API with AMM trading, real-time prices, and Stripe deposits.",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
 
 origins = [o.strip() for o in settings.cors_origins.split(",")]
@@ -105,6 +161,7 @@ app.add_middleware(
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware, enabled=settings.rate_limit_enabled)
 
 # Exception handlers
@@ -144,30 +201,40 @@ async def health():
 @app.get("/health/ready")
 async def health_ready():
     """Readiness probe — verifies DB and Redis connectivity."""
+    import time
+
     checks = {}
     unhealthy = False
 
     # Check DB
     try:
         from sqlalchemy import text
+        t0 = time.perf_counter()
         async with _get_engine().begin() as conn:
             await conn.execute(text("SELECT 1"))
-        checks["db"] = "ok"
+        latency_ms = (time.perf_counter() - t0) * 1000
+        checks["db"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
     except Exception as e:
-        checks["db"] = f"error: {e}"
+        checks["db"] = {"status": "error", "latency_ms": None, "error": str(e)}
         unhealthy = True
 
     # Check Redis
     try:
         from app.redis import get_redis, redis_cb
+        t0 = time.perf_counter()
         r = await get_redis()
         await redis_cb.call(lambda: r.ping())
-        checks["redis"] = "ok"
+        latency_ms = (time.perf_counter() - t0) * 1000
+        checks["redis"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
     except Exception as e:
-        checks["redis"] = f"error: {e}"
+        checks["redis"] = {"status": "error", "latency_ms": None, "error": str(e)}
         unhealthy = True
 
-    return {"status": "ok" if not unhealthy else "degraded", "checks": checks}
+    return {
+        "status": "ok" if not unhealthy else "degraded",
+        "checks": checks,
+        "version": app.version,
+    }
 
 
 @app.get("/")

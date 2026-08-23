@@ -1,0 +1,83 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}/polymarket-backend
+  IMAGE: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ env.REGISTRY }}:${{ env.IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}:${{ env.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for app health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://${{ vars.DEPLOY_HOST }}/health > /dev/null 2>&1; then
+              echo "App is healthy"
+              exit 0
+            fi
+            echo "Waiting for app... ($i/30)"
+            sleep 10
+          done
+          echo "Health check timed out"
+          exit 1
+
+      - name: Deploy with docker-compose
+        env:
+          IMAGE: ${{ env.REGISTRY }}:${{ env.IMAGE }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
+          REDIS_SENTINEL_HOSTS: ${{ vars.REDIS_SENTINEL_HOSTS }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        run: |
+          cd deploy
+          IMAGE=$IMAGE \
+          DEPLOY_HOST=$DEPLOY_HOST \
+          POSTGRES_HOST=$POSTGRES_HOST \
+          REDIS_SENTINEL_HOSTS=$REDIS_SENTINEL_HOSTS \
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+          REDIS_PASSWORD=$REDIS_PASSWORD \
+          SECRET_KEY=$SECRET_KEY \
+          docker-compose -f docker-compose.prod.yml up -d --scale app=2
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smoke test
+        run: |
+          curl -sf http://${{ vars.DEPLOY_HOST }}/health || exit 1

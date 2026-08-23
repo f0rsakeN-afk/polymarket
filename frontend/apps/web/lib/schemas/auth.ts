@@ -17,7 +17,7 @@ export const registerSchema = z.object({
     .string()
     .min(8, "Password must be at least 8 characters")
     .max(128, "Password is too long"),
-  referral_code: z.string().optional(),
+  referral_code: z.string().max(50, "Referral code too long").optional(),
 });
 
 export const verifyOtpSchema = z.object({
