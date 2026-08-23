@@ -37,13 +37,11 @@ class MarketLockTable:
 
     def __init__(self):
         self._locks: dict[str, asyncio.Lock] = {}
-        self._global = asyncio.Lock()
 
     async def _get_lock(self, market_id: str) -> asyncio.Lock:
-        async with self._global:
-            if market_id not in self._locks:
-                self._locks[market_id] = asyncio.Lock()
-            return self._locks[market_id]
+        # setdefault is atomic for the specific key — no global lock needed.
+        # Each market_id gets its own asyncio.Lock, created exactly once.
+        return self._locks.setdefault(market_id, asyncio.Lock())
 
 
 _market_locks = MarketLockTable()
@@ -79,6 +77,8 @@ class ConnectionManager:
         self._ws_locks: dict[WebSocket, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._ip_connections: dict[str, int] = defaultdict(int)
         self._user_connections: dict[str, int] = defaultdict(int)
+        # Track pending cleanup tasks so they can be awaited on shutdown
+        self._pending_cleanups: set[asyncio.Task[None]] = set()
 
     async def connect(
         self,
@@ -233,7 +233,9 @@ class ConnectionManager:
 
         # Fire-and-forget: all sends run concurrently, cleanup runs in background
         await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
-        asyncio.create_task(self._cleanup_dead(sockets))
+        task = asyncio.create_task(self._cleanup_dead(sockets))
+        self._pending_cleanups.add(task)
+        task.add_done_callback(self._pending_cleanups.discard)
 
     async def _cleanup_dead(self, sockets: list[WebSocket]):
         """Ping dead sockets and disconnect if they don't respond."""
@@ -248,10 +250,12 @@ class ConnectionManager:
 
     async def broadcast_global(self, event: dict):
         """Broadcast to all connected sockets regardless of subscription."""
+        # Snapshot the current market -> sockets mapping without holding any lock.
+        # A concurrent modification may miss some sockets in one iteration — acceptable
+        # for periodic pings; the next broadcast will catch them.
         all_sockets: list[WebSocket] = []
-        async with _market_locks._global:
-            for socks in self._market_subs.values():
-                all_sockets.extend(socks)
+        for socks in self._market_subs.values():
+            all_sockets.extend(socks)
 
         if not all_sockets:
             return
@@ -263,7 +267,9 @@ class ConnectionManager:
                 pass
 
         await asyncio.gather(*(safe_send(ws) for ws in all_sockets), return_exceptions=True)
-        asyncio.create_task(self._cleanup_dead(all_sockets))
+        task = asyncio.create_task(self._cleanup_dead(all_sockets))
+        self._pending_cleanups.add(task)
+        task.add_done_callback(self._pending_cleanups.discard)
 
     def subscriber_count(self, market_id: str) -> int:
         return len(self._market_subs.get(market_id, set()))
@@ -315,7 +321,9 @@ class UserConnectionManager:
                 pass
 
         await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
-        asyncio.create_task(self._cleanup_dead_user(user_id, sockets))
+        task = asyncio.create_task(self._cleanup_dead_user(user_id, sockets))
+        self._pending_cleanups.add(task)
+        task.add_done_callback(self._pending_cleanups.discard)
 
     async def _cleanup_dead_user(self, user_id: str, sockets: list[WebSocket]):
         for ws in sockets:

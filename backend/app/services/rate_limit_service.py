@@ -61,7 +61,8 @@ return {0, remaining}
 """
 
 # Progressive friction: tracks failed attempts and returns a delay to apply.
-# Delays: attempt 5 → 1s, 6 → 2s, 7 → 4s, 8 → 8s, 9+ → 16s (capped).
+# Lockout activates at max_attempts (checked BEFORE increment — not after).
+# Delays: attempt max_attempts → 1s, max_attempts+1 → 2s, etc. (capped at 16s).
 # KEYS[1] = friction_key, ARGV[1] = max_attempts, ARGV[2] = lockout_seconds, ARGV[3] = now
 PROGRESSIVE_FRICTION_SCRIPT = """
 local key = KEYS[1]
@@ -79,8 +80,7 @@ if unlock_at > now then
     return {0, remaining, 1}  -- is_locked=1
 end
 
--- Increment and recalculate
-attempts = attempts + 1
+-- Check BEFORE increment — lockout fires at max_attempts, not max_attempts+1
 local delay = 0
 local is_locked = 0
 
@@ -90,6 +90,8 @@ if attempts >= max_attempts then
     unlock_at = now + delay
     is_locked = 1
 end
+
+attempts = attempts + 1
 
 redis.call('HSET', key, 'attempts', attempts, 'unlock_at', unlock_at)
 redis.call('EXPIRE', key, lockout)

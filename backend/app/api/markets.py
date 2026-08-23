@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -128,13 +129,25 @@ async def list_markets(
         pipe.hgetall(f"market:{m.id}:price")
     price_data = await pipe.execute()
 
+    # Collect missing market IDs and fetch all missing prices concurrently
+    missing_indices = []
+    for i, (market, pool) in enumerate(rows):
+        pd = price_data[i]
+        if not (pd and "yes_price" in pd and "no_price" in pd):
+            missing_indices.append(i)
+
+    if missing_indices:
+        missing_ids = [str(rows[i][0].id) for i in missing_indices]
+        results = await asyncio.gather(*[MarketService.get_market_prices(id) for id in missing_ids])
+        price_map = dict(zip(missing_ids, results))
+
     market_responses = []
     for i, (market, pool) in enumerate(rows):
         pd = price_data[i]
         if pd and "yes_price" in pd and "no_price" in pd:
             yes_price, no_price = float(pd["yes_price"]), float(pd["no_price"])
         else:
-            yes_price, no_price = await MarketService.get_market_prices(str(market.id))
+            yes_price, no_price = price_map[str(market.id)]
         market_responses.append(market_to_response(market, yes_price, no_price))
 
     # Targeted outcome query using page market IDs

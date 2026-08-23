@@ -105,9 +105,11 @@ class RedisCircuitBreaker:
         self._last_failure: float = 0
         self._state = "closed"  # closed | open | half_open
         self._lock = asyncio.Lock()
+        self._half_open_sem = asyncio.Semaphore(1)
 
     async def call(self, op):
         """Call an async op with circuit breaker protection. Lock is NOT held during I/O."""
+        half_open_acquired = False
         async with self._lock:
             if self._state == "open":
                 if time.time() - self._last_failure >= self.recovery_timeout:
@@ -115,7 +117,8 @@ class RedisCircuitBreaker:
                 else:
                     raise redis.RedisError("Redis circuit breaker open")
             elif self._state == "half_open":
-                pass  # allow one test through
+                await self._half_open_sem.acquire()
+                half_open_acquired = True
 
         try:
             result = await op()
@@ -130,6 +133,9 @@ class RedisCircuitBreaker:
                 if self._failures >= self.failure_threshold:
                     self._state = "open"
             raise e
+        finally:
+            if half_open_acquired:
+                self._half_open_sem.release()
 
 
 redis_cb = RedisCircuitBreaker()

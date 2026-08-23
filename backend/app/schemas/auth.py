@@ -26,6 +26,10 @@ class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
 
+class VerifyMagicUrlRequest(BaseModel):
+    token: str
+
+
 class MagicLinkRequest(BaseModel):
     email: EmailStr
 

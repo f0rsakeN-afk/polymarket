@@ -188,4 +188,3 @@ async def user_notifications_websocket(websocket: WebSocket, user_id: str):
     except Exception:
         logger.exception(f"User WS error: user={user_id}")
         await user_manager.disconnect(websocket, user_id)
-        await user_manager.disconnect(websocket, user_id)

@@ -45,6 +45,7 @@ from app.schemas.auth import (
     TwoFactorSetupResponse,
     VerifyEmailRequest,
     VerifyMagicRequest,
+    VerifyMagicUrlRequest,
 )
 from app.services.audit_service import AuthAuditService
 from app.services.email_service import EmailService
@@ -102,31 +103,30 @@ def _issue_tokens(
 
 async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
     """
-    Revoke all non-revoked refresh tokens for a user in a single UPDATE.
+    Revoke all non-revoked refresh tokens for a user in a single atomic UPDATE.
     Optionally keep one token (used by change-password to preserve current session).
     """
     from sqlalchemy import update
-    stmt = (
-        update(RefreshToken)
-        .where(
-            RefreshToken.user_id == user_id,
-            RefreshToken.revoked.is_(False),
-            # Conditionally exclude the token to keep (handled in Python for the hash check)
-        )
-    )
     if keep_token_hash:
-        # We still fetch to filter in Python since we only have the hash, not the token value
-        result = await db.execute(
-            select(RefreshToken).where(
+        # Atomic UPDATE excluding the token to keep — no Python-side SELECT loop
+        await db.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked.is_(False),
+                RefreshToken.token_hash != keep_token_hash,
+            )
+            .values(revoked=True)
+        )
+    else:
+        await db.execute(
+            update(RefreshToken)
+            .where(
                 RefreshToken.user_id == user_id,
                 RefreshToken.revoked.is_(False),
             )
+            .values(revoked=True)
         )
-        for token in result.scalars().all():
-            if token.token_hash != keep_token_hash:
-                token.revoked = True
-    else:
-        await db.execute(stmt.values(revoked=True))
 
 
 def _get_client_ip(request: Request) -> str:
@@ -140,23 +140,35 @@ def _get_client_ip(request: Request) -> str:
 def _ip_matches(stored_ip: str, current_ip: str) -> bool:
     """
     Compare IPs with tolerance for NAT/proxies.
-    IPv4: compare first two octets (e.g. 1.2.x.x and 1.2.y.y match).
-    IPv6: compare first 64 bits.
+    IPv4: compare first three octets (e.g. 1.2.3.x and 1.2.3.y match).
+    IPv6: compare first 48 bits (/48).
     """
-    def _normalized_parts(ip: str) -> list[str]:
+    def _normalized_parts(ip: str) -> tuple[list[str] | None, bool]:
         # Strip port if present
         ip = ip.split(",")[0].strip().split(":")[0]
         parts = ip.split(".")
         if len(parts) == 4:
-            return parts  # IPv4
-        return []  # skip IPv6 comparison for simplicity
+            return parts, True  # IPv4
+        if ":" in ip:
+            # IPv6 — take first 3 groups (48 bits)
+            groups = ip.split(":")
+            return groups[:3], False
+        return None, False
 
-    stored = _normalized_parts(stored_ip)
-    current = _normalized_parts(current_ip)
-    if not stored or not current:
+    stored_parts, stored_is_v4 = _normalized_parts(stored_ip)
+    current_parts, current_is_v4 = _normalized_parts(current_ip)
+    if not stored_parts or not current_parts:
         # Fallback: exact match required for unknown formats
         return stored_ip == current_ip
-    return stored[:2] == current[:2]
+    if stored_is_v4 and current_is_v4:
+        # ponytail: 3-octet match is a balance between NAT tolerance and security.
+        # Upgrade to /24 (4 octets) if full subnet isolation is needed.
+        return stored_parts[:3] == current_parts[:3]
+    # IPv6 — compare first 48 bits (first 3 groups)
+    if not stored_is_v4 and not current_is_v4:
+        return stored_parts[:3] == current_parts[:3]
+    # Protocol mismatch — be strict
+    return stored_ip == current_ip
 
 
 async def _blacklist_access_token(request: Request):
@@ -346,9 +358,9 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     return success_response({"message": "Login link sent"})
 
 
-@router.get("/verify-magic-url", summary="Verify magic link URL token (GET — for browser redirect)")
-async def verify_magic_url(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    token = request.query_params.get("token")
+@router.post("/verify-magic-url", summary="Verify magic link URL token")
+async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    token = data.token
     if not token:
         raise UnauthorizedError("Missing token")
 
@@ -782,7 +794,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     ua = request.headers.get("user-agent")
 
     await _blacklist_access_token(request)
-    _revoke_all_refresh_tokens(db, str(user.id))
+    await _revoke_all_refresh_tokens(db, str(user.id))
     # Also revoke all sessions for this user
     sessions_result = await db.execute(
         select(Session).where(Session.user_id == user.id, not Session.revoked)

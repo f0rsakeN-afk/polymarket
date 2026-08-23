@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -9,30 +10,22 @@ from decimal import Decimal
 from celery import shared_task
 from sqlalchemy import delete, select
 
+# Thread-local event loops — each Celery thread gets its own loop, reused across tasks
+_thread_local = threading.local()
+
 
 def celery_run(coro):
     """
     Run a coroutine from a Celery thread.
 
-    asyncio.run() creates and closes its own event loop, which breaks if called
-    from a thread that already has a loop — or if the same thread is reused by
-    Celery and something else already created a loop.
-
-    This reuses or creates the thread-local loop without closing it.
+    Each thread maintains its own event loop in thread-local storage.
+    Loops are reused across tasks on the same thread and closed on thread shutdown.
     """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
         loop = asyncio.new_event_loop()
-        _created_loop = True
-    else:
-        _created_loop = False
-
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        if _created_loop:
-            loop.close()
+        _thread_local.loop = loop
+    return loop.run_until_complete(coro)
 
 from app.amm.engine import BinaryAMM
 from app.config import settings
@@ -60,12 +53,12 @@ logger = logging.getLogger("polymarket")
 
 # Reuse the shared database session from app.database — aligns pool management
 # with the rest of the app instead of creating a second independent pool.
-from app.database import async_session as get_session
+from app.database import async_session as _get_session
 
 
 def get_session():
     """Yield a fresh async session. Call inside celery_run(coro_with_db())."""
-    return async_session()
+    return _get_session()
 
 
 @shared_task(bind=True, name="app.workers.tasks.expire_stale_orders")
@@ -109,14 +102,16 @@ def expire_stale_orders(self):
 
                 await db.commit()
 
-                # Notify WebSocket clients
-                for order in orders:
-                    try:
-                        await redis_pubsub.publish_market_event(
+                # Notify WebSocket clients — all publishes run concurrently
+                await asyncio.gather(
+                    *[
+                        redis_pubsub.publish_market_event(
                             str(order.market_id), "order:expired", {"order_id": str(order.id)}
                         )
-                    except Exception:
-                        pass
+                        for order in orders
+                    ],
+                    return_exceptions=True,
+                )
 
                 return f"Expired {len(expired_ids)} orders"
 
@@ -160,30 +155,15 @@ def check_limit_order_execution(self):
                 return "No executable orders"
 
             executed = 0
+
+            # Group orders by market — one market/pool lock per group instead of per order
+            by_market: dict[str, list] = {}
             for order in orders:
-                # Re-lock the individual order row to prevent concurrent execution
-                re_lock_result = await db.execute(
-                    select(Order).where(Order.id == order.id).with_for_update()
-                )
-                re_locked_order = re_lock_result.scalar_one_or_none()
-                if not re_locked_order or re_locked_order.status not in ("pending", "partial"):
-                    continue
+                by_market.setdefault(str(order.market_id), []).append(order)
 
-                if re_locked_order.expires_at and re_locked_order.expires_at <= now:
-                    re_locked_order.status = "expired"
-                    re_locked_order.executed_at = now
-                    if re_locked_order.side == "buy":
-                        wallet = await db.execute(
-                            select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
-                        )
-                        wallet = wallet.scalar_one_or_none()
-                        if wallet:
-                            wallet.locked_balance = max(wallet.locked_balance - re_locked_order.remaining_amount, 0)
-                    await db.commit()
-                    continue
-
+            for market_id, market_orders in by_market.items():
                 market_result = await db.execute(
-                    select(Market).where(Market.id == re_locked_order.market_id).with_for_update()
+                    select(Market).where(Market.id == market_id).with_for_update()
                 )
                 market = market_result.scalar_one_or_none()
                 if not market or market.status != "active":
@@ -196,158 +176,180 @@ def check_limit_order_execution(self):
                 if not pool:
                     continue
 
-                outcome = await db.get(Outcome, re_locked_order.outcome_id)
-                if not outcome:
-                    continue
-
-                order_side = re_locked_order.side
-                order_amount = re_locked_order.remaining_amount
-                limit_price = re_locked_order.price
-
-                remaining_after_book, book_matches = await MatchingEngine.match_pending_order(
-                    db, re_locked_order, market, outcome,
-                )
-
-                remaining = remaining_after_book
-                amm_shares = Decimal(0)
-                amm_price_val = Decimal(0)
-                amm_fee = Decimal(0)
-                sell_proceeds_amm = Decimal(0)
-
-                if remaining > 0:
-                    amm = BinaryAMM(
-                        yes_shares=pool.yes_shares,
-                        no_shares=pool.no_shares,
-                        fee_rate=pool.fee_rate,
+                for order in market_orders:
+                    # Re-lock the individual order row
+                    re_lock_result = await db.execute(
+                        select(Order).where(Order.id == order.id).with_for_update()
                     )
-
-                    current_price = float(amm.price(outcome.name.lower()))
-                    limit_price_f = float(limit_price)
-
-                    if order_side == "buy":
-                        can_fill = current_price <= limit_price_f
-                    else:
-                        can_fill = current_price >= limit_price_f
-
-                    if not can_fill:
-                        if re_locked_order.status != "filled":
-                            await db.commit()
+                    re_locked_order = re_lock_result.scalar_one_or_none()
+                    if not re_locked_order or re_locked_order.status not in ("pending", "partial"):
                         continue
 
-                    wallet = await db.execute(
-                        select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
-                    )
-                    wallet = wallet.scalar_one_or_none()
-                    if not wallet:
-                        continue
-
-                    if order_side == "buy":
-                        if wallet.balance < remaining:
-                            continue
-                        quote = amm.buy(outcome.name.lower(), remaining)
-                        wallet.balance -= remaining
-                        amm_shares = quote.shares_out
-                        amm_price_val = quote.price
-                        amm_fee = quote.fee
-
-                        if wallet.locked_balance > 0:
-                            wallet.locked_balance = max(wallet.locked_balance - remaining, 0)
-
-                        pos_result = await db.execute(
-                            select(Position).where(
-                                Position.user_id == re_locked_order.user_id,
-                                Position.market_id == market.id,
-                                Position.outcome_id == outcome.id,
-                            ).with_for_update()
-                        )
-                        pos = pos_result.scalar_one_or_none()
-                        if pos:
-                            total_shares_pos = pos.shares_held + amm_shares
-                            if total_shares_pos > 0:
-                                pos.average_price = (
-                                    pos.average_price * pos.shares_held + remaining
-                                ) / total_shares_pos
-                            pos.shares_held = total_shares_pos
-                        else:
-                            avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
-                            pos = Position(
-                                user_id=re_locked_order.user_id,
-                                market_id=market.id,
-                                outcome_id=outcome.id,
-                                shares_held=amm_shares,
-                                average_price=avg_price,
-                            )
-                            db.add(pos)
-
-                        market.total_volume += remaining
-                        market.num_trades += 1
-                    else:
-                        pos_result = await db.execute(
-                            select(Position).where(
-                                Position.user_id == re_locked_order.user_id,
-                                Position.market_id == market.id,
-                                Position.outcome_id == outcome.id,
-                            ).with_for_update()
-                        )
-                        pos = pos_result.scalar_one_or_none()
-                        if not pos or pos.shares_held < remaining:
-                            continue
-
-                        quote = amm.sell(outcome.name.lower(), remaining)
-                        cost_basis = pos.average_price * remaining
-                        sell_proceeds_amm = quote.collateral_in
-                        realized_pnl = sell_proceeds_amm - cost_basis
-                        pos.shares_held -= remaining
-                        pos.realized_pnl += realized_pnl
-                        wallet.balance += sell_proceeds_amm
-                        amm_shares = remaining
-                        amm_price_val = quote.price
-                        amm_fee = quote.fee
-
-                        market.total_volume += remaining
-                        market.num_trades += 1
-
-                    trade_value = remaining * amm_price_val
-                    protocol_fee = trade_value * Decimal("0.01")
-                    pool.protocol_fees += protocol_fee
-
-                    pool.yes_shares = amm.yes_shares
-                    pool.no_shares = amm.no_shares
-
-                    re_locked_order.remaining_amount -= remaining
-                    if re_locked_order.remaining_amount <= 0:
-                        re_locked_order.status = "filled"
+                    if re_locked_order.expires_at and re_locked_order.expires_at <= now:
+                        re_locked_order.status = "expired"
                         re_locked_order.executed_at = now
-                    elif re_locked_order.status != "filled":
-                        re_locked_order.status = "partial"
+                        if re_locked_order.side == "buy":
+                            wallet = await db.execute(
+                                select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
+                            )
+                            wallet = wallet.scalar_one_or_none()
+                            if wallet:
+                                wallet.locked_balance = max(wallet.locked_balance - re_locked_order.remaining_amount, 0)
+                        await db.commit()
+                        continue
 
-                    re_locked_order.shares_bought = amm_shares if order_side == "buy" else None
-                    re_locked_order.shares_sold = amm_shares if order_side == "sell" else None
-                    re_locked_order.fees_paid = (re_locked_order.fees_paid or Decimal(0)) + amm_fee
+                    outcome = await db.get(Outcome, re_locked_order.outcome_id)
+                    if not outcome:
+                        continue
 
-                    trade = Trade(
-                        user_id=re_locked_order.user_id,
-                        market_id=market.id,
-                        outcome=outcome.name.lower(),
-                        side=order_side,
-                        price=amm_price_val,
-                        amount=remaining,
-                        executed_at=now,
+                    order_side = re_locked_order.side
+                    order_amount = re_locked_order.remaining_amount
+                    limit_price = re_locked_order.price
+
+                    remaining_after_book, book_matches = await MatchingEngine.match_pending_order(
+                        db, re_locked_order, market, outcome,
                     )
-                    db.add(trade)
 
-                    trade_amount = -float(remaining) if order_side == "buy" else float(sell_proceeds_amm)
-                    tx = Transaction(
-                        user_id=re_locked_order.user_id,
-                        wallet_id=wallet.id,
-                        type="trade_buy" if order_side == "buy" else "trade_sell",
-                        amount=trade_amount,
-                        balance_after=wallet.balance,
-                        reference_id=str(re_locked_order.id),
-                        reference_type="order",
-                        status="completed",
-                    )
-                    db.add(tx)
+                    remaining = remaining_after_book
+                    amm_shares = Decimal(0)
+                    amm_price_val = Decimal(0)
+                    amm_fee = Decimal(0)
+                    sell_proceeds_amm = Decimal(0)
+
+                    if remaining > 0:
+                         amm = BinaryAMM(
+                             yes_shares=pool.yes_shares,
+                             no_shares=pool.no_shares,
+                             fee_rate=pool.fee_rate,
+                         )
+
+                         current_price = float(amm.price(outcome.name.lower()))
+                         limit_price_f = float(limit_price)
+
+                         if order_side == "buy":
+                             can_fill = current_price <= limit_price_f
+                         else:
+                             can_fill = current_price >= limit_price_f
+
+                         if not can_fill:
+                             if re_locked_order.status != "filled":
+                                 await db.commit()
+                             continue
+
+                         wallet = await db.execute(
+                             select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
+                         )
+                         wallet = wallet.scalar_one_or_none()
+                         if not wallet:
+                             continue
+
+                         if order_side == "buy":
+                             if wallet.balance < remaining:
+                                 continue
+                             quote = amm.buy(outcome.name.lower(), remaining)
+                             wallet.balance -= remaining
+                             amm_shares = quote.shares_out
+                             amm_price_val = quote.price
+                             amm_fee = quote.fee
+
+                             if wallet.locked_balance > 0:
+                                 wallet.locked_balance = max(wallet.locked_balance - remaining, 0)
+
+                             pos_result = await db.execute(
+                                 select(Position).where(
+                                     Position.user_id == re_locked_order.user_id,
+                                     Position.market_id == market.id,
+                                     Position.outcome_id == outcome.id,
+                                 ).with_for_update()
+                             )
+                             pos = pos_result.scalar_one_or_none()
+                             if pos:
+                                 total_shares_pos = pos.shares_held + amm_shares
+                                 if total_shares_pos > 0:
+                                     pos.average_price = (
+                                         pos.average_price * pos.shares_held + remaining
+                                     ) / total_shares_pos
+                                 pos.shares_held = total_shares_pos
+                             else:
+                                 avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
+                                 pos = Position(
+                                     user_id=re_locked_order.user_id,
+                                     market_id=market.id,
+                                     outcome_id=outcome.id,
+                                     shares_held=amm_shares,
+                                     average_price=avg_price,
+                                 )
+                                 db.add(pos)
+
+                             market.total_volume += remaining
+                             market.num_trades += 1
+                         else:
+                             pos_result = await db.execute(
+                                 select(Position).where(
+                                     Position.user_id == re_locked_order.user_id,
+                                     Position.market_id == market.id,
+                                     Position.outcome_id == outcome.id,
+                                 ).with_for_update()
+                             )
+                             pos = pos_result.scalar_one_or_none()
+                             if not pos or pos.shares_held < remaining:
+                                 continue
+
+                             quote = amm.sell(outcome.name.lower(), remaining)
+                             cost_basis = pos.average_price * remaining
+                             sell_proceeds_amm = quote.collateral_in
+                             realized_pnl = sell_proceeds_amm - cost_basis
+                             pos.shares_held -= remaining
+                             pos.realized_pnl += realized_pnl
+                             wallet.balance += sell_proceeds_amm
+                             amm_shares = remaining
+                             amm_price_val = quote.price
+                             amm_fee = quote.fee
+
+                             market.total_volume += remaining
+                             market.num_trades += 1
+
+                         trade_value = remaining * amm_price_val
+                         protocol_fee = trade_value * Decimal("0.01")
+                         pool.protocol_fees += protocol_fee
+
+                         pool.yes_shares = amm.yes_shares
+                         pool.no_shares = amm.no_shares
+
+                         re_locked_order.remaining_amount -= remaining
+                         if re_locked_order.remaining_amount <= 0:
+                             re_locked_order.status = "filled"
+                             re_locked_order.executed_at = now
+                         elif re_locked_order.status != "filled":
+                             re_locked_order.status = "partial"
+
+                         re_locked_order.shares_bought = amm_shares if order_side == "buy" else None
+                         re_locked_order.shares_sold = amm_shares if order_side == "sell" else None
+                         re_locked_order.fees_paid = (re_locked_order.fees_paid or Decimal(0)) + amm_fee
+
+                         trade = Trade(
+                             user_id=re_locked_order.user_id,
+                             market_id=market.id,
+                             outcome=outcome.name.lower(),
+                             side=order_side,
+                             price=amm_price_val,
+                             amount=remaining,
+                             executed_at=now,
+                         )
+                         db.add(trade)
+
+                         trade_amount = -float(remaining) if order_side == "buy" else float(sell_proceeds_amm)
+                         tx = Transaction(
+                             user_id=re_locked_order.user_id,
+                             wallet_id=wallet.id,
+                             type="trade_buy" if order_side == "buy" else "trade_sell",
+                             amount=trade_amount,
+                             balance_after=wallet.balance,
+                             reference_id=str(re_locked_order.id),
+                             reference_type="order",
+                             status="completed",
+                         )
+                         db.add(tx)
 
                 if re_locked_order.status in ("filled", "partial") or remaining_after_book != order_amount:
                     await db.commit()
@@ -807,12 +809,19 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
             )
             positions = pos_result.scalars().all()
 
+            # Batch-fetch all wallets upfront — O(1) query vs O(n) inside the loop
+            user_ids = list({str(p.user_id) for p in positions})
+            if user_ids:
+                wallets_result = await db.execute(
+                    select(Wallet).where(Wallet.user_id.in_(user_ids)).with_for_update()
+                )
+                wallet_map = {str(w.user_id): w for w in wallets_result.scalars().all()}
+            else:
+                wallet_map = {}
+
             winners_credited = 0
             for pos in positions:
-                wallet_result = await db.execute(
-                    select(Wallet).where(Wallet.user_id == pos.user_id).with_for_update()
-                )
-                wallet = wallet_result.scalar_one_or_none()
+                wallet = wallet_map.get(str(pos.user_id))
                 if not wallet:
                     continue
 

@@ -1,7 +1,7 @@
 "use client"
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AuthProvider } from "@/hooks/use-auth-context"
 import { MarketSocketProvider } from "@/hooks/use-market-socket"
 
@@ -19,6 +19,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
         },
       })
   )
+  useEffect(() => {
+    return () => {
+      queryClient.clear()
+    }
+  }, [queryClient])
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
@@ -26,4 +32,5 @@ export function Providers({ children }: { children: React.ReactNode }) {
       </AuthProvider>
     </QueryClientProvider>
   )
+}
 }

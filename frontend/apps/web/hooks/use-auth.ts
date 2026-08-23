@@ -5,7 +5,7 @@ import { authApi } from "@/lib/api/auth";
 
 export function useCurrentUser() {
   return useQuery({
-    queryKey: ["me"] as const,
+    queryKey: ME_QUERY_KEY,
     queryFn: () => authApi.me().then((r) => r.data),
     retry: false,
     staleTime: 60_000,
@@ -18,7 +18,9 @@ export function useCurrentUser() {
   });
 }
 
+const ME_QUERY_KEY = ["me"] as const
+
 function hasAuthCookie(): boolean {
   if (typeof document === "undefined") return true; // SSR: don't block, let it resolve
-  return document.cookie.split(";").some((c) => c.trim().startsWith("access_token="));
+  return document.cookie.split("; ").some((c) => c.startsWith("access_token="));
 }

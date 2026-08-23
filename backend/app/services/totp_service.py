@@ -49,9 +49,12 @@ class TOTPService:
 
     @staticmethod
     def decrypt_secret(encrypted: str) -> str:
-        """Decrypt TOTP secret."""
+        """Decrypt TOTP secret. Raises ValidationError if input is invalid."""
         import cryptography.fernet
 
+        if not encrypted or len(encrypted) < 32:
+            from app.api.exceptions import ValidationError
+            raise ValidationError("Invalid 2FA configuration")
         key = base64.urlsafe_b64encode(
             hashlib.sha256(settings.totp_encryption_key.encode()).digest()
         )

@@ -33,7 +33,7 @@ class OTPService:
     @staticmethod
     async def send_code(email: str, purpose: str) -> str:
         """
-        Generate a 6-digit code and store hash in Redis.
+        Generate an 8-digit code and store hash in Redis.
         Returns the plain code — email dispatch is handled by the Celery worker.
         Rate-limited to SEND_RATE_LIMIT codes per email+purpose per window.
         """

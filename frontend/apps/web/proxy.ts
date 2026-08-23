@@ -106,7 +106,7 @@ export default async function proxy(request: NextRequest) {
     const { user } = await validateSession(request);
     if (user) {
       const rawNext = request.nextUrl.searchParams.get("next") ?? "/portfolio";
-    if (!rawNext.startsWith("/") || rawNext.startsWith("//")) {
+    if (!rawNext.startsWith("/") || rawNext.includes("//")) {
       return NextResponse.redirect(new URL("/portfolio", request.url));
     }
     return NextResponse.redirect(new URL(rawNext, request.url));
@@ -124,6 +124,14 @@ export default async function proxy(request: NextRequest) {
       loginUrl.searchParams.set("next", pathname);
       return NextResponse.redirect(loginUrl);
     }
+    // Validate before setting — never trust raw backend response
+    const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)
+    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)
+    if (!isValidUuid || !isValidEmail) {
+      // Malformed identity — treat as unauthenticated rather than leak garbage
+      return NextResponse.redirect(new URL("/login", request.url))
+    }
+
     const response = NextResponse.next();
     response.headers.set("x-user-id", user.id);
     response.headers.set("x-user-email", user.email);
