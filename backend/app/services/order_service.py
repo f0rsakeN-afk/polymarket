@@ -650,6 +650,9 @@ class OrderService:
         if not order:
             raise NotFoundError("Pending order not found")
 
+        if order.status != "pending":
+            raise ValidationError(f"Only pending orders can be cancelled (current status: {order.status})")
+
         order.status = "cancelled"
         order.executed_at = datetime.now(UTC)
 

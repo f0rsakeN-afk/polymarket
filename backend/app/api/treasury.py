@@ -93,7 +93,7 @@ async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) 
 
 @router.post("/distribute")
 async def distribute_fees(
-    amount: float = Query(..., gt=0, description="Amount to distribute (must be positive)"),
+    amount: float = Query(..., gt=0, le=100_000_000, description="Amount to distribute (must be positive, max 100M)"),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import NotFoundError
+from app.api.exceptions import IdempotencyError, NotFoundError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
@@ -62,7 +62,7 @@ async def withdraw(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    result = await WalletService.withdraw(db, user, Decimal(str(data.amount)))
+    result = await WalletService.withdraw(db, user, Decimal(str(data.amount)), data.idempotency_key)
     return success_response(result)
 
 

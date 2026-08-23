@@ -592,6 +592,8 @@ async def claim_winnings(
     if not market.winning_outcome_id:
         raise ValidationError("Market has no winning outcome set")
 
+    # Idempotency: check settled_at before any write. SETNX on the DB row is the
+    # authoritative guard — if two requests race here, only one wins.
     pos_result = await db.execute(
         select(Position)
         .where(
@@ -599,6 +601,7 @@ async def claim_winnings(
             Position.market_id == market.id,
             Position.outcome_id == market.winning_outcome_id,
             Position.shares_held > 0,
+            Position.settled_at.is_(None),  # not yet settled
         )
         .with_for_update()
     )
@@ -614,6 +617,11 @@ async def claim_winnings(
         raise NotFoundError("Wallet not found")
 
     payout = Decimal(str(winning_pos.shares_held))
+    if payout <= 0:
+        raise ValidationError("No winnings to claim")
+
+    # Mark as settled atomically — prevents double-claim on client retry
+    winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
     wallet.balance += payout
     winning_pos.realized_pnl += payout
     winning_pos.shares_held = Decimal(0)

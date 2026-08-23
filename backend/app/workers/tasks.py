@@ -686,12 +686,23 @@ def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cent
             if existing.scalar_one_or_none():
                 return "Already processed"
 
+            # Idempotency: check full Stripe event_id to prevent double-credit on Stripe retries
+            existing_event = await db.execute(
+                select(Transaction).where(
+                    Transaction.reference_id == stripe_event_id,
+                    Transaction.reference_type == "stripe_event",
+                )
+            )
+            if existing_event.scalar_one_or_none():
+                return "Already processed"
+
             wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
             wallet = wallet_result.scalar_one_or_none()
             if not wallet:
                 return f"Wallet not found for user {user_id}"
 
-            amount = amount_cents / 100.0
+            # Use integer cents throughout — no float penny-drop risk
+            amount = Decimal(amount_cents) / Decimal(100)
             wallet.balance += amount
 
             tx = Transaction(
@@ -745,6 +756,15 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
     try:
         async def _run():
             async with get_session() as db:
+                # Distributed lock: prevent this task from running concurrently with itself
+                # (e.g., broker retry while previous run committed but didn't ack).
+                from app.redis import get_redis
+                r = await get_redis()
+                lock_key = f"resolve_task:{market_id}"
+                acquired = await r.set(lock_key, self.request.id, nx=True, ex=3600)
+                if not acquired:
+                    return f"Market {market_id} resolution task already running"
+
                 # Lock market row to prevent concurrent resolution
                 market_result = await db.execute(
                     select(Market).where(Market.id == market_id).with_for_update()
@@ -803,9 +823,9 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
             )
             yes_outcome = yes_outcome_result.scalar_one_or_none()
 
-            # Settle positions
+            # Settle positions — lock all position rows to prevent concurrent settlement
             pos_result = await db.execute(
-                select(Position).where(Position.market_id == market.id)
+                select(Position).where(Position.market_id == market.id).with_for_update()
             )
             positions = pos_result.scalars().all()
 
@@ -874,9 +894,9 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 )
                 db.add(treasury_tx)
 
-            # Settle LP shares
+            # Settle LP shares — lock rows to prevent concurrent LP redemption
                 lp_result = await db.execute(
-                    select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0)
+                    select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0).with_for_update()
                 )
                 lp_shares = lp_result.scalars().all()
 
@@ -1146,7 +1166,7 @@ def enqueue_otp(self, email: str, purpose: str):
     try:
         import hashlib
         import hmac
-        import random
+        import secrets
 
         def _get_secret(e: str, p: str) -> str:
             import app.config
@@ -1157,7 +1177,8 @@ def enqueue_otp(self, email: str, purpose: str):
             return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
 
         def _generate_code() -> str:
-            return str(random.randint(100000, 999999))
+            # secrets.randbelow(10**8) gives 8-digit code (~100M combos) — cryptographically secure
+            return str(secrets.randbelow(10**8)).zfill(8)
 
         code = _generate_code()
         secret = _get_secret(email, purpose)

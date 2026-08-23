@@ -41,7 +41,7 @@ class MarketDetailResponse(MarketResponse):
 
 class MarketOutcomeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    outcome_index: int = Field(..., ge=0)
+    outcome_index: int = Field(..., ge=0, le=1)  # binary markets only support 0 (Yes) and 1 (No)
 
 
 class CreateMarketRequest(BaseModel):

@@ -476,11 +476,13 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
 
     if user.is_2fa_enabled:
         if not data.totp_code:
-            # Issue partial token so frontend can complete with TOTP without re-sending magic code
+            # Issue partial token so frontend can complete with TOTP without re-sending magic code.
+            # Partial token is returned in response body (not error message) so it doesn't
+            # leak in server logs or Referer headers.
             r = await get_redis()
             partial = str(uuid.uuid4())
             await redis_cb.call(lambda: r.set(f"magic_partial:{partial}", f"{user.id}:{data.email}", ex=300))
-            raise UnauthorizedError(f"2FA code required:{partial}")
+            return success_response({"requires_2fa": True, "partial_token": partial})
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
             await RateLimitService.record_failure(data.email, ip)
@@ -886,8 +888,9 @@ async def change_password(
     user.password_hash = hash_password(data.new_password)
 
     await _blacklist_access_token(request)
-    current_refresh = request.cookies.get("refresh_token")
-    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=_hash_refresh_token(current_refresh) if current_refresh else None)
+    # Revoke ALL refresh tokens — no keep_token_hash. A stolen pre-change token
+    # must not survive a password change. User must re-authenticate fully.
+    await _revoke_all_refresh_tokens(db, str(user.id))
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
     new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
     # Single atomic commit: password change + token revocation + new tokens + audit log
@@ -950,5 +953,4 @@ async def me(request: Request, db: AsyncSession = Depends(get_db)):
         "is_email_verified": user.is_email_verified,
         "is_admin": user.is_admin,
         "is_2fa_enabled": user.is_2fa_enabled,
-        "referral_code": user.referral_code,
     })

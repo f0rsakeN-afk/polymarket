@@ -18,9 +18,22 @@ class WalletService:
         db: AsyncSession,
         user: User,
         amount: Decimal,
+        idempotency_key: str | None = None,
     ) -> dict:
         if amount <= 0:
             raise ValidationError("Amount must be positive")
+
+        # Idempotency: reject duplicate withdrawal if same idempotency_key used within expiry window
+        if idempotency_key:
+            existing = await db.execute(
+                select(Transaction).where(
+                    Transaction.user_id == user.id,
+                    Transaction.reference_id == idempotency_key,
+                    Transaction.type == "withdrawal",
+                )
+            )
+            if existing.scalar_one_or_none():
+                raise IdempotencyError("Withdrawal already processed")
 
         result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
         wallet = result.scalar_one_or_none()
@@ -42,6 +55,7 @@ class WalletService:
             type="withdrawal",
             amount=-float(amount),
             balance_after=wallet.balance,
+            reference_id=idempotency_key or "",  # store idempotency key as reference_id
             status="pending",
         )
         db.add(tx)

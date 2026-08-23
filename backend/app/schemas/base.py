@@ -36,14 +36,17 @@ class DecimalField:
     @classmethod
     def _validate(cls, v: any, info: any = None) -> Decimal:
         if isinstance(v, Decimal):
-            return Decimal(str(v)).quantize(Decimal("0.00000001"))
-        if isinstance(v, float):
-            return Decimal(str(v)).quantize(Decimal("0.00000001"))
-        if isinstance(v, int):
-            return Decimal(v)
-        if isinstance(v, str):
-            return Decimal(v).quantize(Decimal("0.00000001"))
-        return Decimal(str(v))
+            d = Decimal(str(v))
+        elif isinstance(v, float):
+            d = Decimal(str(v))
+        elif isinstance(v, int):
+            d = Decimal(v)
+        elif isinstance(v, str):
+            d = Decimal(v)
+        else:
+            d = Decimal(str(v))
+        # Quantize first — don't reject zero here (MoneyField allows 0, only PositiveMoney rejects it)
+        return d.quantize(Decimal("0.00000001"))
 
 
 # ── Shared field helpers ────────────────────────────────────────────────────────
