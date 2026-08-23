@@ -24,8 +24,7 @@ STRIPE_TOLERANCE = 300  # 5 minutes
 async def verify_stripe_signature(payload: bytes, sig: str, secret: str) -> bool:
     """Verify Stripe webhook signature using HMAC."""
     if not secret:
-        logger.warning("Stripe webhook secret not configured — skipping verification in dev")
-        return True
+        raise ValueError("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
 
     try:
         # Parse signature header: "t=timestamp,v1=signature"
@@ -100,26 +99,33 @@ async def stripe_webhook(
         wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
+            # Return 500 so Stripe retries — the wallet should exist for any active user
             logger.error(f"Wallet not found for user {user_id}")
-            return success_response({"status": "wallet_not_found"})
+            raise HTTPException(status_code=500, detail="Wallet not found, will retry")
 
         amount = Decimal(str(amount_cents)) / 100  # cents to dollars
 
-        # Store in USDC (1:1 for now, Stripe handles USD)
-        wallet.balance += amount
-
-        # Record transaction
+        # Build transaction record BEFORE updating balance — balance_after is set
+        # after the amount is added so the record is always consistent
         tx = Transaction(
             user_id=user_id,
             wallet_id=wallet.id,
             type="deposit",
             amount=amount,
-            balance_after=wallet.balance,
+            balance_after=wallet.balance + amount,  # estimated before commit
             reference_id=payment_intent_id,
             reference_type="stripe_payment_intent",
             status="completed",
         )
         db.add(tx)
+
+        # Apply balance change — if this fails (e.g. constraint), tx record
+        # is rolled back along with it. No orphaned credit.
+        wallet.balance += amount
+
+        # Update the estimated balance_after now that wallet.balance is updated
+        tx.balance_after = wallet.balance
+
         await db.commit()
 
         logger.info(f"Deposit credited: user={user_id} amount={amount} PI={payment_intent_id}")

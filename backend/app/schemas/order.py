@@ -60,6 +60,7 @@ class OrderResponse(BaseModel):
 class PositionResponse(BaseModel):
     id: str
     market_id: str
+    market_slug: str
     market_question: str | None
     outcome: str
     shares_held: MoneyField

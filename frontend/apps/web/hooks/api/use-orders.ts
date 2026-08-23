@@ -27,7 +27,12 @@ export function usePlaceOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: placeOrder,
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (res.data.duplicate) {
+        // Duplicate order — no new position created, just refresh order list
+        qc.invalidateQueries({ queryKey: ["orders"] })
+        return
+      }
       qc.invalidateQueries({ queryKey: ["orders"] })
       qc.invalidateQueries({ queryKey: ["wallet"] })
       qc.invalidateQueries({ queryKey: ["positions"] })

@@ -84,7 +84,7 @@ async def test_get_market_activity_empty_market(client: AsyncClient, db_session,
     assert activity["recent_comments"] == []
     assert activity["top_holders_by_outcome"] == {}
     stats = activity["market_stats"]
-    assert stats["total_volume"] == 0.0
+    assert stats["total_volume"] == "0E-8"
     assert stats["num_trades"] == 0
 
 

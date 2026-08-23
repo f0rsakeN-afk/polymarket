@@ -128,11 +128,9 @@ function Header() {
 
           {/* Mobile menu */}
           <Sheet>
-            <SheetTrigger className="sm:hidden" render={
-              <button className="text-muted-foreground hover:text-foreground transition-colors">
-                <MenuIcon className="size-5" />
-              </button>
-            } />
+            <SheetTrigger className="sm:hidden inline-flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
+              <MenuIcon className="size-5" />
+            </SheetTrigger>
             <SheetContent side="right" className="w-64 p-0">
               <nav className="flex flex-col p-6 gap-1">
                 {navLinks.map(({ href, label }) => (

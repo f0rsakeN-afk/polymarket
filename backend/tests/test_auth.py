@@ -138,8 +138,8 @@ async def test_setup_2fa(client: AsyncClient, test_user):
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
-    assert "secret" in data["data"]
     assert "uri" in data["data"]
+    assert data["data"]["uri"].startswith("otpauth://")
 
 
 @pytest.mark.asyncio

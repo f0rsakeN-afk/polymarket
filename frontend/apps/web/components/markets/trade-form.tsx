@@ -190,7 +190,7 @@ function TradeForm({
       ? currentYesPrice
       : outcome === "no"
       ? currentNoPrice
-      : 0
+      : 0  // multi-outcome named prices require per-outcome price map from parent
     : outcome === "yes"
     ? currentYesPrice
     : currentNoPrice

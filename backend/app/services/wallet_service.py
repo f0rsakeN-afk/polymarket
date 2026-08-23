@@ -51,6 +51,6 @@ class WalletService:
 
         return {
             "withdrawal_id": str(tx.id),
-            "amount": float(amount),
+            "amount": str(amount),
             "status": "pending",
         }

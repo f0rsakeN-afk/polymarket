@@ -41,6 +41,11 @@ class Market(Base, UUIDMixin, TimestampMixin):
     resolution_source = Column(String(1000))  # URL or data feed for resolution
     winning_outcome_id = Column(UUID(as_uuid=True), nullable=True)
 
+    # Composite indexes for hot queries
+    __table_args__ = (
+        Index("ix_markets_status_closes_at", "status", "closes_at"),
+    )
+
     # Dispute window
     proposed_outcome_id = Column(UUID(as_uuid=True), nullable=True)
     dispute_deadline = Column(DateTime(timezone=True), nullable=True)

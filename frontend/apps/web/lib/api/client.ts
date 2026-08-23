@@ -63,17 +63,16 @@ async function doRefresh(): Promise<string | null> {
       credentials: "include",
     })
     if (!res.ok) {
-      isRefreshing = false
       onRefreshDone(null)
       return null
     }
-    isRefreshing = false
     onRefreshDone("refreshed")
     return "refreshed"
   } catch {
-    isRefreshing = false
     onRefreshDone(null)
     return null
+  } finally {
+    isRefreshing = false
   }
 }
 
@@ -104,6 +103,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   const promise = (async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
     try {
       const res = await fetch(`${API_BASE}${path}`, {
         credentials: "include",
@@ -111,6 +112,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
           "Content-Type": "application/json",
           ...options.headers,
         },
+        signal: controller.signal,
         ...options,
       })
 
@@ -125,6 +127,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
         const token = await new Promise<string | null>((resolve) => {
           subscribeRefresh(resolve)
+          // Safety: if refresh never resolves (bug or silent failure), don't hang forever
+          setTimeout(() => resolve(null), 10_000)
         })
 
         if (!token) {
@@ -157,11 +161,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
       return res.json() as Promise<T>
     } finally {
+      clearTimeout(timeout)
       pendingRequests.delete(cacheKey)
     }
   })()
 
-  if (options.method === "GET" || !options.method) {
+  if (options.method === "GET" || options.method === "DELETE" || !options.method) {
     pendingRequests.set(cacheKey, promise)
   }
 

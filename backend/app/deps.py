@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
+
+logger = logging.getLogger("polymarket")
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +21,7 @@ ALGORITHM = "HS256"
 
 
 async def cache_get(key: str) -> dict | list | None:
-    r = get_redis()
+    r = await get_redis()
     data = await redis_cb.call(lambda: r.get(f"cache:{key}"))
     if data:
         import json
@@ -27,7 +30,7 @@ async def cache_get(key: str) -> dict | list | None:
 
 
 async def cache_set(key: str, data: dict | list, ttl: int = 30):
-    r = get_redis()
+    r = await get_redis()
     import json
     def json_dumps(obj):
         return json.dumps(obj, default=str)
@@ -35,13 +38,13 @@ async def cache_set(key: str, data: dict | list, ttl: int = 30):
 
 
 async def cache_invalidate(key: str):
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(lambda: r.delete(f"cache:{key}"))
 
 
 async def cache_invalidate_pattern(pattern: str):
     """Delete all keys matching pattern (uses SCAN to avoid blocking)."""
-    r = get_redis()
+    r = await get_redis()
     cursor = 0
     while True:
         cursor, keys = await redis_cb.call(lambda: r.scan(cursor, match=f"cache:{pattern}", count=100))
@@ -83,20 +86,29 @@ def decode_token(token: str) -> dict:
 
 async def is_token_blacklisted(jti: str) -> bool:
     try:
-        r = get_redis()
+        r = await get_redis()
         result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
         return result is not None
     except Exception:
-        return False  # Fail open — if Redis is down, don't block tokens
+        # Fail-open: if Redis is unreachable, assume token is NOT blacklisted.
+        # Token will still be rejected at natural expiry (JWT `exp` claim, max 15 min).
+        # SECURITY NOTE: a stolen token works during Redis outage. Acceptable trade-off —
+        # a Redis outage must not lock out the entire user base. Mitigant: Redis should be
+        # deployed HA (Sentinel) so this window is near-zero in practice.
+        logger.warning(f"Redis unavailable for blacklist check — allowing (jti={jti})")
+        return False
 
 
 async def blacklist_token(jti: str, ttl_seconds: int):
     """Add a token's jti to the blacklist for its remaining TTL."""
     try:
-        r = get_redis()
+        r = await get_redis()
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
-        pass  # Best-effort — if Redis is down, token won't be blacklisted but auth still works
+        # Fail-open: Redis/Sentinel outage must not block logout.
+        # Token remains valid until natural expiry (15min). Acceptable window —
+        # Redis HA (Sentinel) makes this near-zero in practice.
+        logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
 
 
 async def get_current_user(

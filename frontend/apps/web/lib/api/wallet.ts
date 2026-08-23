@@ -1,21 +1,21 @@
 import { api } from "./client"
 import { z } from "zod"
 import { depositSchema, withdrawSchema } from "@/lib/schemas/wallet"
-import type { Wallet, Transaction, TransactionsResponse } from "@/hooks/api/types/wallet"
+import type { Wallet, TransactionsResponse } from "@/hooks/api/types/wallet"
 
 export function getWallet() {
   return api.get<{ success: boolean; data: Wallet }>("/api/v1/wallet/")
 }
 
 export function deposit(data: z.infer<typeof depositSchema>) {
-  return api.post<{ success: boolean; data: { client_secret: string; amount: number; currency: string } }>(
+  return api.post<{ success: boolean; data: { client_secret: string; amount: string; currency: string } }>(
     "/api/v1/wallet/deposit",
     depositSchema.parse(data)
   )
 }
 
 export function withdraw(data: z.infer<typeof withdrawSchema>) {
-  return api.post<{ success: boolean }>(
+  return api.post<{ success: boolean; data: { withdrawal_id: string; amount: string; status: string } }>(
     "/api/v1/wallet/withdraw",
     withdrawSchema.parse(data)
   )

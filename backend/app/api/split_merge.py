@@ -89,7 +89,7 @@ async def split(
             ).with_for_update()
         )
         pos = pos_result.scalar_one_or_none()
-        if pos:
+        if pos is not None:
             total_cost = pos.average_price * pos.shares_held + amount_after_fee
             pos.shares_held += amount_after_fee
             pos.average_price = total_cost / pos.shares_held
@@ -123,12 +123,12 @@ async def split(
     return success_response({
         "market_id": market_id,
         "amount": amount,
-        "fee": float(fee),
-        "yes_price": yes_price,
-        "no_price": no_price,
-        "yes_shares": float(amount_after_fee),
-        "no_shares": float(amount_after_fee),
-        "balance_after": float(wallet.balance),
+        "fee": str(fee),
+        "yes_price": str(yes_price),
+        "no_price": str(no_price),
+        "yes_shares": str(amount_after_fee),
+        "no_shares": str(amount_after_fee),
+        "balance_after": str(wallet.balance),
     })
 
 
@@ -224,7 +224,7 @@ async def merge(
     return success_response({
         "market_id": market_id,
         "amount": amount,
-        "fee": float(fee),
-        "amount_received": float(amount_after_fee),
-        "balance_after": float(wallet.balance),
+        "fee": str(fee),
+        "amount_received": str(amount_after_fee),
+        "balance_after": str(wallet.balance),
     })

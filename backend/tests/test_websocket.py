@@ -31,33 +31,39 @@ def ws_client():
 
 # ── Market WebSocket ──────────────────────────────────────────────────────────
 
-def test_market_websocket_connect_and_ping(ws_client, test_market):
+def test_market_websocket_connect_and_ping(ws_client, test_market, test_user):
     """WS connects, accepts, and responds to ping."""
+    token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}") as ws:
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
 
 
-def test_market_websocket_reconnect_subscribes_different_market(ws_client, test_market):
+def test_market_websocket_reconnect_subscribes_different_market(ws_client, test_market, test_user):
     """Opening a WS to a different market subscribes to that market's channel."""
     new_market_id = str(uuid4())
+    token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{new_market_id}") as ws:
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{new_market_id}?token={token}") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
             mock_pubsub.subscribe_market.assert_called_once_with(new_market_id)
 
 
-def test_market_websocket_disconnect(ws_client, test_market):
+def test_market_websocket_disconnect(ws_client, test_market, test_user):
     """WS disconnects cleanly without error."""
+    token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}") as ws:
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             pass  # context exits cleanly
 
 
@@ -67,6 +73,7 @@ def test_global_trades_websocket_connect_and_ping(ws_client):
     """WS connects to global trades feed and responds to ping."""
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         with ws_client.websocket_connect("/ws/trades") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
@@ -116,11 +123,13 @@ def test_user_notifications_websocket_invalid_token(ws_client, test_user):
 
 # ── Edge cases ────────────────────────────────────────────────────────────────
 
-def test_market_websocket_unknown_message_type(ws_client, test_market):
+def test_market_websocket_unknown_message_type(ws_client, test_market, test_user):
     """Market WS ignores unknown message types without crashing."""
+    token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}") as ws:
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "unknown_type", "data": "ignored"})
             # Should not raise — connection stays open
             ws.send_json({"type": "ping"})
@@ -128,17 +137,22 @@ def test_market_websocket_unknown_message_type(ws_client, test_market):
             assert msg["type"] == "pong"
 
 
-def test_market_websocket_rapid_resubscribe(ws_client, test_market):
+def test_market_websocket_rapid_resubscribe(ws_client, test_market, test_user):
     """WS subscribe message switches market subscription without closing the connection."""
     new_market_id = str(uuid4())
+    token = _token(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}") as ws:
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "subscribe", "market_id": new_market_id})
-            ws.send_json({"type": "subscribe", "market_id": new_market_id})  # same market again — no-op
+            # Wait briefly for server to process the subscription switch
+            import time; time.sleep(0.05)
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
+            # Verify the new market was subscribed
+            mock_pubsub.subscribe_market.assert_called_with(new_market_id)
 
 
 def test_user_notifications_websocket_missing_token(ws_client, test_user):

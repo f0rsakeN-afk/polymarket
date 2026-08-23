@@ -242,8 +242,8 @@ async def test_stripe_webhook_wallet_not_found(client: AsyncClient, db_session):
     }
     with patch("app.api.webhooks.verify_stripe_signature", return_value=True):
         resp = await client.post("/api/v1/webhooks/stripe", json=payload)
-    assert resp.status_code == 200
-    assert resp.json()["data"]["status"] == "wallet_not_found"
+    # wallet_not_found returns 500 so Stripe retries (not 200 which would silent-drop)
+    assert resp.status_code == 500
 
 
 @pytest.mark.asyncio

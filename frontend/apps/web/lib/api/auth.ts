@@ -8,6 +8,7 @@ export interface MeResponse {
   is_admin: boolean;
   is_2fa_enabled: boolean;
   referral_code?: string;
+  is_2fa_pending?: boolean;
 }
 
 export interface Session {
@@ -86,11 +87,14 @@ export const magicLinkApi = {
     }),
 
   verifyUrl: (token: string) =>
-    api.get<{ success: boolean }>(`/api/v1/auth/verify-magic-url?token=${token}`),
+    api.post<{ success: boolean; data?: { requires_2fa: boolean; partial_token?: string } }>(
+      "/api/v1/auth/verify-magic-url",
+      { token }
+    ),
 
-  verifyUrl2fa: (token: string, totpCode: string) =>
+  verifyUrl2fa: (partialToken: string, totpCode: string) =>
     api.post<{ success: boolean; message?: string }>("/api/v1/auth/verify-magic-url-2fa", {
-      token,
+      partial_token: partialToken,
       totp_code: totpCode,
     }),
 
@@ -134,9 +138,7 @@ export const accountApi = {
 // ─── 2FA ──────────────────────────────────────────────────────────────────────
 
 export interface TwoFactorSetup {
-  secret: string;
   uri: string;
-  base32: string;
 }
 
 export interface TwoFactorStatus {

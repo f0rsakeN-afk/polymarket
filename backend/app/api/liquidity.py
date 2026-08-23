@@ -1,7 +1,7 @@
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,33 +63,46 @@ async def get_lp_position(
 
     if not lp_share:
         return success_response({
-            "lp_tokens": 0.0,
-            "collateral_deposited": 0.0,
-            "pool_lp_token_supply": float(pool.lp_token_supply) if pool else 0.0,
-            "pool_yes_shares": float(pool.yes_shares) if pool else 0.0,
-            "pool_no_shares": float(pool.no_shares) if pool else 0.0,
+            "lp_tokens": "0.0",
+            "collateral_deposited": "0.0",
+            "pool_lp_token_supply": str(float(pool.lp_token_supply)) if pool else "0.0",
+            "pool_yes_shares": str(float(pool.yes_shares)) if pool else "0.0",
+            "pool_no_shares": str(float(pool.no_shares)) if pool else "0.0",
         })
 
     return success_response({
-        "lp_tokens": float(lp_share.lp_tokens),
-        "collateral_deposited": float(lp_share.collateral_deposited),
-        "pool_lp_token_supply": float(pool.lp_token_supply),
-        "pool_yes_shares": float(pool.yes_shares),
-        "pool_no_shares": float(pool.no_shares),
+        "lp_tokens": str(lp_share.lp_tokens),
+        "collateral_deposited": str(lp_share.collateral_deposited),
+        "pool_lp_token_supply": str(pool.lp_token_supply),
+        "pool_yes_shares": str(pool.yes_shares),
+        "pool_no_shares": str(pool.no_shares),
     })
 
 
 @router.get("/liquidity/analytics")
 async def get_lp_analytics(
     request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
     user = await get_current_user(request, db)
+
+    # Count total for pagination
+    count_result = await db.execute(
+        select(LPShare)
+        .join(LiquidityPool, LPShare.pool_id == LiquidityPool.id)
+        .where(LPShare.user_id == user.id, LPShare.lp_tokens > 0)
+    )
+    total = len(count_result.all())  # small table, acceptable
+
     lp_result = await db.execute(
         select(LPShare, LiquidityPool, Market)
         .join(LiquidityPool, LPShare.pool_id == LiquidityPool.id)
         .join(Market, LiquidityPool.market_id == Market.id)
         .where(LPShare.user_id == user.id, LPShare.lp_tokens > 0)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     rows = lp_result.all()
 
@@ -113,20 +126,24 @@ async def get_lp_analytics(
             "market_id": str(market.id),
             "market_slug": market.slug,
             "market_question": market.question,
-            "lp_tokens": float(lp.lp_tokens),
-            "collateral_deposited": float(lp.collateral_deposited),
-            "position_value": float(position_value),
-            "share_pct": float(share_pct * 100),
-            "fees_earned": float(fees_earned),
-            "net_pnl": float(net_value),
-            "estimated_apr": float(apr),
-            "pool_yes_price": float(pool.no_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else 0.5,
-            "pool_no_price": float(pool.yes_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else 0.5,
+            "lp_tokens": str(lp.lp_tokens),
+            "collateral_deposited": str(lp.collateral_deposited),
+            "position_value": str(position_value),
+            "share_pct": str(share_pct * 100),
+            "fees_earned": str(fees_earned),
+            "net_pnl": str(net_value),
+            "estimated_apr": str(apr),
+            "pool_yes_price": str(pool.no_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
+            "pool_no_price": str(pool.yes_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
         })
 
     return success_response({
         "positions": positions,
-        "total_value": float(total_value),
-        "total_deposited": float(sum(p["collateral_deposited"] for p in positions)),
-        "total_pnl": float(total_value - Decimal(str(sum(p["collateral_deposited"] for p in positions)))),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (page * page_size) < total,
+        "total_value": str(total_value),
+        "total_deposited": str(sum(p["collateral_deposited"] for p in positions)),
+        "total_pnl": str(total_value - Decimal(str(sum(p["collateral_deposited"] for p in positions)))),
     })

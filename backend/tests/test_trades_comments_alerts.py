@@ -293,8 +293,11 @@ async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_m
 
 
 @pytest.mark.asyncio
-async def test_get_disputes_for_market(client: AsyncClient, test_user, test_market):
+async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_user, test_market):
     client.cookies.set("access_token", _token(test_user.id))
+    resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
+    # Endpoint requires admin — use admin token
+    client.cookies.set("access_token", _token(admin_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     assert resp.status_code == 200
     assert resp.json()["success"] is True

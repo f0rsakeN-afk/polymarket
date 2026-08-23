@@ -83,7 +83,9 @@ const RESEND_COOLDOWN = 60;
 
 export function LoginForm() {
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/portfolio";
+  // Only allow relative redirects — prevents open redirect to external domains
+  const rawNext = searchParams.get("next") ?? "/portfolio"
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/portfolio"
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
@@ -187,7 +189,7 @@ export function LoginForm() {
           await magicLinkApi.verifyMagic2fa(magicPartialToken, totpCode);
         } else {
           // Magic URL 2FA flow (original URL-based flow)
-          await magicLinkApi.verifyUrl2fa(otp, totpCode);
+          await magicLinkApi.verifyUrl2fa(totp2faCode, totp2faCode);
         }
         window.location.href = next;
       } catch (err) {
@@ -195,7 +197,7 @@ export function LoginForm() {
         setIsLoading(false);
       }
     },
-    [magicPartialToken, otp, next] // eslint-disable-line react-hooks/exhaustive-deps
+    [magicPartialToken, otp, next]  
   );
 
   // ── Resend ───────────────────────────────────────────────────────────────

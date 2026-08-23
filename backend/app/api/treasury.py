@@ -34,9 +34,9 @@ async def get_treasury(
     treasury = await _get_or_create_treasury(db)
     return success_response(TreasuryResponse(
         id=str(treasury.id),
-        balance=float(treasury.balance),
-        total_fees_collected=float(treasury.total_fees_collected),
-        total_fees_distributed=float(treasury.total_fees_distributed),
+        balance=str(treasury.balance),
+        total_fees_collected=str(treasury.total_fees_collected),
+        total_fees_distributed=str(treasury.total_fees_distributed),
     ))
 
 
@@ -69,7 +69,7 @@ async def get_treasury_logs(
             TreasuryLogResponse(
                 id=str(log_entry.id),
                 event=log_entry.event,
-                amount=float(log_entry.amount),
+                amount=str(log_entry.amount),
                 reference_type=log_entry.reference_type,
                 reference_id=log_entry.reference_id,
                 created_at=log_entry.created_at,

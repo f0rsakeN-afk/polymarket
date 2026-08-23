@@ -76,9 +76,9 @@ async def test_get_market_not_found(client: AsyncClient):
 async def test_get_market_orderbook(client: AsyncClient, test_market):
     resp = await client.get(f"/api/v1/markets/{test_market.slug}/orderbook")
     assert resp.status_code == 200
-    data = resp.json()
-    assert "bids" in data
-    assert "asks" in data
+    data = resp.json()["data"]
+    assert "outcomes" in data
+    assert "yes" in data["outcomes"] or "no" in data["outcomes"]
 
 
 # ── Categories ─────────────────────────────────────────────────────────────────
@@ -344,9 +344,11 @@ async def test_get_orderbook_empty(client: AsyncClient, admin_user, db_session):
 
     resp = await client.get(f"/api/v1/markets/{m.slug}/orderbook")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["bids"] == []
-    assert data["asks"] == []
+    data = resp.json()["data"]
+    assert "outcomes" in data
+    for outcome in data["outcomes"].values():
+        assert outcome["bids"] == []
+        assert outcome["asks"] == []
 
 
 # ── Edge cases: create_market ──────────────────────────────────────────────────

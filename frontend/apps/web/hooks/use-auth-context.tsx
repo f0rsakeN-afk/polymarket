@@ -23,15 +23,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logoutMutation = useMutation({
     mutationFn: () => authApi.logout(),
     onSuccess: () => {
-      // Clear all auth-related queries
+      // Remove all auth-related queries; keep market/position/order caches intact
       queryClient.removeQueries({ queryKey: ["me"] })
-      queryClient.clear()
+      queryClient.removeQueries({ queryKey: ["positions"] })
+      queryClient.removeQueries({ queryKey: ["orders"] })
+      queryClient.removeQueries({ queryKey: ["notifications"] })
       router.push("/")
     },
     onError: () => {
-      // Even if server logout fails, clear local state
+      // Even if server logout fails, clear local auth state
       queryClient.removeQueries({ queryKey: ["me"] })
-      queryClient.clear()
+      queryClient.removeQueries({ queryKey: ["positions"] })
+      queryClient.removeQueries({ queryKey: ["orders"] })
+      queryClient.removeQueries({ queryKey: ["notifications"] })
       router.push("/")
     },
   })

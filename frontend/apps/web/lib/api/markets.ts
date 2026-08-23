@@ -90,7 +90,7 @@ export function postComment(slug: string, content: string, parent_id?: string) {
 }
 
 export function getMarketFAQs(slug: string) {
-  return api.get<{ success: boolean; data: FAQ[] }>(`/api/v1/markets/${slug}/faqs/`)
+  return api.get<{ success: boolean; data: FAQ[] }>(`/api/v1/markets/${slug}/faqs`)
 }
 
 export function getPriceHistory(slug: string, params?: { interval?: string; from_date?: string; to_date?: string }) {
@@ -106,7 +106,7 @@ export function getPriceHistory(slug: string, params?: { interval?: string; from
 
 export function getRelatedMarkets(slug: string, limit = 5) {
   return api.get<{ success: boolean; data: MarketResponse[] }>(
-    `/api/v1/markets/${slug}/related/?limit=${limit}`
+    `/api/v1/markets/${slug}/related?limit=${limit}`
   )
 }
 
@@ -147,19 +147,16 @@ export function getGlobalTrades(params?: {
 }
 
 export interface OrderBookEntry {
-  outcome_id: string
-  outcome: string
   price: string
   size: string
 }
 
 export interface OrderBook {
-  bids: OrderBookEntry[]
-  asks: OrderBookEntry[]
+  outcomes: Record<string, { bids: OrderBookEntry[]; asks: OrderBookEntry[] }>
 }
 
 export function getOrderBook(slug: string) {
-  return api.get<OrderBook>(`/api/v1/markets/${slug}/orderbook`)
+  return api.get<{ success: boolean; data: OrderBook }>(`/api/v1/markets/${slug}/orderbook`)
 }
 
 export interface ClaimResponse {

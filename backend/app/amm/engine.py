@@ -18,20 +18,20 @@ class BinaryAMM:
     """
     Constant-product AMM for binary outcome prediction markets.
 
-    Invariant:  yes_shares * no_shares = k
+    price(YES) = yes_shares / (yes_shares + no_shares)
+    price(NO)  = no_shares  / (yes_shares + no_shares)
 
-    price(YES) = no_shares / (yes_shares + no_shares)
-    price(NO)  = yes_shares / (yes_shares + no_shares)
+    Invariant after each trade: yes_shares * no_shares = k
 
     Buying YES:
-      - Deposits collateral into YES pool
-      - Receives YES shares (from NO side of the pool)
-      - YES price rises, NO price falls
+      - Deposits collateral C → receives YES shares S = C * (1-fee) / price(YES)
+      - Pool: yes += S, no unchanged → k preserved
+      - YES price RISES (more YES collateral → higher probability)
 
     Selling YES:
-      - Deposits YES shares into pool
-      - Receives collateral from NO side
-      - YES price falls, NO price rises
+      - Deposits S YES shares → receives collateral C = S * price(YES) * (1-fee)
+      - Pool: yes -= S, no unchanged → k preserved
+      - YES price FALLS (less YES collateral → lower probability)
     """
 
     def __init__(
@@ -52,8 +52,8 @@ class BinaryAMM:
         if total == 0:
             return Decimal("0.5")
         if outcome == "yes":
-            return self.no_shares / total
-        return self.yes_shares / total
+            return self.yes_shares / total
+        return self.no_shares / total
 
     def _execute_buy(
         self,
@@ -62,19 +62,30 @@ class BinaryAMM:
         min_shares_out: Decimal | None = None,
     ) -> AMMQuote:
         """Core buy logic — mutates pool state and returns quote."""
+        if collateral <= 0:
+            raise ValueError("Collateral must be positive")
+        total = self.yes_shares + self.no_shares
+        if total == 0:
+            raise ValueError("Pool not bootstrapped")
         fee = collateral * self.fee_rate
         collateral_net = collateral - fee
-        k = self._k()
+        if collateral_net <= 0:
+            raise ValueError(f"Fee rate {float(self.fee_rate)*100}% consumes entire collateral")
 
         if outcome == "yes":
-            new_yes = self.yes_shares + collateral_net
-            new_no = k / new_yes if new_yes > 0 else Decimal(0)
-            shares_out = max(Decimal(0), self.no_shares - new_no)
+            if self.yes_shares == 0:
+                raise ValueError("Cannot buy YES: no YES liquidity in pool")
+            shares_out = collateral_net * total / self.yes_shares
+            new_yes = self.yes_shares + shares_out
+            new_no = self.no_shares
         else:
-            new_no = self.no_shares + collateral_net
-            new_yes = k / new_no if new_no > 0 else Decimal(0)
-            shares_out = max(Decimal(0), self.yes_shares - new_yes)
+            if self.no_shares == 0:
+                raise ValueError("Cannot buy NO: no NO liquidity in pool")
+            shares_out = collateral_net * total / self.no_shares
+            new_yes = self.yes_shares
+            new_no = self.no_shares + shares_out
 
+        shares_out = max(Decimal(0), shares_out)
         if min_shares_out is not None and shares_out < min_shares_out:
             raise ValueError(f"Slippage exceeded: output {shares_out} < minimum {min_shares_out}")
 
@@ -84,15 +95,17 @@ class BinaryAMM:
         self.no_shares = new_no
 
         after_total = self.yes_shares + self.no_shares
+        after_price_yes = self.yes_shares / after_total if after_total > 0 else Decimal("0.5")
+        after_price_no = self.no_shares / after_total if after_total > 0 else Decimal("0.5")
 
         return AMMQuote(
             shares_out=shares_out.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             collateral_in=collateral,
             fee=fee.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             price=current_price,
-            slippage=Decimal(0),
-            yes_price_after=self.yes_shares / after_total if after_total > 0 else Decimal("0.5"),
-            no_price_after=self.no_shares / after_total if after_total > 0 else Decimal("0.5"),
+            slippage=abs(after_price_yes - current_price) if outcome == "yes" else abs(after_price_no - current_price),
+            yes_price_after=after_price_yes,
+            no_price_after=after_price_no,
         )
 
     def _execute_sell(
@@ -102,23 +115,33 @@ class BinaryAMM:
         min_collateral_out: Decimal | None = None,
     ) -> AMMQuote:
         """Core sell logic — mutates pool state and returns quote."""
-        k = self._k()
+        if shares <= 0:
+            raise ValueError("Shares must be positive")
+        total = self.yes_shares + self.no_shares
+        if total == 0:
+            raise ValueError("Pool not bootstrapped")
 
         if outcome == "yes":
+            if self.yes_shares == 0:
+                raise ValueError("Cannot sell YES: no YES liquidity in pool")
             if shares > self.yes_shares:
                 raise ValueError(f"Not enough YES shares: held={self.yes_shares}, requested={shares}")
+            collateral_raw = shares * self.yes_shares / total * (1 - self.fee_rate)
             new_yes = self.yes_shares - shares
-            new_no = k / new_yes if new_yes > 0 else Decimal(0)
-            collateral_raw = new_no - self.no_shares
+            new_no = self.no_shares
         else:
+            if self.no_shares == 0:
+                raise ValueError("Cannot sell NO: no NO liquidity in pool")
             if shares > self.no_shares:
                 raise ValueError(f"Not enough NO shares: held={self.no_shares}, requested={shares}")
+            collateral_raw = shares * self.no_shares / total * (1 - self.fee_rate)
+            new_yes = self.yes_shares
             new_no = self.no_shares - shares
-            new_yes = k / new_no if new_no > 0 else Decimal(0)
-            collateral_raw = new_yes - self.yes_shares
 
-        fee = collateral_raw * self.fee_rate
-        collateral_net = collateral_raw - fee
+        if collateral_raw <= 0:
+            raise ValueError(f"Fee rate {float(self.fee_rate)*100}% consumes entire collateral")
+        fee = collateral_raw * self.fee_rate / (1 - self.fee_rate)
+        collateral_net = collateral_raw
 
         if min_collateral_out is not None and collateral_net < min_collateral_out:
             raise ValueError(f"Slippage exceeded: collateral {collateral_net} < minimum {min_collateral_out}")
@@ -129,6 +152,8 @@ class BinaryAMM:
         self.no_shares = new_no
 
         after_total = self.yes_shares + self.no_shares
+        after_price_yes = self.yes_shares / after_total if after_total > 0 else Decimal("0.5")
+        after_price_no = self.no_shares / after_total if after_total > 0 else Decimal("0.5")
 
         return AMMQuote(
             shares_out=shares.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
@@ -136,8 +161,8 @@ class BinaryAMM:
             fee=fee.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN),
             price=current_price,
             slippage=Decimal(0),
-            yes_price_after=self.yes_shares / after_total if after_total > 0 else Decimal("0.5"),
-            no_price_after=self.no_shares / after_total if after_total > 0 else Decimal("0.5"),
+            yes_price_after=after_price_yes,
+            no_price_after=after_price_no,
         )
 
     def buy(self, outcome: Literal["yes", "no"], collateral: Decimal, min_shares_out: Decimal | None = None) -> AMMQuote:

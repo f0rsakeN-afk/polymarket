@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -5,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
     ConflictError,
@@ -43,6 +45,7 @@ from app.schemas.auth import (
     TwoFactorSetupResponse,
     VerifyEmailRequest,
     VerifyMagicRequest,
+    VerifyMagicUrlRequest,
 )
 from app.services.audit_service import AuthAuditService
 from app.services.email_service import EmailService
@@ -60,6 +63,11 @@ _OTP_MAGIC = "magic"
 _OTP_RESET = "resetpwd"
 
 
+def _hash_refresh_token(token: str) -> str:
+    """Hash refresh token before storing — plaintext token never touches the DB."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def _issue_tokens(
     response: Response,
     user_id: str,
@@ -75,7 +83,7 @@ def _issue_tokens(
     token_record = RefreshToken(
         id=refresh_token_id,
         user_id=user_id,
-        token_hash=refresh_token_id,
+        token_hash=_hash_refresh_token(refresh_token_id),
         expires_at=expires_at,
         device_info=ua,
     )
@@ -95,18 +103,30 @@ def _issue_tokens(
 
 async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
     """
-    Revoke all non-revoked refresh tokens for a user.
+    Revoke all non-revoked refresh tokens for a user in a single atomic UPDATE.
     Optionally keep one token (used by change-password to preserve current session).
     """
-    query = select(RefreshToken).where(
-        RefreshToken.user_id == user_id,
-        RefreshToken.revoked.is_(False),
-    )
-    result = await db.execute(query)
-    for token in result.scalars().all():
-        if keep_token_hash and token.token_hash == keep_token_hash:
-            continue
-        token.revoked = True
+    from sqlalchemy import update
+    if keep_token_hash:
+        # Atomic UPDATE excluding the token to keep — no Python-side SELECT loop
+        await db.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked.is_(False),
+                RefreshToken.token_hash != keep_token_hash,
+            )
+            .values(revoked=True)
+        )
+    else:
+        await db.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked.is_(False),
+            )
+            .values(revoked=True)
+        )
 
 
 def _get_client_ip(request: Request) -> str:
@@ -115,6 +135,40 @@ def _get_client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _ip_matches(stored_ip: str, current_ip: str) -> bool:
+    """
+    Compare IPs with tolerance for NAT/proxies.
+    IPv4: compare first three octets (e.g. 1.2.3.x and 1.2.3.y match).
+    IPv6: compare first 48 bits (/48).
+    """
+    def _normalized_parts(ip: str) -> tuple[list[str] | None, bool]:
+        # Strip port if present
+        ip = ip.split(",")[0].strip().split(":")[0]
+        parts = ip.split(".")
+        if len(parts) == 4:
+            return parts, True  # IPv4
+        if ":" in ip:
+            # IPv6 — take first 3 groups (48 bits)
+            groups = ip.split(":")
+            return groups[:3], False
+        return None, False
+
+    stored_parts, stored_is_v4 = _normalized_parts(stored_ip)
+    current_parts, current_is_v4 = _normalized_parts(current_ip)
+    if not stored_parts or not current_parts:
+        # Fallback: exact match required for unknown formats
+        return stored_ip == current_ip
+    if stored_is_v4 and current_is_v4:
+        # ponytail: 3-octet match is a balance between NAT tolerance and security.
+        # Upgrade to /24 (4 octets) if full subnet isolation is needed.
+        return stored_parts[:3] == current_parts[:3]
+    # IPv6 — compare first 48 bits (first 3 groups)
+    if not stored_is_v4 and not current_is_v4:
+        return stored_parts[:3] == current_parts[:3]
+    # Protocol mismatch — be strict
+    return stored_ip == current_ip
 
 
 async def _blacklist_access_token(request: Request):
@@ -282,7 +336,7 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/magic-link/url", summary="Request one-click magic link URL via email")
-async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_db)):
+async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
@@ -291,9 +345,12 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
     if not user.is_email_verified:
         raise UnauthorizedError("Email not verified. Please register first.")
 
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent", "")[:200]
     token = str(uuid.uuid4())
-    r = get_redis()
-    await redis_cb.call(lambda: r.set(f"magicurl:{token}", str(user.id), ex=900))
+    r = await get_redis()
+    # Store as "user_id:ip:ua" for IP-binding on verification
+    await redis_cb.call(lambda: r.set(f"magicurl:{token}", f"{user.id}:{ip}:{ua}", ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
@@ -301,15 +358,29 @@ async def magic_link_url(data: MagicLinkRequest, db: AsyncSession = Depends(get_
     return success_response({"message": "Login link sent"})
 
 
-@router.get("/verify-magic-url", summary="Verify magic link URL token (GET — for browser redirect)")
-async def verify_magic_url(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    token = request.query_params.get("token")
+@router.post("/verify-magic-url", summary="Verify magic link URL token")
+async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    token = data.token
     if not token:
         raise UnauthorizedError("Missing token")
 
-    r = get_redis()
-    user_id = await redis_cb.call(lambda: r.get(f"magicurl:{token}"))
-    if not user_id:
+    r = await get_redis()
+    stored = await redis_cb.call(lambda: r.get(f"magicurl:{token}"))
+    if not stored:
+        raise UnauthorizedError("Invalid or expired link")
+
+    # Stored as "user_id:ip:ua" — split carefully since UUID has no colons
+    ip = _get_client_ip(request)
+    first_colon = stored.find(":")
+    user_id = stored[:first_colon] if first_colon != -1 else stored
+    rest = stored[first_colon + 1:] if first_colon != -1 else ""
+    second_colon = rest.find(":")
+    stored_ip = rest[:second_colon] if second_colon != -1 else rest
+    stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""
+
+    # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
+    if stored_ip and not _ip_matches(stored_ip, ip):
+        await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
         raise UnauthorizedError("Invalid or expired link")
 
     await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
@@ -325,7 +396,6 @@ async def verify_magic_url(request: Request, response: Response, db: AsyncSessio
         await redis_cb.call(lambda: r.set(f"partial:{partial}", user_id, ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
-    ip = _get_client_ip(request)
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
@@ -339,7 +409,7 @@ async def verify_magic_url_2fa(
     data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
 ):
     """Complete magic URL login when 2FA is enabled. Friction tracked by partial token + IP."""
-    r = get_redis()
+    r = await get_redis()
     user_id = await redis_cb.call(lambda: r.get(f"partial:{data.partial_token}"))
     if not user_id:
         raise UnauthorizedError("Session expired or invalid")
@@ -407,7 +477,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
     if user.is_2fa_enabled:
         if not data.totp_code:
             # Issue partial token so frontend can complete with TOTP without re-sending magic code
-            r = get_redis()
+            r = await get_redis()
             partial = str(uuid.uuid4())
             await redis_cb.call(lambda: r.set(f"magic_partial:{partial}", f"{user.id}:{data.email}", ex=300))
             raise UnauthorizedError(f"2FA code required:{partial}")
@@ -430,7 +500,7 @@ async def verify_magic_2fa(
     data: MagicUrl2FARequest, request: Request, response: Response, db: AsyncSession = Depends(get_db),
 ):
     """Complete magic link login when 2FA is enabled and magic code was already verified."""
-    r = get_redis()
+    r = await get_redis()
     stored = await redis_cb.call(lambda: r.get(f"magic_partial:{data.partial_token}"))
     if not stored:
         raise UnauthorizedError("Session expired. Please sign in again.")
@@ -483,7 +553,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     user.is_2fa_pending = True
     await db.commit()
 
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(
         lambda: r.set(f"2fa_pending:{user.id}", "1", ex=settings.totp_setup_expire_seconds)
     )
@@ -493,11 +563,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     await AuthAuditService.log_2fa_setup_requested(db, str(user.id), ip, ua)
 
     logger.info(f"2FA setup initiated: {user.email}")
-    return success_response(TwoFactorSetupResponse(
-        secret=secret,
-        uri=uri,
-        base32=secret,
-    ).model_dump())
+    return success_response(TwoFactorSetupResponse(uri=uri).model_dump())
 
 
 @router.post("/2fa/enable", summary="Confirm and enable 2FA")
@@ -512,7 +578,7 @@ async def enable_2fa(
     if not (user.totp_secret_encrypted and user.is_2fa_pending):
         raise ValidationError("No active 2FA setup. Call /2fa/setup first.")
 
-    r = get_redis()
+    r = await get_redis()
     pending = await redis_cb.call(lambda: r.get(f"2fa_pending:{user.id}"))
     if not pending:
         user.is_2fa_pending = False
@@ -559,7 +625,7 @@ async def disable_2fa(
     user.is_2fa_pending = False
     await db.commit()
 
-    r = get_redis()
+    r = await get_redis()
     await redis_cb.call(lambda: r.delete(f"2fa_pending:{user.id}"))
     await AuthAuditService.log_2fa_disabled(db, str(user.id), ip, ua)
 
@@ -597,12 +663,10 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request, db: Asy
 
 @router.post("/reset-password", summary="Reset password with code")
 async def reset_password(data: ResetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    strong, reason = PasswordStrengthService.check(data.new_password)
-    if not strong:
-        raise ValidationError(reason)
-
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
+
+    # Rate limit before OTP check
     rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
     if is_slowed and rl_result.retry_after:
         from fastapi import HTTPException
@@ -611,18 +675,26 @@ async def reset_password(data: ResetPasswordRequest, request: Request, db: Async
         from fastapi import HTTPException
         raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
 
+    # OTP verification must come BEFORE password strength check —
+    # prevents brute-forcing password policy without a valid OTP
     if not await OTPService.verify_code(data.email, _OTP_RESET, data.code):
         await RateLimitService.record_failure(data.email, ip)
         raise UnauthorizedError("Invalid or expired code")
 
     await RateLimitService.reset_friction(data.email, ip)
+
+    # Password strength check after OTP is verified
+    strong, reason = PasswordStrengthService.check(data.new_password)
+    if not strong:
+        raise ValidationError(reason)
+
     user_result = await db.execute(select(User).where(User.email == data.email))
     user = user_result.scalar_one_or_none()
     if not user:
         raise UnauthorizedError("User not found")
 
     user.password_hash = hash_password(data.new_password)
-    _revoke_all_refresh_tokens(db, str(user.id))
+    await _revoke_all_refresh_tokens(db, str(user.id))
     await db.commit()
 
     await AuthAuditService.log_password_reset_success(db, data.email, str(user.id), ip, ua)
@@ -696,7 +768,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
         result = await db.execute(
-            select(RefreshToken).where(RefreshToken.token_hash == refresh_token)
+            select(RefreshToken).where(RefreshToken.token_hash == _hash_refresh_token(refresh_token))
         )
         token_record = result.scalar_one_or_none()
         if token_record:
@@ -722,7 +794,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     ua = request.headers.get("user-agent")
 
     await _blacklist_access_token(request)
-    _revoke_all_refresh_tokens(db, str(user.id))
+    await _revoke_all_refresh_tokens(db, str(user.id))
     # Also revoke all sessions for this user
     sessions_result = await db.execute(
         select(Session).where(Session.user_id == user.id, not Session.revoked)
@@ -815,12 +887,10 @@ async def change_password(
 
     await _blacklist_access_token(request)
     current_refresh = request.cookies.get("refresh_token")
-    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=current_refresh)
-    await db.commit()
-
+    await _revoke_all_refresh_tokens(db, str(user.id), keep_token_hash=_hash_refresh_token(current_refresh) if current_refresh else None)
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
-
     new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    # Single atomic commit: password change + token revocation + new tokens + audit log
     await db.commit()
     set_auth_cookies(response, new_access, new_refresh)
 
@@ -835,11 +905,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("No refresh token")
 
     result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token_hash == refresh_token,
+        select(RefreshToken)
+        .where(
+            RefreshToken.token_hash == _hash_refresh_token(refresh_token),
             RefreshToken.revoked.is_(False),
             RefreshToken.expires_at > datetime.now(UTC),
         )
+        .options(selectinload(RefreshToken.current_session))
+        .with_for_update()
     )
     token_record = result.scalar_one_or_none()
     if not token_record:
@@ -856,7 +929,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     new_record = RefreshToken(
         id=new_refresh,
         user_id=token_record.user_id,
-        token_hash=new_refresh,
+        token_hash=_hash_refresh_token(new_refresh),
         expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
     )
     db.add(new_record)

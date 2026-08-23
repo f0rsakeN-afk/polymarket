@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -9,13 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
-from app.deps import (
-    cache_get,
-    cache_invalidate,
-    cache_invalidate_pattern,
-    cache_set,
-    get_current_user,
-)
+from app.deps import get_current_user
 from app.models.faq import MarketFAQ
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
@@ -30,6 +25,16 @@ from app.schemas.market import (
     OutcomeResponse,
     ResolveMarketRequest,
 )
+from app.services.cache_service import (
+    cache_get_market,
+    cache_get_market_list,
+    cache_get_orderbook,
+    cache_invalidate_market,
+    cache_invalidate_market_lists,
+    cache_set_market,
+    cache_set_market_list,
+    cache_set_orderbook,
+)
 from app.services.market_service import MarketService
 from app.workers.tasks import resolve_market
 
@@ -37,7 +42,12 @@ logger = logging.getLogger("polymarket")
 router = APIRouter(prefix="/markets", tags=["markets"])
 
 
-def market_to_response(market: Market, yes_price: float = 0.5, no_price: float = 0.5, outcomes: list | None = None) -> MarketResponse:
+def market_to_response(
+    market: Market,
+    yes_price: float = 0.5,
+    no_price: float = 0.5,
+    outcomes: list | None = None,
+) -> MarketResponse:
     resp = MarketResponse(
         id=str(market.id),
         slug=market.slug,
@@ -50,7 +60,9 @@ def market_to_response(market: Market, yes_price: float = 0.5, no_price: float =
         yes_price=yes_price,
         no_price=no_price,
         closes_at=market.closes_at,
-        winning_outcome_id=str(market.winning_outcome_id) if market.winning_outcome_id else None,
+        winning_outcome_id=str(market.winning_outcome_id)
+        if market.winning_outcome_id
+        else None,
         winning_outcome_name=None,
     )
     if outcomes:
@@ -71,8 +83,8 @@ async def list_markets(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
-    cache_key = f"markets:list:{q or ''}:{category or ''}:{status or ''}:{sort}:{page}:{page_size}"
-    cached = await cache_get(cache_key)
+    cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}:{page}:{page_size}"
+    cached = await cache_get_market_list(cache_key)
     if cached is not None:
         return MarketListResponse(**cached)
 
@@ -111,11 +123,23 @@ async def list_markets(
     market_ids = [m.id for m in page_markets]
 
     # Batch-fetch Redis prices
-    redis = get_redis()
+    redis = await get_redis()
     pipe = redis.pipeline()
     for m in page_markets:
         pipe.hgetall(f"market:{m.id}:price")
     price_data = await pipe.execute()
+
+    # Collect missing market IDs and fetch all missing prices concurrently
+    missing_indices = []
+    for i, (market, pool) in enumerate(rows):
+        pd = price_data[i]
+        if not (pd and "yes_price" in pd and "no_price" in pd):
+            missing_indices.append(i)
+
+    if missing_indices:
+        missing_ids = [str(rows[i][0].id) for i in missing_indices]
+        results = await asyncio.gather(*[MarketService.get_market_prices(id) for id in missing_ids])
+        price_map = dict(zip(missing_ids, results))
 
     market_responses = []
     for i, (market, pool) in enumerate(rows):
@@ -123,12 +147,14 @@ async def list_markets(
         if pd and "yes_price" in pd and "no_price" in pd:
             yes_price, no_price = float(pd["yes_price"]), float(pd["no_price"])
         else:
-            yes_price, no_price = await MarketService.get_market_prices(str(market.id))
+            yes_price, no_price = price_map[str(market.id)]
         market_responses.append(market_to_response(market, yes_price, no_price))
 
     # Targeted outcome query using page market IDs
     outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id.in_(market_ids)).order_by(Outcome.outcome_index)
+        select(Outcome)
+        .where(Outcome.market_id.in_(market_ids))
+        .order_by(Outcome.outcome_index)
     )
     outcomes_by_market: dict = {}
     for o in outcomes_result.scalars().all():
@@ -139,7 +165,9 @@ async def list_markets(
         outcomes = outcomes_by_market.get(resp.id)
         if outcomes and len(outcomes) > 2:
             resp.outcomes = [
-                OutcomeResponse(id=str(o.id), name=o.name, outcome_index=o.outcome_index)
+                OutcomeResponse(
+                    id=str(o.id), name=o.name, outcome_index=o.outcome_index
+                )
                 for o in outcomes
             ]
 
@@ -149,13 +177,13 @@ async def list_markets(
         page_size=page_size,
         has_more=has_more,
     )
-    await cache_set(cache_key, resp.model_dump(), ttl=30)
+    await cache_set_market_list(cache_key, resp.model_dump(), ttl=60)
     return resp.model_dump()
 
 
 @router.get("/categories")
 async def list_categories(db: AsyncSession = Depends(get_db_replica)):
-    cached = await cache_get("markets:categories")
+    cached = await cache_get_market_list("categories")
     if cached is not None:
         return success_response(cached)
 
@@ -164,92 +192,110 @@ async def list_categories(db: AsyncSession = Depends(get_db_replica)):
     )
     categories = [row[0] for row in result.all()]
     data = {"categories": categories}
-    await cache_set("markets:categories", data, ttl=300)
+    await cache_set_market_list("categories", data, ttl=300)
     return success_response(data)
 
 
 @router.get("/{slug}")
 async def get_market(slug: str, db: AsyncSession = Depends(get_db_replica)):
-    cached = await cache_get(f"markets:detail:{slug}")
-    if cached is not None:
-        return success_response(cached)
-
     result = await db.execute(select(Market).where(Market.slug == slug))
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
 
+    # Check cache using market_id
+    cached = await cache_get_market(str(market.id))
+    if cached is not None:
+        return success_response(cached)
+
     yes_price, no_price = await MarketService.get_market_prices(str(market.id))
     spread = abs(yes_price - no_price)
 
     outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
+        select(Outcome)
+        .where(Outcome.market_id == market.id)
+        .order_by(Outcome.outcome_index)
     )
     outcomes = outcomes_result.scalars().all()
 
     data = {
         **market_to_response(market, yes_price, no_price).model_dump(),
         "outcomes": [
-            OutcomeResponse(id=str(o.id), name=o.name, outcome_index=o.outcome_index).model_dump()
+            OutcomeResponse(
+                id=str(o.id), name=o.name, outcome_index=o.outcome_index
+            ).model_dump()
             for o in outcomes
         ],
         "spread": spread,
         "created_at": market.created_at.isoformat() if market.created_at else None,
     }
-    await cache_set(f"markets:detail:{slug}", data, ttl=60)
+    await cache_set_market(str(market.id), data, ttl=300)
     return success_response(data)
 
 
 @router.get("/{slug}/orderbook")
 async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
-    cached = await cache_get(f"markets:orderbook:{slug}")
-    if cached is not None:
-        return cached
-
     result = await db.execute(select(Market).where(Market.slug == slug))
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
 
+    # Check cache using market_id (not slug)
+    cached = await cache_get_orderbook(str(market.id))
+    if cached is not None:
+        return cached
+
     from app.models.order import Order
+
     pending = await db.execute(
-        select(Order.outcome_id, Order.price, func.sum(Order.remaining_amount).label("total_size"))
+        select(
+            Order.outcome_id,
+            Order.side,
+            Order.price,
+            func.sum(Order.remaining_amount).label("total_size"),
+        )
         .where(
             Order.market_id == market.id,
             Order.status == "pending",
             Order.order_type.in_(["limit", "fill_or_kill"]),
         )
-        .group_by(Order.outcome_id, Order.price)
-        .order_by(Order.price.desc())
+        .group_by(Order.outcome_id, Order.side, Order.price)
+        .order_by(Order.outcome_id, Order.side, Order.price.desc())
     )
     rows = pending.all()
 
     outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id)
+        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
     )
-    outcome_names = {str(o.id): o.name.lower() for o in outcomes_result.scalars().all()}
+    outcomes = outcomes_result.scalars().all()
+    outcome_names = {str(o.id): o.name.lower() for o in outcomes}
 
-    bids = []
-    asks = []
+    # Structure: { outcome_name: { bids: [], asks: [] } }
+    outcome_orderbook: dict[str, dict[str, list[dict]]] = {
+        o.name.lower(): {"bids": [], "asks": []} for o in outcomes
+    }
     for row in rows:
+        outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
+        if outcome_name not in outcome_orderbook:
+            continue
         entry = {
-            "outcome_id": str(row.outcome_id),
-            "outcome": outcome_names.get(str(row.outcome_id), "unknown"),
-            "price": float(row.price),
-            "size": float(row.total_size),
+            "price": str(row.price),
+            "size": str(row.total_size),
         }
-        if entry["outcome"] == "yes":
-            bids.append(entry)
+        if row.side == "buy":
+            outcome_orderbook[outcome_name]["bids"].append(entry)
         else:
-            asks.append(entry)
+            outcome_orderbook[outcome_name]["asks"].append(entry)
 
-    data = {"bids": bids, "asks": asks}
-    await cache_set(f"markets:orderbook:{slug}", data, ttl=10)
-    return data
+    data = {"outcomes": outcome_orderbook}
+    await cache_set_orderbook(str(market.id), data, ttl=60)
+    return success_response(data)
 
 
 @router.post("/")
-async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def create_market(
+    data: CreateMarketRequest, request: Request, db: AsyncSession = Depends(get_db)
+):
     user = await get_current_user(request, db)
     if not user.is_admin:
         raise ForbiddenError("Only admins can create markets")
@@ -277,10 +323,14 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
     await db.flush()
 
     if data.outcomes_create:
-        db.add_all([
-            Outcome(market_id=market.id, name=oc.name, outcome_index=oc.outcome_index)
-            for oc in data.outcomes_create
-        ])
+        db.add_all(
+            [
+                Outcome(
+                    market_id=market.id, name=oc.name, outcome_index=oc.outcome_index
+                )
+                for oc in data.outcomes_create
+            ]
+        )
     else:
         outcome_yes = Outcome(market_id=market.id, name="Yes", outcome_index=0)
         outcome_no = Outcome(market_id=market.id, name="No", outcome_index=1)
@@ -299,6 +349,7 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
 
     if data.initial_liquidity > 0:
         from app.models.wallet import Wallet
+
         wallet = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
         wallet = wallet.scalar_one_or_none()
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
@@ -318,8 +369,7 @@ async def create_market(data: CreateMarketRequest, request: Request, db: AsyncSe
 
     await db.commit()
     logger.info(f"Market created: {data.slug} by admin={user.id}")
-    await cache_invalidate("markets:categories")
-    await cache_invalidate_pattern("markets:list:*")
+    await cache_invalidate_market_lists()
     return success_response({"slug": data.slug, "id": str(market.id)})
 
 
@@ -330,10 +380,22 @@ async def get_faqs(slug: str, db: AsyncSession = Depends(get_db_replica)):
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
     faqs_result = await db.execute(
-        select(MarketFAQ).where(MarketFAQ.market_id == market.id).order_by(MarketFAQ.display_order)
+        select(MarketFAQ)
+        .where(MarketFAQ.market_id == market.id)
+        .order_by(MarketFAQ.display_order)
     )
     faqs = faqs_result.scalars().all()
-    return success_response([FAQResponse(id=str(f.id), question=f.question, answer=f.answer, display_order=f.display_order) for f in faqs])
+    return success_response(
+        [
+            FAQResponse(
+                id=str(f.id),
+                question=f.question,
+                answer=f.answer,
+                display_order=f.display_order,
+            )
+            for f in faqs
+        ]
+    )
 
 
 @router.get("/{slug}/price-history")
@@ -359,18 +421,25 @@ async def get_price_history(
         filters.append(PriceHistory.snapshot_at <= datetime.fromisoformat(to_date))
 
     raw = await db.execute(
-        select(PriceHistory)
-        .where(*filters)
-        .order_by(PriceHistory.snapshot_at.asc())
+        select(PriceHistory).where(*filters).order_by(PriceHistory.snapshot_at.asc())
     )
     rows = raw.scalars().all()
 
     outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
+        select(Outcome)
+        .where(Outcome.market_id == market.id)
+        .order_by(Outcome.outcome_index)
     )
     outcomes_map = {str(o.id): o.name for o in outcomes_result.scalars().all()}
 
-    interval_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(interval, 300)
+    interval_seconds = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "4h": 14400,
+        "1d": 86400,
+    }.get(interval, 300)
 
     grouped: dict = {}
     for r in rows:
@@ -388,14 +457,22 @@ async def get_price_history(
             oid = str(r.outcome_id)
             outcome_prices[oid] = float(r.price)
             total_vol += float(r.total_volume or 0)
-        samples.append({
-            "timestamp": ts_dt.isoformat(),
-            "outcomes": [
-                {"id": oid, "name": outcomes_map.get(oid, "Unknown"), "price": outcome_prices[oid]}
-                for oid in sorted(outcome_prices, key=lambda x: outcomes_map.get(x, ""))
-            ],
-            "total_volume": total_vol,
-        })
+        samples.append(
+            {
+                "timestamp": ts_dt.isoformat(),
+                "outcomes": [
+                    {
+                        "id": oid,
+                        "name": outcomes_map.get(oid, "Unknown"),
+                        "price": outcome_prices[oid],
+                    }
+                    for oid in sorted(
+                        outcome_prices, key=lambda x: outcomes_map.get(x, "")
+                    )
+                ],
+                "total_volume": str(total_vol),
+            }
+        )
 
     return success_response(samples)
 
@@ -412,16 +489,19 @@ async def get_related(slug: str, db: AsyncSession = Depends(get_db_replica)):
         .outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
         .where(
             Market.id != market.id,
-            (Market.category == market.category) | (Market.subcategory == market.subcategory),
+            (Market.category == market.category)
+            | (Market.subcategory == market.subcategory),
         )
         .order_by(Market.total_volume.desc())
         .limit(5)
     )
     rows = related.all()
-    return success_response([
-        market_to_response(m, *MarketService.compute_prices(p)).model_dump()
-        for m, p in rows
-    ])
+    return success_response(
+        [
+            market_to_response(m, *MarketService.compute_prices(p)).model_dump()
+            for m, p in rows
+        ]
+    )
 
 
 @router.post("/{slug}/resolve")
@@ -444,7 +524,9 @@ async def resolve_market_endpoint(
         raise ValidationError("Market is already resolved")
 
     outcome_result = await db.execute(
-        select(Outcome).where(Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id)
+        select(Outcome).where(
+            Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id
+        )
     )
     outcome = outcome_result.scalar_one_or_none()
     if not outcome:
@@ -458,16 +540,20 @@ async def resolve_market_endpoint(
     try:
         resolve_market.delay(str(market.id), str(outcome.id))
     except Exception:
-        logger.exception(f"Failed to queue market resolution task: market_id={market.id}")
+        logger.exception(
+            f"Failed to queue market resolution task: market_id={market.id}"
+        )
 
     logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
-    await cache_invalidate(f"markets:detail:{slug}")
-    await cache_invalidate_pattern("markets:list:*")
-    return success_response({
-        "slug": slug,
-        "winning_outcome_id": str(outcome.id),
-        "winning_outcome_name": outcome.name,
-    })
+    await cache_invalidate_market(str(market.id))
+    await cache_invalidate_market_lists()
+    return success_response(
+        {
+            "slug": slug,
+            "winning_outcome_id": str(outcome.id),
+            "winning_outcome_name": outcome.name,
+        }
+    )
 
 
 @router.post("/{slug}/claim")
@@ -488,12 +574,14 @@ async def claim_winnings(
         raise ValidationError("Market has no winning outcome set")
 
     pos_result = await db.execute(
-        select(Position).where(
+        select(Position)
+        .where(
             Position.user_id == user.id,
             Position.market_id == market.id,
             Position.outcome_id == market.winning_outcome_id,
             Position.shares_held > 0,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     winning_pos = pos_result.scalar_one_or_none()
     if not winning_pos:
@@ -525,4 +613,4 @@ async def claim_winnings(
     await db.commit()
 
     logger.info(f"Claimed winnings: user={user.id} market={slug} payout={payout}")
-    return success_response({"claimed": float(payout)})
+    return success_response({"claimed": str(payout)})

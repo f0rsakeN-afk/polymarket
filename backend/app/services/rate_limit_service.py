@@ -61,7 +61,8 @@ return {0, remaining}
 """
 
 # Progressive friction: tracks failed attempts and returns a delay to apply.
-# Delays: attempt 5 → 1s, 6 → 2s, 7 → 4s, 8 → 8s, 9+ → 16s (capped).
+# Lockout activates at max_attempts (checked BEFORE increment — not after).
+# Delays: attempt max_attempts → 1s, max_attempts+1 → 2s, etc. (capped at 16s).
 # KEYS[1] = friction_key, ARGV[1] = max_attempts, ARGV[2] = lockout_seconds, ARGV[3] = now
 PROGRESSIVE_FRICTION_SCRIPT = """
 local key = KEYS[1]
@@ -79,8 +80,7 @@ if unlock_at > now then
     return {0, remaining, 1}  -- is_locked=1
 end
 
--- Increment and recalculate
-attempts = attempts + 1
+-- Check BEFORE increment — lockout fires at max_attempts, not max_attempts+1
 local delay = 0
 local is_locked = 0
 
@@ -90,6 +90,8 @@ if attempts >= max_attempts then
     unlock_at = now + delay
     is_locked = 1
 end
+
+attempts = attempts + 1
 
 redis.call('HSET', key, 'attempts', attempts, 'unlock_at', unlock_at)
 redis.call('EXPIRE', key, lockout)
@@ -152,7 +154,7 @@ class RateLimitService:
 
         limit, window = RateLimitService._LIMITS[limit_type]
         now = time.time()
-        r = get_redis()
+        r = await get_redis()
 
         # Composite key for auth limits: email@normalized_ip
         if limit_type in (LimitType.AUTH_DECISION, LimitType.AUTH_FAST) and ip:
@@ -170,7 +172,7 @@ class RateLimitService:
             over_limit, remaining = int(script_result[0]), int(script_result[1])
         except Exception as e:
             logger.warning(f"Rate limit Redis error (check): {e}")
-            return RateLimitResult(allowed=True, limit=limit, remaining=limit, retry_after=None, is_slowdown=False)
+            return RateLimitResult(allowed=False, limit=limit, remaining=0, retry_after=60, is_slowdown=True)  # Fail closed
 
         if over_limit:
             return RateLimitResult(
@@ -206,7 +208,7 @@ class RateLimitService:
         normalized_ip = RateLimitService._normalize_ip(ip)
         friction_key = RateLimitService._friction_key(f"{identifier}@{normalized_ip}")
         now = time.time()
-        r = get_redis()
+        r = await get_redis()
 
         max_attempts = settings.rate_limit_auth_max_attempts
         lockout = settings.rate_limit_auth_lockout_seconds
@@ -243,7 +245,7 @@ class RateLimitService:
             return
         normalized_ip = RateLimitService._normalize_ip(ip)
         friction_key = RateLimitService._friction_key(f"{identifier}@{normalized_ip}")
-        r = get_redis()
+        r = await get_redis()
         try:
             await redis_cb.call(lambda: r.eval(RESET_FRICTION_SCRIPT, 1, friction_key))
         except Exception as e:
@@ -256,7 +258,7 @@ class RateLimitService:
             return
         normalized_ip = RateLimitService._normalize_ip(ip)
         friction_key = RateLimitService._friction_key(f"{identifier}@{normalized_ip}")
-        r = get_redis()
+        r = await get_redis()
         try:
             await redis_cb.call(
                 lambda: r.eval(

@@ -42,9 +42,10 @@ start_docker_services() {
 
 # ─── FastAPI ──────────────────────────────────────────────────────────────────
 start_api() {
-  log "Starting FastAPI (uvicorn)..."
+  log "Starting FastAPI (8 uvicorn workers)..."
   cd "$BASE_DIR"
-  uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload \
+  # 8 workers, each with its own event loop + Redis pub/sub listener
+  uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --workers 8 \
     > "$LOG_DIR/api.log" 2>&1 &
   echo $! > "$LOG_DIR/api.pid"
   info "API running at http://localhost:8000"
