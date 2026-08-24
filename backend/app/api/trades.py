@@ -47,7 +47,7 @@ async def list_trades(
             "side": trade.side,
             "price": str(trade.price),
             "amount": str(trade.amount),
-            "executed_at": trade.executed_at,
+            "executed_at": trade.executed_at.isoformat() if trade.executed_at else None,
             "username": username,
         }
         for trade, slug, question, username in rows
@@ -93,7 +93,7 @@ async def list_market_trades(
                 "side": t.side,
                 "price": str(t.price),
                 "amount": str(t.amount),
-                "executed_at": t.executed_at,
+                "executed_at": t.executed_at.isoformat() if t.executed_at else None,
                 "username": username,
             }
             for t, username in rows

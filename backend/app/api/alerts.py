@@ -44,7 +44,7 @@ async def list_alerts(request: Request, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(
         select(Alert)
-        .where(Alert.user_id == user.id, not Alert.triggered)
+        .where(Alert.user_id == user.id, ~Alert.triggered)
         .order_by(Alert.created_at.desc())
     )
     alerts = result.scalars().all()
@@ -56,13 +56,13 @@ async def delete_alert(alert_id: str, request: Request, db: AsyncSession = Depen
     user = await get_current_user(request, db)
 
     result = await db.execute(
-        select(Alert).where(Alert.id == alert_id, Alert.user_id == user.id)
+        select(Alert).where(Alert.id == alert_id, Alert.user_id == user.id).with_for_update()
     )
     alert = result.scalar_one_or_none()
     if not alert:
         raise NotFoundError("Alert not found")
 
-    await db.execute(delete(Alert).where(Alert.id == alert_id))
+    await db.execute(delete(Alert).where(Alert.id == alert_id, Alert.user_id == user.id))
     await db.commit()
     logger.info(f"Alert deleted: {alert_id} by user={user.id}")
     return success_response({"id": alert_id, "deleted": True})

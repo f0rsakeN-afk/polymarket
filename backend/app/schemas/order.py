@@ -15,7 +15,7 @@ class OrderRequest(BaseModel):
     expires_at: datetime | None = None  # for limit orders
     post_only: bool = False  # if True, reject if would execute immediately
     client_order_id: str | None = None
-    max_slippage: NonNegativeMoney | None = Field(None, le=1)  # e.g. 0.005 = 0.5%
+    max_slippage: NonNegativeMoney | None = Field(None, ge=0, le=0.10)  # cap at 10% slippage server-side
     min_shares_out: PositiveMoney | None = None  # minimum shares to receive
     quote_id: str | None = None  # bind to a specific quote
 

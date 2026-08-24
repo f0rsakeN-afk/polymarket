@@ -43,11 +43,13 @@ async def cache_invalidate_market(market_id: str):
     tag_key = f"ct:market:{market_id}"
 
     async def _op():
-        keys = await r.smembers(f"cache:{tag_key}")
-        if not keys:
+        raw_keys = await r.smembers(f"cache:{tag_key}")
+        if not raw_keys:
             return
+        # Redis returns bytes; decode to string for correct cache key construction
+        keys = [k.decode() if isinstance(k, bytes) else k for k in raw_keys]
         pipe = r.pipeline()
-        pipe.delete(*[f"cache:cm:{k}" for k in keys])
+        pipe.delete(*[f"cache:{k}" for k in keys])
         pipe.delete(f"cache:{tag_key}")
         await pipe.execute()
 
@@ -131,11 +133,13 @@ async def cache_invalidate_user(user_id: str):
     tag_key = f"ct:user:{user_id}"
 
     async def _op():
-        keys = await r.smembers(f"cache:{tag_key}")
-        if not keys:
+        raw_keys = await r.smembers(f"cache:{tag_key}")
+        if not raw_keys:
             return
+        # Redis returns bytes; decode to string for correct cache key construction
+        keys = [k.decode() if isinstance(k, bytes) else k for k in raw_keys]
         pipe = r.pipeline()
-        pipe.delete(*[f"cache:cm:{k}" for k in keys])
+        pipe.delete(*[f"cache:{k}" for k in keys])
         pipe.delete(f"cache:{tag_key}")
         await pipe.execute()
 

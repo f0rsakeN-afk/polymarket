@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -46,44 +47,45 @@ from app.models import Base
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
 
-# Structured logging
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Read APP_ENV early — logging is configured in lifespan() after settings loads,
+# but this is used at module level to conditionally import/show docs.
+# Never use this for security decisions — only for UI/information exposure.
+_APP_ENV = os.environ.get("APP_ENV", "development")
+
+
+def _configure_logging(app_env: str, log_level: str) -> None:
+    """Configure root logger based on environment and log level."""
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    if app_env == "production":
+        # Structured JSON in production — parseable by log aggregators (Datadog, Loki, ELK)
+        class JSONFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                return json.dumps({
+                    "timestamp": record.created,
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                }, default=str)
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(formatter)
+    logging.basicConfig(level=level, handlers=[handler])
+
+
 logger = logging.getLogger("polymarket")
-
-
-def json_log(record: logging.LogRecord, **extra: object) -> str:
-    """Format a log record as a JSON string with standard fields plus any extra fields."""
-    out = {
-        "timestamp": record.created,
-        "level": record.levelname,
-        "logger": record.name,
-        "message": record.getMessage(),
-    }
-    out.update(extra)
-    return json.dumps(out, default=str)
-
-
-class JSONFormatter(logging.Formatter):
-    """Format log records as JSON strings when not in debug mode."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        return json_log(record)
-
-
-if not settings.debug:
-    _json_handler = logging.StreamHandler()
-    _json_handler.setFormatter(JSONFormatter())
-    logger.addHandler(_json_handler)
-    logger.propagate = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting up...")
+    # Configure logging AFTER settings load — uses app_env (production → JSON, else human-readable)
+    # and log_level (verbosity). This replaces the module-level basicConfig.
+    _configure_logging(settings.app_env, settings.log_level)
+    logger.info(f"Starting up (app_env={settings.app_env}, log_level={settings.log_level})")
 
     # Fail fast: all secrets must be set via environment variables
     if settings.totp_encryption_key == "change-me-in-production":
@@ -105,7 +107,7 @@ async def lifespan(app: FastAPI):
     # Warn if TRUSTED_PROXY_IPS is not set — IP-based rate limiting can be spoofed
     # behind an untrusted proxy (the direct connection IP will be the proxy's IP, not the real client)
     import os
-    if not settings.debug and not os.environ.get("TRUSTED_PROXY_IPS", "").strip():
+    if settings.app_env == "production" and not os.environ.get("TRUSTED_PROXY_IPS", "").strip():
         logger.warning(
             "TRUSTED_PROXY_IPS is not set. X-Forwarded-For will be ignored for IP identification. "
             "Set TRUSTED_PROXY_IPS if running behind a reverse proxy (e.g. nginx, caddy, cloudflare). "
@@ -136,14 +138,16 @@ async def lifespan(app: FastAPI):
     await _get_replica_engine().dispose()
 
 
+_is_prod = settings.app_env == "production"
+
 app = FastAPI(
     title=settings.app_name,
     description="Polymarket-style prediction market API with AMM trading, real-time prices, and Stripe deposits.",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None,
-    openapi_url="/openapi.json" if settings.debug else None,
+    docs_url="/docs" if settings.app_env != "production" else None,
+    redoc_url="/redoc" if settings.app_env != "production" else None,
+    openapi_url="/openapi.json" if settings.app_env != "production" else None,
 )
 
 origins = [o.strip() for o in settings.cors_origins.split(",")]
@@ -215,7 +219,9 @@ async def health_ready():
         latency_ms = (time.perf_counter() - t0) * 1000
         checks["db"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
     except Exception as e:
-        checks["db"] = {"status": "error", "latency_ms": None, "error": str(e)}
+        checks["db"] = {"status": "error", "latency_ms": None}
+        if settings.app_env != "production":
+            checks["db"]["error"] = str(e)  # show in dev/staging for debugging
         unhealthy = True
 
     # Check Redis
@@ -227,7 +233,9 @@ async def health_ready():
         latency_ms = (time.perf_counter() - t0) * 1000
         checks["redis"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
     except Exception as e:
-        checks["redis"] = {"status": "error", "latency_ms": None, "error": str(e)}
+        checks["redis"] = {"status": "error", "latency_ms": None}
+        if settings.app_env != "production":
+            checks["redis"]["error"] = str(e)  # show in dev/staging for debugging
         unhealthy = True
 
     return {

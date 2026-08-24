@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.base import MoneyField, PositiveMoney
 
@@ -19,12 +19,15 @@ class DepositRequest(BaseModel):
 
 class DepositResponse(BaseModel):
     client_secret: str
+    payment_intent_id: str
     amount: MoneyField
     currency: str
 
 
 class WithdrawRequest(BaseModel):
     amount: PositiveMoney
+    # Idempotency key — client-generated, prevents double-withdrawal on retry
+    idempotency_key: str | None = Field(None, max_length=64)
 
 
 class TransactionResponse(BaseModel):

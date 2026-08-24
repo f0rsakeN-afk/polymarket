@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,12 +17,21 @@ router = APIRouter(prefix="/treasury", tags=["treasury"])
 
 
 async def _get_or_create_treasury(db: AsyncSession) -> Treasury:
-    result = await db.execute(select(Treasury))
+    result = await db.execute(select(Treasury).with_for_update().limit(1))
     treasury = result.scalar_one_or_none()
     if not treasury:
         treasury = Treasury()
         db.add(treasury)
-        await db.commit()
+        try:
+            await db.flush()
+        except Exception:
+            # Race: another request inserted treasury between our SELECT and INSERT.
+            # Roll back and re-fetch.
+            await db.rollback()
+            result = await db.execute(select(Treasury).limit(1))
+            treasury = result.scalar_one_or_none()
+            if not treasury:
+                raise  # truly gone — propagate
         await db.refresh(treasury)
     return treasury
 
@@ -93,12 +102,16 @@ async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) 
 
 @router.post("/distribute")
 async def distribute_fees(
-    amount: float = Query(..., gt=0, description="Amount to distribute (must be positive)"),
+    amount: float = Query(..., gt=0, le=100_000_000, description="Amount to distribute (must be positive, max 100M)"),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     from decimal import Decimal
-    await _get_admin_user(request, db)
+    if request is None:
+        raise HTTPException(status_code=400, detail="Request object missing")
+    admin = await get_current_user(request, db)
+    if not admin.is_admin:
+        raise ForbiddenError("Admin access required")
 
     treasury = await _get_or_create_treasury(db)
     amount_dec = Decimal(str(amount))

@@ -7,7 +7,9 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class Treasury(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "treasury"
-    __table_args__ = (CheckConstraint("balance >= 0"),)
+    __table_args__ = (
+        CheckConstraint("balance >= 0"),
+    )
 
     balance = Column(Numeric(20, 8), default=0, nullable=False)
     total_fees_collected = Column(Numeric(20, 8), default=0, nullable=False)

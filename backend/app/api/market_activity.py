@@ -143,7 +143,7 @@ async def get_market_activity(
     comments_result = await db.execute(
         select(Comment, User.username)
         .join(User, Comment.user_id == User.id)
-        .where(Comment.market_id == market.id, not Comment.is_deleted)
+        .where(Comment.market_id == market.id, ~Comment.is_deleted)
         .order_by(Comment.created_at.desc())
         .limit(limit)
     )

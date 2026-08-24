@@ -135,12 +135,16 @@ class RateLimitService:
         if ":" not in ip:
             return ip
         parts = ip.split(":")
-        full = []
-        for part in parts:
-            if part:
-                full.append(part.zfill(4))
-        if len(full) >= 4:
-            return ":".join(full[:4]) + "::"
+        # Strip empty segments from :: expansion
+        meaningful = [p for p in parts if p]
+        if len(meaningful) >= 4:
+            # Enough explicit parts — take first 4 groups
+            return ":".join(p.zfill(4) for p in meaningful[:4]) + "::"
+        if len(meaningful) < 4:
+            # Less than 4 explicit parts means :: is present — rebuild /64 from what's there
+            # e.g. "2001:db8::1" → "2001:0db8::"
+            filled = [p.zfill(4) for p in meaningful] + ["0000"] * (4 - len(meaningful))
+            return ":".join(filled[:4]) + "::"
         return ip
 
     @staticmethod

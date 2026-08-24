@@ -1,5 +1,6 @@
 """Tests for dispute endpoints."""
 import pytest
+from unittest.mock import patch
 
 from httpx import AsyncClient
 
@@ -17,9 +18,10 @@ async def test_create_dispute_resolved_market(client: AsyncClient, admin_user, t
     """User can file a dispute on a resolved market."""
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
     client.cookies.set("access_token", _token(admin_user.id))
-    await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
-        "winning_outcome_id": str(outcome.id),
-    })
+    with patch("app.api.markets.resolve_market.delay"):
+        await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
+            "winning_outcome_id": str(outcome.id),
+        })
 
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/disputes", json={
@@ -107,9 +109,10 @@ async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_use
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
     client.cookies.set("access_token", _token(admin_user.id))
-    await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
-        "winning_outcome_id": str(outcome.id),
-    })
+    with patch("app.api.markets.resolve_market.delay"):
+        await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
+            "winning_outcome_id": str(outcome.id),
+        })
 
     client.cookies.set("access_token", _token(test_user.id))
     await client.post("/api/v1/disputes", json={

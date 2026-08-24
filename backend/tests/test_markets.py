@@ -157,9 +157,10 @@ async def test_resolve_market_admin(client: AsyncClient, admin_user, test_market
     outcome_yes = next(o for o in test_market.outcomes if o.name == "Yes")
 
     client.cookies.set("access_token", _token(admin_user.id))
-    resp = await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
-        "winning_outcome_id": str(outcome_yes.id),
-    })
+    with patch("app.api.markets.resolve_market.delay"):
+        resp = await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
+            "winning_outcome_id": str(outcome_yes.id),
+        })
 
     assert resp.status_code == 200
     data = resp.json()
@@ -185,9 +186,10 @@ async def test_resolve_market_already_resolved(client: AsyncClient, admin_user, 
     client.cookies.set("access_token", _token(admin_user.id))
 
     # Resolve once
-    await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
-        "winning_outcome_id": str(outcome_yes.id),
-    })
+    with patch("app.api.markets.resolve_market.delay"):
+        await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
+            "winning_outcome_id": str(outcome_yes.id),
+        })
 
     # Try to resolve again with NO outcome
     outcome_no = next(o for o in test_market.outcomes if o.name == "No")

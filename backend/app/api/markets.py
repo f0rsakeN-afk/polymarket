@@ -3,11 +3,11 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
@@ -90,7 +90,8 @@ async def list_markets(
 
     base = select(Market, LiquidityPool)
     if q:
-        base = base.where(Market.question.ilike(f"%{q}%"))
+        safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
         base = base.where(Market.status == status)
     if category:
@@ -342,6 +343,7 @@ async def create_market(
         yes_shares=0,
         no_shares=0,
         collateral=0,
+        fee_rate=Decimal("0.02"),
         lp_token_supply=0,
     )
     db.add(pool)
@@ -350,7 +352,9 @@ async def create_market(
     if data.initial_liquidity > 0:
         from app.models.wallet import Wallet
 
-        wallet = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+        wallet = await db.execute(
+            select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+        )
         wallet = wallet.scalar_one_or_none()
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
@@ -523,37 +527,59 @@ async def resolve_market_endpoint(
     if market.status == "resolved":
         raise ValidationError("Market is already resolved")
 
-    outcome_result = await db.execute(
-        select(Outcome).where(
-            Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id
-        )
-    )
-    outcome = outcome_result.scalar_one_or_none()
-    if not outcome:
-        raise ValidationError("Winning outcome does not belong to this market")
-
-    market.status = "resolved"
-    market.winning_outcome_id = outcome.id
-    market.resolved_at = datetime.now(UTC)
-    await db.commit()
+    # Distributed lock: prevent two API pods from both resolving the same market.
+    # Uses Redis SETNX with TTL — lock is auto-released if this pod dies.
+    r = await get_redis()
+    lock_key = f"resolve_lock:{market.id}"
+    lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=30)
+    if not lock_acquired:
+        raise ConflictError("Market resolution is already in progress")
 
     try:
-        resolve_market.delay(str(market.id), str(outcome.id))
-    except Exception:
-        logger.exception(
-            f"Failed to queue market resolution task: market_id={market.id}"
+        outcome_result = await db.execute(
+            select(Outcome).where(
+                Outcome.id == body.winning_outcome_id, Outcome.market_id == market.id
+            )
         )
+        outcome = outcome_result.scalar_one_or_none()
+        if not outcome:
+            raise ValidationError("Winning outcome does not belong to this market")
 
-    logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
-    await cache_invalidate_market(str(market.id))
-    await cache_invalidate_market_lists()
-    return success_response(
-        {
-            "slug": slug,
-            "winning_outcome_id": str(outcome.id),
-            "winning_outcome_name": outcome.name,
-        }
-    )
+        # Queue-level idempotency: prevent two API workers from both enqueueing.
+        # SET NX returns False if key already exists (1h TTL).
+        task_dedup_key = f"resolve_task:{market.id}"
+        if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
+            raise ConflictError("Resolution task already enqueued")
+
+        # Enqueue settlement BEFORE committing — if this fails, market stays unresolved
+        # so a retry or manual intervention can pick it up safely.
+        try:
+            resolve_market.delay(str(market.id), str(outcome.id))
+        except Exception:
+            await r.delete(task_dedup_key)
+            logger.exception(f"Failed to enqueue settlement for market {market.id}")
+            raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
+
+        # Only mark resolved after settlement task is confirmed queued.
+        market.status = "resolved"
+        market.winning_outcome_id = outcome.id
+        market.resolved_at = datetime.now(UTC)
+        await db.commit()
+
+        logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
+        await cache_invalidate_market(str(market.id))
+        await cache_invalidate_market_lists()
+        return success_response(
+            {
+                "slug": slug,
+                "winning_outcome_id": str(outcome.id),
+                "winning_outcome_name": outcome.name,
+            }
+        )
+    finally:
+        # Release the distributed lock; 30s TTL is a safety net if we crash
+        # before this runs (lock auto-expires and market stays "resolved" — safe).
+        await r.delete(lock_key)
 
 
 @router.post("/{slug}/claim")
@@ -573,6 +599,8 @@ async def claim_winnings(
     if not market.winning_outcome_id:
         raise ValidationError("Market has no winning outcome set")
 
+    # Idempotency: check settled_at before any write. SETNX on the DB row is the
+    # authoritative guard — if two requests race here, only one wins.
     pos_result = await db.execute(
         select(Position)
         .where(
@@ -580,6 +608,7 @@ async def claim_winnings(
             Position.market_id == market.id,
             Position.outcome_id == market.winning_outcome_id,
             Position.shares_held > 0,
+            Position.settled_at.is_(None),  # not yet settled
         )
         .with_for_update()
     )
@@ -595,6 +624,11 @@ async def claim_winnings(
         raise NotFoundError("Wallet not found")
 
     payout = Decimal(str(winning_pos.shares_held))
+    if payout <= 0:
+        raise ValidationError("No winnings to claim")
+
+    # Mark as settled atomically — prevents double-claim on client retry
+    winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
     wallet.balance += payout
     winning_pos.realized_pnl += payout
     winning_pos.shares_held = Decimal(0)

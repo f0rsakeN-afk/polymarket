@@ -80,7 +80,10 @@ def get_redis_sync() -> redis.Redis:
             _redis_client_sync = sentinel.master_for(
                 settings.redis_sentinel_service_name,
                 redis_class=sync_redis.Redis,
-                connection_kwargs={"max_connections": settings.celery_worker_redis_max_connections},
+                connection_kwargs={
+                    "max_connections": settings.celery_worker_redis_max_connections,
+                    "socket_timeout": 5,
+                },
             )
         else:
             _redis_client_sync = redis.Redis.from_url(
@@ -120,6 +123,11 @@ class RedisCircuitBreaker:
                 await self._half_open_sem.acquire()
                 half_open_acquired = True
 
+        if half_open_acquired:
+            # We already hold the semaphore — if we return/raise early the finally
+            # releases it.  No need to track half_open_acquired separately for that case.
+            pass
+
         try:
             result = await op()
             async with self._lock:
@@ -132,6 +140,8 @@ class RedisCircuitBreaker:
                 self._last_failure = time.time()
                 if self._failures >= self.failure_threshold:
                     self._state = "open"
+            # Re-raise AFTER state is persisted so a subsequent call in the
+            # same event-loop iteration sees the breaker as open immediately.
             raise e
         finally:
             if half_open_acquired:

@@ -1,6 +1,7 @@
 """Tests for wallet, liquidity, split/merge, and position endpoints."""
 import pytest
 from decimal import Decimal
+from unittest.mock import patch, MagicMock
 
 from httpx import AsyncClient
 
@@ -36,8 +37,15 @@ async def test_wallet_unauthenticated(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_deposit_initiates_stripe(client: AsyncClient, test_user):
     """Deposit returns a client_secret for Stripe."""
-    client.cookies.set("access_token", _token(test_user.id))
-    resp = await client.post("/api/v1/wallet/deposit", json={"amount": 100.0})
+    mock_intent = MagicMock()
+    mock_intent.id = "pi_test_123"
+    mock_intent.client_secret = "pi_test_123_secret"
+
+    with patch("app.api.wallet.stripe.PaymentIntent.create", return_value=mock_intent), \
+         patch("app.api.wallet.settings") as mock_settings:
+        mock_settings.stripe_secret_key = "sk_test_mock"
+        client.cookies.set("access_token", _token(test_user.id))
+        resp = await client.post("/api/v1/wallet/deposit", json={"amount": 100.0})
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True

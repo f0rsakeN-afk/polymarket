@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import success_response
@@ -56,6 +56,15 @@ async def get_lp_position(
     pool = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id == market.id))
     pool = pool.scalar_one_or_none()
 
+    if not pool:
+        return success_response({
+            "lp_tokens": "0.0",
+            "collateral_deposited": "0.0",
+            "pool_lp_token_supply": "0.0",
+            "pool_yes_shares": "0.0",
+            "pool_no_shares": "0.0",
+        })
+
     lp_result = await db.execute(
         select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id)
     )
@@ -90,11 +99,11 @@ async def get_lp_analytics(
 
     # Count total for pagination
     count_result = await db.execute(
-        select(LPShare)
+        select(func.count(LPShare.id))
         .join(LiquidityPool, LPShare.pool_id == LiquidityPool.id)
         .where(LPShare.user_id == user.id, LPShare.lp_tokens > 0)
     )
-    total = len(count_result.all())  # small table, acceptable
+    total = count_result.scalar() or 0
 
     lp_result = await db.execute(
         select(LPShare, LiquidityPool, Market)
@@ -133,10 +142,11 @@ async def get_lp_analytics(
             "fees_earned": str(fees_earned),
             "net_pnl": str(net_value),
             "estimated_apr": str(apr),
-            "pool_yes_price": str(pool.no_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
-            "pool_no_price": str(pool.yes_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
+            "pool_yes_price": str(pool.yes_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
+            "pool_no_price": str(pool.no_shares / (pool.yes_shares + pool.no_shares)) if (pool.yes_shares + pool.no_shares) > 0 else "0.5",
         })
 
+    total_deposited = sum(Decimal(p["collateral_deposited"]) for p in positions)
     return success_response({
         "positions": positions,
         "total": total,
@@ -144,6 +154,6 @@ async def get_lp_analytics(
         "page_size": page_size,
         "has_more": (page * page_size) < total,
         "total_value": str(total_value),
-        "total_deposited": str(sum(p["collateral_deposited"] for p in positions)),
-        "total_pnl": str(total_value - Decimal(str(sum(p["collateral_deposited"] for p in positions)))),
+        "total_deposited": str(total_deposited),
+        "total_pnl": str(total_value - total_deposited),
     })

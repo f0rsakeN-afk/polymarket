@@ -11,8 +11,14 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "Polymarket API"
-    debug: bool = False
-    secret_key: str = "change-me-in-production"
+    # Environment: development | staging | production
+    # Controls OpenAPI docs visibility, HSTS, detailed error responses.
+    # NEVER trust this for auth/security — use it only for UI/information leaks.
+    app_env: str = "development"
+    # Log level: DEBUG | INFO | WARNING | ERROR
+    # independent of app_env — production can have DEBUG logs (piped to log aggregator).
+    log_level: str = "INFO"
+    debug: bool = False  # deprecated: use app_env + log_level instead
 
     # Frontend (Next.js) — used for magic link URLs
     frontend_url: str = "http://localhost:3000"
