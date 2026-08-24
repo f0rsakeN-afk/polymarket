@@ -84,19 +84,25 @@ def decode_token(token: str) -> dict:
         raise UnauthorizedError(f"Invalid token: {e}")
 
 
+# ── Blacklist settings (read once at import so it can be overridden) ──────────────
+_BLACKLIST_FAIL_OPEN = settings.app_env in ("development", "staging")
+
+
 async def is_token_blacklisted(jti: str) -> bool:
     try:
         r = await get_redis()
         result = await redis_cb.call(lambda: r.get(f"blacklist:{jti}"))
         return result is not None
     except Exception:
-        # Fail-open: if Redis is unreachable, assume token is NOT blacklisted.
-        # Token will still be rejected at natural expiry (JWT `exp` claim, max 15 min).
-        # SECURITY NOTE: a stolen token works during Redis outage. Acceptable trade-off —
-        # a Redis outage must not lock out the entire user base. Mitigant: Redis should be
-        # deployed HA (Sentinel) so this window is near-zero in practice.
-        logger.warning(f"Redis unavailable for blacklist check — allowing (jti={jti})")
-        return False
+        if _BLACKLIST_FAIL_OPEN:
+            # Fail-open: allow the token during Redis outage.
+            # Token still rejected at natural expiry (JWT `exp`, max 15 min).
+            logger.warning(f"Redis unavailable for blacklist check — failing open (jti={jti})")
+            return False
+        # Fail-closed: deny the token when Redis is unavailable.
+        # Safer for production where a Redis outage should not admit revoked tokens.
+        logger.error(f"Redis unavailable for blacklist check — failing closed (jti={jti})")
+        return True
 
 
 async def blacklist_token(jti: str, ttl_seconds: int):
@@ -105,10 +111,13 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         r = await get_redis()
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
-        # Fail-open: Redis/Sentinel outage must not block logout.
-        # Token remains valid until natural expiry (15min). Acceptable window —
-        # Redis HA (Sentinel) makes this near-zero in practice.
-        logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
+        if _BLACKLIST_FAIL_OPEN:
+            logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
+            return
+        # Fail-closed: re-raise so the caller knows the blacklist write failed.
+        # Logout is aborted but the token is not blacklisted — it expires naturally in 15 min.
+        logger.error(f"Redis unavailable to blacklist token (jti={jti}) — failing closed")
+        raise
 
 
 async def get_current_user(

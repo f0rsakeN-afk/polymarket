@@ -208,7 +208,7 @@ async def edit_comment(
         raise NotFoundError("Market not found")
 
     result = await db.execute(
-        select(Comment).where(Comment.id == comment_id, Comment.market_id == market.id)
+        select(Comment).where(Comment.id == comment_id, Comment.market_id == market.id).with_for_update()
     )
     comment = result.scalar_one_or_none()
     if not comment:
@@ -253,7 +253,7 @@ async def delete_comment(
         raise NotFoundError("Market not found")
 
     result = await db.execute(
-        select(Comment).where(Comment.id == comment_id, Comment.market_id == market.id)
+        select(Comment).where(Comment.id == comment_id, Comment.market_id == market.id).with_for_update()
     )
     comment = result.scalar_one_or_none()
     if not comment:

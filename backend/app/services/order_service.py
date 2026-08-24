@@ -218,14 +218,16 @@ class OrderService:
             try:
                 r = await get_redis()
                 raw = await redis_cb.call(lambda: r.get(f"quote:{data.quote_id}"))
-                if raw:
-                    quote = json.loads(raw)
-                    if quote["expires_at"] < time.time():
-                        raise ValidationError("Quote expired — please refresh")
-            except ValidationError:
-                raise
             except Exception:
-                pass
+                raise ValidationError("Quote validation unavailable — please retry")
+            if not raw:
+                raise ValidationError("Quote not found — please refresh")
+            try:
+                quote = json.loads(raw)
+            except Exception:
+                raise ValidationError("Quote corrupted — please refresh")
+            if quote.get("expires_at", 0) < time.time():
+                raise ValidationError("Quote expired — please refresh")
 
         # ── Step 4: Position check for sells ──
 
@@ -478,7 +480,7 @@ class OrderService:
                 total_shares_pos = position.shares_held + total_shares
                 if total_shares_pos > 0:
                     position.average_price = (
-                        position.average_price * position.shares_held + total_cost
+                        Decimal(str(position.average_price)) * position.shares_held + total_cost
                     ) / total_shares_pos
                 position.shares_held = total_shares_pos
             else:

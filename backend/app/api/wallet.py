@@ -1,12 +1,14 @@
 import logging
 from decimal import Decimal
 
+import stripe
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import IdempotencyError, NotFoundError
+from app.api.exceptions import ForbiddenError, IdempotencyError, NotFoundError, ValidationError
 from app.api.responses import success_response
+from app.config import settings
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.wallet import Transaction, Wallet
@@ -45,11 +47,23 @@ async def create_deposit(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    import uuid
-    client_secret = f"pi_{uuid.uuid4().hex}_secret"
-    logger.info(f"Deposit initiated: user={user.id} amount={data.amount}")
+
+    if not settings.stripe_secret_key:
+        raise NotFoundError("Payment provider not configured")
+
+    stripe.api_key = settings.stripe_secret_key
+
+    intent = stripe.PaymentIntent.create(
+        amount=int(data.amount * 100),  # cents
+        currency="usdc",  # must match wallet currency exactly
+        metadata={"user_id": str(user.id)},
+        automatic_payment_methods={"enabled": True},
+    )
+
+    logger.info(f"Deposit initiated: user={user.id} amount={data.amount} intent={intent.id}")
     return success_response(DepositResponse(
-        client_secret=client_secret,
+        client_secret=intent.client_secret,
+        payment_intent_id=intent.id,
         amount=data.amount,
         currency="USD",
     ))
@@ -63,6 +77,27 @@ async def withdraw(
 ):
     user = await get_current_user(request, db)
     result = await WalletService.withdraw(db, user, Decimal(str(data.amount)), data.idempotency_key)
+    return success_response(result)
+
+
+@router.post("/withdraw/{withdrawal_id}/confirm")
+async def confirm_withdrawal(
+    withdrawal_id: str,
+    request: Request,
+    confirmed: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Admin endpoint to confirm or reject a pending withdrawal after blockchain settlement.
+    Called by the blockchain watcher service when the on-chain transaction confirms or fails.
+    """
+    user = await get_current_user(request, db)
+    if not user.is_admin:
+        raise ForbiddenError("Only admins can confirm withdrawals")
+
+    result = await WalletService.confirm_withdrawal(
+        db, withdrawal_id, confirmed=confirmed,
+    )
     return success_response(result)
 
 

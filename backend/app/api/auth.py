@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -144,15 +145,36 @@ def _ip_matches(stored_ip: str, current_ip: str) -> bool:
     IPv6: compare first 48 bits (/48).
     """
     def _normalized_parts(ip: str) -> tuple[list[str] | None, bool]:
-        # Strip port if present
-        ip = ip.split(",")[0].strip().split(":")[0]
-        parts = ip.split(".")
+        ip_str = ip.split(",")[0].strip()
+        # Handle [ipv6]:port bracket notation
+        if ip_str.startswith("["):
+            bracket_end = ip_str.find("]")
+            if bracket_end != -1:
+                ip_str = ip_str[1:bracket_end]
+
+        parts = ip_str.split(".")
         if len(parts) == 4:
+            # IPv4 with optional port (dotquad:port)
+            if ":" in ip_str:
+                port_part = ip_str.rsplit(":", 1)[-1]
+                if port_part.isdigit():
+                    ip_str = ip_str.rsplit(":", 1)[0]
+                    parts = ip_str.split(".")
             return parts, True  # IPv4
-        if ":" in ip:
-            # IPv6 — take first 3 groups (48 bits)
-            groups = ip.split(":")
-            return groups[:3], False
+
+        if ":" in ip_str:
+            # IPv6 — use stdlib to normalize and extract first 48 bits
+            try:
+                addr = ipaddress.ip_address(ip_str)
+                if isinstance(addr, ipaddress.IPv6Address):
+                    packed = addr.packed[:6]
+                    return [
+                        format((packed[0] << 8) | packed[1], "04x"),
+                        format((packed[2] << 8) | packed[3], "04x"),
+                        format((packed[4] << 8) | packed[5], "04x"),
+                    ], False
+            except ValueError:
+                pass
         return None, False
 
     stored_parts, stored_is_v4 = _normalized_parts(stored_ip)
@@ -379,8 +401,9 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
     stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""
 
     # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
+    # Do NOT delete the token — if IP mismatch is due to NAT/proxy rotation, the legitimate
+    # user should be able to retry from the correct IP without requesting a new link.
     if stored_ip and not _ip_matches(stored_ip, ip):
-        await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
         raise UnauthorizedError("Invalid or expired link")
 
     await redis_cb.call(lambda: r.delete(f"magicurl:{token}"))
@@ -393,7 +416,7 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
     if user.is_2fa_enabled:
         # Issue partial token, require 2FA completion
         partial = str(uuid.uuid4())
-        await redis_cb.call(lambda: r.set(f"partial:{partial}", user_id, ex=300))
+        await redis_cb.call(lambda: r.set(f"partial:{partial}", f"{user_id}:{ip}", ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial})
 
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
@@ -410,11 +433,20 @@ async def verify_magic_url_2fa(
 ):
     """Complete magic URL login when 2FA is enabled. Friction tracked by partial token + IP."""
     r = await get_redis()
-    user_id = await redis_cb.call(lambda: r.get(f"partial:{data.partial_token}"))
-    if not user_id:
+    stored = await redis_cb.call(lambda: r.get(f"partial:{data.partial_token}"))
+    if not stored:
+        raise UnauthorizedError("Session expired or invalid")
+
+    # Stored as "user_id:ip" — split on first colon (UUID has no colons)
+    first_colon = stored.find(":")
+    user_id = stored[:first_colon] if first_colon != -1 else stored
+    stored_ip = stored[first_colon + 1:] if first_colon != -1 else ""
+    if not stored_ip:
         raise UnauthorizedError("Session expired or invalid")
 
     ip = _get_client_ip(request)
+    if not _ip_matches(stored_ip, ip):
+        raise UnauthorizedError("Session expired or invalid")
     ua = request.headers.get("user-agent")
     # Friction key = partial_token since we don't have email until after we resolve user
     friction_key = f"partial:{data.partial_token}"
@@ -444,6 +476,7 @@ async def verify_magic_url_2fa(
 
     # Delete partial token only after successful 2FA — allows retry on TOTP failure
     await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
+    await RateLimitService.reset_friction(user.email, ip)
 
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
@@ -523,6 +556,7 @@ async def verify_magic_2fa(
         raise UnauthorizedError("Invalid 2FA code")
 
     await redis_cb.call(lambda: r.delete(f"magic_partial:{data.partial_token}"))
+    await RateLimitService.reset_friction(email, _get_client_ip(request))
     ip = _get_client_ip(request)
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
@@ -799,7 +833,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     await _revoke_all_refresh_tokens(db, str(user.id))
     # Also revoke all sessions for this user
     sessions_result = await db.execute(
-        select(Session).where(Session.user_id == user.id, not Session.revoked)
+        select(Session).where(Session.user_id == user.id, ~Session.revoked)
     )
     for s in sessions_result.scalars().all():
         s.revoked = True
@@ -819,7 +853,7 @@ async def list_sessions(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Session).where(
             Session.user_id == user.id,
-            not Session.revoked,
+            ~Session.revoked,
         ).order_by(Session.last_active_at.desc())
     )
     sessions = result.scalars().all()
@@ -880,6 +914,13 @@ async def change_password(
     if not verify_password(data.old_password, user.password_hash):
         await AuthAuditService.log_password_change(db, str(user.id), ip, ua, success=False, reason="wrong_old_password")
         raise UnauthorizedError("Current password is incorrect")
+
+    if user.is_2fa_enabled:
+        if not data.totp_code:
+            raise UnauthorizedError("TOTP code required")
+        secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
+        if not TOTPService.verify_code(secret, data.totp_code):
+            raise UnauthorizedError("Invalid 2FA code")
 
     strong, reason = PasswordStrengthService.check(data.new_password)
     if not strong:

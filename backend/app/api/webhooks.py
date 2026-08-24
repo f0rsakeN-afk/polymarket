@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ValidationError
@@ -84,19 +85,10 @@ async def stripe_webhook(
             logger.warning(f"Stripe webhook: no user_id in metadata for PI {payment_intent_id}")
             return success_response({"status": "ignored"})
 
-        # Idempotency: check if already processed
-        existing = await db.execute(
-            select(Transaction).where(
-                Transaction.reference_id == payment_intent_id,
-                Transaction.type == "deposit",
-            )
+        # Credit wallet — lock row to prevent concurrent webhook double-credit
+        wallet_result = await db.execute(
+            select(Wallet).where(Wallet.user_id == user_id).with_for_update()
         )
-        if existing.scalar_one_or_none():
-            logger.info(f"Stripe deposit already processed: {payment_intent_id}")
-            return success_response({"status": "already_processed"})
-
-        # Credit wallet
-        wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
             # Return 500 so Stripe retries — the wallet should exist for any active user
@@ -106,7 +98,7 @@ async def stripe_webhook(
         amount = Decimal(str(amount_cents)) / 100  # cents to dollars
 
         # Build transaction record BEFORE updating balance — balance_after is set
-        # after the amount is added so the record is always consistent
+        # after the amount is added so the record is always consistent.
         tx = Transaction(
             user_id=user_id,
             wallet_id=wallet.id,
@@ -126,7 +118,23 @@ async def stripe_webhook(
         # Update the estimated balance_after now that wallet.balance is updated
         tx.balance_after = wallet.balance
 
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            # Unique constraint violation = already processed (race between two webhooks).
+            # Re-read the transaction to confirm it was inserted by the other request.
+            existing = await db.execute(
+                select(Transaction).where(
+                    Transaction.reference_id == payment_intent_id,
+                    Transaction.type == "deposit",
+                )
+            )
+            if existing.scalar_one_or_none():
+                logger.info(f"Stripe deposit already processed (race): {payment_intent_id}")
+                return success_response({"status": "already_processed"})
+            # Not a dup — re-raise so Stripe retries
+            raise HTTPException(status_code=500, detail="Failed to process deposit, will retry") from exc
 
         logger.info(f"Deposit credited: user={user_id} amount={amount} PI={payment_intent_id}")
         return success_response({"status": "credited", "transaction_id": str(tx.id)})

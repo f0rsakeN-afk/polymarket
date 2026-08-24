@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.market import Market, Outcome
@@ -31,7 +32,7 @@ class MatchingEngine:
         outcome_id: str,
         side: str,
         limit_price: Decimal | None = None,
-        exclude_user_id: str | None = None,
+        exclude_user_id: UUID | None = None,  # actual type is UUID; callers convert str→UUID
     ) -> list[Order]:
         opposite = "sell" if side == "buy" else "buy"
 
@@ -67,7 +68,7 @@ class MatchingEngine:
     async def execute_match(
         db: AsyncSession,
         maker: Order,
-        taker_user_id: str,
+        taker_user_id: UUID,
         match_shares: Decimal,
         match_price: Decimal,
     ) -> dict:
@@ -231,7 +232,7 @@ class MatchingEngine:
         side: str,
         amount: Decimal,
         limit_price: Decimal | None = None,
-        taker_user_id: str | None = None,
+        taker_user_id: UUID | None = None,
     ) -> tuple[Decimal, Decimal, list[dict]]:
         matches = await MatchingEngine.find_matches(
             db, str(market.id), outcome.id, side, limit_price, exclude_user_id=taker_user_id

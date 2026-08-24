@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,7 +90,8 @@ async def list_markets(
 
     base = select(Market, LiquidityPool)
     if q:
-        base = base.where(Market.question.ilike(f"%{q}%"))
+        safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
         base = base.where(Market.status == status)
     if category:
@@ -342,6 +343,7 @@ async def create_market(
         yes_shares=0,
         no_shares=0,
         collateral=0,
+        fee_rate=Decimal("0.02"),
         lp_token_supply=0,
     )
     db.add(pool)
@@ -350,7 +352,9 @@ async def create_market(
     if data.initial_liquidity > 0:
         from app.models.wallet import Wallet
 
-        wallet = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+        wallet = await db.execute(
+            select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+        )
         wallet = wallet.scalar_one_or_none()
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
@@ -541,23 +545,26 @@ async def resolve_market_endpoint(
         if not outcome:
             raise ValidationError("Winning outcome does not belong to this market")
 
-        market.status = "resolved"
-        market.winning_outcome_id = outcome.id
-        market.resolved_at = datetime.now(UTC)
-        await db.commit()
-
-        # Queue-level idempotency: prevent two API workers from both enqueueing
-        # the resolve task.  SET NX returns False if key already exists (1h TTL).
+        # Queue-level idempotency: prevent two API workers from both enqueueing.
+        # SET NX returns False if key already exists (1h TTL).
         task_dedup_key = f"resolve_task:{market.id}"
         if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
             raise ConflictError("Resolution task already enqueued")
 
+        # Enqueue settlement BEFORE committing — if this fails, market stays unresolved
+        # so a retry or manual intervention can pick it up safely.
         try:
             resolve_market.delay(str(market.id), str(outcome.id))
         except Exception:
-            logger.exception(
-                f"Failed to queue market resolution task: market_id={market.id}"
-            )
+            await r.delete(task_dedup_key)
+            logger.exception(f"Failed to enqueue settlement for market {market.id}")
+            raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
+
+        # Only mark resolved after settlement task is confirmed queued.
+        market.status = "resolved"
+        market.winning_outcome_id = outcome.id
+        market.resolved_at = datetime.now(UTC)
+        await db.commit()
 
         logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
         await cache_invalidate_market(str(market.id))

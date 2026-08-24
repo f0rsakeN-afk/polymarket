@@ -554,66 +554,6 @@ def snapshot_price_history(self):
     return result
 
 
-@shared_task(bind=True, name="app.workers.tasks.check_order_expiration")
-def check_order_expiration(self):
-    """Cancel pending orders that have passed their expiry time."""
-    task_id = uuid.uuid4().hex
-    logger.info(json.dumps({
-        "event": "task_start",
-        "task_id": task_id,
-        "task_name": self.name,
-    }))
-    start = time.perf_counter()
-    try:
-        async def _run():
-            async with get_session() as db:
-                now = datetime.now(UTC)
-                result = await db.execute(
-                    select(Order).where(
-                        Order.status == "pending",
-                        Order.expires_at.isnot(None),
-                        Order.expires_at <= now,
-                ).with_for_update()
-            )
-            orders = result.scalars().all()
-            if not orders:
-                return "No expired pending orders"
-
-            for order in orders:
-                order.status = "cancelled"
-                order.executed_at = now
-                if order.side == "buy" and order.amount:
-                    wallet_result = await db.execute(
-                        select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
-                    )
-                    wallet = wallet_result.scalar_one_or_none()
-                    if wallet:
-                        wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
-                logger.info(f"Cancelled expired pending order {order.id}")
-                try:
-                    await redis_pubsub.publish_market_event(
-                        str(order.market_id), "order:cancelled",
-                        {"order_id": str(order.id), "reason": "expired"}
-                    )
-                except Exception:
-                    pass
-
-            await db.commit()
-            return f"Cancelled {len(orders)} expired pending orders"
-
-        result = celery_run(_run())
-    finally:
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(json.dumps({
-            "event": "task_complete",
-            "task_id": task_id,
-            "task_name": self.name,
-            "duration_ms": round(duration_ms, 2),
-            "result": str(result)[:200],
-        }))
-    return result
-
-
 @shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
 def check_markets_ready_to_resolve(self):
     """Close markets that have passed their close time but are not yet resolved."""
@@ -645,79 +585,6 @@ def check_markets_ready_to_resolve(self):
 
             await db.commit()
             return f"Closed {len(markets)} markets"
-
-        result = celery_run(_run())
-    finally:
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(json.dumps({
-            "event": "task_complete",
-            "task_id": task_id,
-            "task_name": self.name,
-            "duration_ms": round(duration_ms, 2),
-            "result": str(result)[:200],
-        }))
-    return result
-
-
-@shared_task(bind=True, name="app.workers.tasks.process_stripe_deposit")
-def process_stripe_deposit(self, stripe_event_id: str, user_id: str, amount_cents: int, payment_intent_id: str):
-    """Process Stripe deposit (called by webhook handler as Celery task)."""
-    task_id = uuid.uuid4().hex
-    logger.info(json.dumps({
-        "event": "task_start",
-        "task_id": task_id,
-        "task_name": self.name,
-        "stripe_event_id": stripe_event_id,
-        "user_id": user_id,
-        "amount_cents": amount_cents,
-        "payment_intent_id": payment_intent_id,
-    }))
-    start = time.perf_counter()
-    try:
-        async def _run():
-            async with get_session() as db:
-                # Idempotency check
-                existing = await db.execute(
-                    select(Transaction).where(
-                        Transaction.reference_id == payment_intent_id,
-                        Transaction.type == "deposit",
-                    )
-            )
-            if existing.scalar_one_or_none():
-                return "Already processed"
-
-            # Idempotency: check full Stripe event_id to prevent double-credit on Stripe retries
-            existing_event = await db.execute(
-                select(Transaction).where(
-                    Transaction.reference_id == stripe_event_id,
-                    Transaction.reference_type == "stripe_event",
-                )
-            )
-            if existing_event.scalar_one_or_none():
-                return "Already processed"
-
-            wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
-            wallet = wallet_result.scalar_one_or_none()
-            if not wallet:
-                return f"Wallet not found for user {user_id}"
-
-            # Use integer cents throughout — no float penny-drop risk
-            amount = Decimal(amount_cents) / Decimal(100)
-            wallet.balance += amount
-
-            tx = Transaction(
-                user_id=user_id,
-                wallet_id=wallet.id,
-                type="deposit",
-                amount=amount,
-                balance_after=wallet.balance,
-                reference_id=payment_intent_id,
-                reference_type="stripe_payment_intent",
-                status="completed",
-            )
-            db.add(tx)
-            await db.commit()
-            return f"Credited {amount} to user {user_id}"
 
         result = celery_run(_run())
     finally:
@@ -772,23 +639,23 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 market = market_result.scalar_one_or_none()
                 if not market:
                     return f"Market {market_id} not found"
-            if market.status in ("resolving", "resolved"):
-                # Already being processed or already settled — skip to prevent double-settlement
-                return f"Market {market_id} already resolving/resolved (status={market.status})"
+                if market.status in ("resolving", "resolved"):
+                    # Already being processed or already settled — skip to prevent double-settlement
+                    return f"Market {market_id} already resolving/resolved (status={market.status})"
 
-            # Idempotency gate: mark as resolving BEFORE any writes.
-            # If task crashes mid-settlement and retries, this blocks re-execution.
-            market.status = "resolving"
-            await db.flush()  # Persist immediately so retry sees the guard
+                # Idempotency gate: mark as resolving BEFORE any writes.
+                # If task crashes mid-settlement and retries, this blocks re-execution.
+                market.status = "resolving"
+                await db.flush()  # Persist immediately so retry sees the guard
 
             pool_result = await db.execute(
                 select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
             )
             pool = pool_result.scalar_one_or_none()
 
-            # Get or create system treasury user
+            # Get or create system treasury user with row lock to prevent concurrent creation
             treasury_result = await db.execute(
-                select(User).where(User.is_system).limit(1)
+                select(User).where(User.is_system).with_for_update().limit(1)
             )
             treasury_user = treasury_result.scalar_one_or_none()
             if not treasury_user:
@@ -886,7 +753,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     user_id=treasury_user.id,
                     wallet_id=treasury_wallet.id,
                     type="protocol_fee",
-                    amount=float(treasury_amount),
+                    amount=treasury_amount,
                     balance_after=treasury_wallet.balance,
                     reference_id=str(market.id),
                     reference_type="protocol_fee",
@@ -963,7 +830,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                 result = await db.execute(
                     select(Alert).where(
                         Alert.market_id == market_id,
-                        not Alert.triggered,
+                        ~Alert.triggered,
                     )
                 )
             alerts = result.scalars().all()

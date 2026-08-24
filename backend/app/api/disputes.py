@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -164,7 +164,9 @@ async def adjudicate_dispute(
     if req.ruling not in ("upheld", "dismissed"):
         raise ValidationError("ruling must be 'upheld' or 'dismissed'")
 
-    result = await db.execute(select(Dispute).where(Dispute.id == dispute_id))
+    result = await db.execute(
+        select(Dispute).where(Dispute.id == dispute_id).with_for_update()
+    )
     dispute = result.scalar_one_or_none()
     if not dispute:
         raise NotFoundError("Dispute not found")
@@ -175,10 +177,13 @@ async def adjudicate_dispute(
     dispute.status = req.ruling
     await db.commit()
 
+    market = None
     if req.ruling == "upheld":
         from app.workers.tasks import resolve_market  # avoid top-level circular import
 
-        market_result = await db.execute(select(Market).where(Market.id == dispute.market_id))
+        market_result = await db.execute(
+            select(Market).where(Market.id == dispute.market_id).with_for_update()
+        )
         market = market_result.scalar_one_or_none()
         if market and market.proposed_outcome_id:
             market.status = "resolved"

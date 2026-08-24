@@ -19,6 +19,7 @@ class DepositRequest(BaseModel):
 
 class DepositResponse(BaseModel):
     client_secret: str
+    payment_intent_id: str
     amount: MoneyField
     currency: str
 

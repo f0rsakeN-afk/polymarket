@@ -77,6 +77,8 @@ class ConnectionManager:
         self._ws_locks: dict[WebSocket, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._ip_connections: dict[str, int] = defaultdict(int)
         self._user_connections: dict[str, int] = defaultdict(int)
+        self._ws_ip: dict[WebSocket, str | None] = {}
+        self._ws_user: dict[WebSocket, str | None] = {}
         # Track pending cleanup tasks so they can be awaited on shutdown
         self._pending_cleanups: set[asyncio.Task[None]] = set()
 
@@ -111,6 +113,9 @@ class ConnectionManager:
             self._ip_connections[client_ip] += 1
         if user_id:
             self._user_connections[user_id] += 1
+        # Store these so disconnect() can decrement them
+        self._ws_ip[websocket] = client_ip
+        self._ws_user[websocket] = user_id
 
         logger.info(f"WS connected: market={market_id} ip={client_ip} user={user_id}")
         return True
@@ -185,6 +190,14 @@ class ConnectionManager:
                 market_ids = list(self._ws_subscriptions.pop(websocket, set()))
         else:
             market_ids = list(self._ws_subscriptions.pop(websocket, set()))
+
+        # Decrement connection counters so new connections aren't incorrectly rejected
+        client_ip = self._ws_ip.pop(websocket, None)
+        user_id = self._ws_user.pop(websocket, None)
+        if client_ip:
+            self._ip_connections[client_ip] = max(0, self._ip_connections.get(client_ip, 1) - 1)
+        if user_id:
+            self._user_connections[user_id] = max(0, self._user_connections.get(user_id, 1) - 1)
 
         # Clean up each market's subscriber set
         for market_id in market_ids:

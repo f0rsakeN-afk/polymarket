@@ -70,8 +70,4 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.distribute_protocol_fees",
         "schedule": crontab(hour=3, minute=30),  # 3:30am daily
     },
-    "check-order-expiration": {
-        "task": "app.workers.tasks.check_order_expiration",
-        "schedule": 30.0,
-    },
 }

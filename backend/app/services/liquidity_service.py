@@ -87,7 +87,7 @@ class LiquidityService:
             user_id=user.id,
             wallet_id=wallet.id,
             type="liquidity_add",
-            amount=-float(amount),
+            amount=-amount,
             balance_after=wallet.balance,
             reference_id=str(pool.id),
             reference_type="liquidity_pool",
@@ -156,7 +156,7 @@ class LiquidityService:
             user_id=user.id,
             wallet_id=wallet.id,
             type="liquidity_remove",
-            amount=float(total_redeemed),
+            amount=total_redeemed,
             balance_after=wallet.balance,
             reference_id=str(pool.id),
             reference_type="liquidity_pool",
@@ -188,8 +188,10 @@ class LiquidityService:
         if not pools:
             return {"markets": [], "total_distributed": "0.0"}
 
-        # Get or create system treasury user
-        treasury_result = await db.execute(select(User).where(User.is_system.is_(True)).limit(1))
+        # Get or create system treasury user with row lock to prevent concurrent creation
+        treasury_result = await db.execute(
+            select(User).where(User.is_system.is_(True)).with_for_update().limit(1)
+        )
         treasury_user = treasury_result.scalar_one_or_none()
         if not treasury_user:
             treasury_user = User(
@@ -226,13 +228,13 @@ class LiquidityService:
             distributed.append({
                 "market_id": str(market.id),
                 "market_slug": market.slug,
-                "amount": float(amount),
+                "amount": amount,
             })
             tx = Transaction(
                 user_id=treasury_user.id,
                 wallet_id=treasury_wallet.id,
                 type="protocol_fee",
-                amount=float(amount),
+                amount=amount,
                 balance_after=treasury_wallet.balance,
                 reference_id=str(market.id),
                 reference_type="protocol_fee",

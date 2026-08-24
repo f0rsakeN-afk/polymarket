@@ -80,7 +80,10 @@ def get_redis_sync() -> redis.Redis:
             _redis_client_sync = sentinel.master_for(
                 settings.redis_sentinel_service_name,
                 redis_class=sync_redis.Redis,
-                connection_kwargs={"max_connections": settings.celery_worker_redis_max_connections},
+                connection_kwargs={
+                    "max_connections": settings.celery_worker_redis_max_connections,
+                    "socket_timeout": 5,
+                },
             )
         else:
             _redis_client_sync = redis.Redis.from_url(

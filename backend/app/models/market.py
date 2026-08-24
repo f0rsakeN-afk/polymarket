@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -77,6 +78,7 @@ class Outcome(Base, UUIDMixin, TimestampMixin):
     __table_args__ = (
         CheckConstraint("outcome_index >= 0"),
         Index("ix_outcomes_market_id", "market_id"),
+        UniqueConstraint("market_id", "outcome_index", name="uq_outcome_market_index"),
     )
 
     market_id = Column(UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)

@@ -274,12 +274,14 @@ async def test_propose_resolution(client: AsyncClient, admin_user, test_market, 
 @pytest.mark.asyncio
 async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """User can file a dispute on resolved market."""
+    from unittest.mock import patch
     # First resolve the market
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
     client.cookies.set("access_token", _token(admin_user.id))
-    await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
-        "winning_outcome_id": str(outcome.id),
-    })
+    with patch("app.api.markets.resolve_market.delay"):
+        await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
+            "winning_outcome_id": str(outcome.id),
+        })
 
     # Then file dispute
     client.cookies.set("access_token", _token(test_user.id))
