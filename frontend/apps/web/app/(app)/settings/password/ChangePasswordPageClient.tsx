@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { accountApi } from "@/lib/api/auth";
+import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import {
@@ -70,7 +71,8 @@ export function ChangePasswordPageClient() {
   );
 
   return (
-    <div className="container mx-auto max-w-md px-4 py-8 space-y-6">
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <SettingsBreadcrumb page="Security" />
       <div>
         <h1 className="text-2xl font-semibold">Change Password</h1>
         <p className="text-sm text-muted-foreground mt-1">Update your account password</p>

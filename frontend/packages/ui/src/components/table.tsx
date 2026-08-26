@@ -4,7 +4,16 @@ import * as React from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({ className, noWrapper, ...props }: React.ComponentProps<"table"> & { noWrapper?: boolean }) {
+  if (noWrapper) {
+    return (
+      <table
+        data-slot="table"
+        className={cn("w-full caption-bottom text-xs", className)}
+        {...props}
+      />
+    )
+  }
   return (
     <div
       data-slot="table-container"

@@ -1,8 +1,17 @@
 "use client"
 
-import { memo, useEffect, useRef } from "react"
+import { memo, useRef } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 import { Spinner } from "@workspace/ui/components/spinner"
+import { Card } from "@workspace/ui/components/card"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@workspace/ui/components/table"
 import type { Trade } from "@/hooks/api/types/market"
 
 function formatTime(iso: string) {
@@ -19,55 +28,37 @@ const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
   const total = Number(trade.total ?? Number(trade.price) * Number(trade.amount))
 
   return (
-    <div role="listitem" className="grid grid-cols-5 sm:grid-cols-7 gap-1.5 sm:gap-2 py-2.5 px-1 text-xs items-center border-b border-border/40 last:border-0">
-      <span className="text-muted-foreground truncate font-medium">{trade.username}</span>
-      <span
-        className={cn(
-          "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-center",
-          trade.side === "buy"
-            ? "bg-green-500/10 text-green-500"
-            : "bg-red-500/10 text-red-500"
-        )}
-      >
-        {trade.side}
-      </span>
-      <span className="capitalize font-medium truncate hidden sm:inline">{trade.outcome}</span>
-      <span className="text-right font-medium tabular-nums">{Number(trade.amount).toFixed(0)}</span>
-      <span className="text-right text-muted-foreground tabular-nums hidden sm:inline">${Number(trade.price).toFixed(3)}</span>
-      <span className="text-right font-semibold tabular-nums">${total.toFixed(2)}</span>
-      <span className="text-right text-muted-foreground hidden sm:inline">{formatTime(trade.executed_at)}</span>
-    </div>
+    <TableRow className="hover:bg-accent/30 transition-colors">
+      <TableCell className="text-muted-foreground truncate font-medium">{trade.username}</TableCell>
+      <TableCell>
+        <span
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide inline-block",
+            trade.side === "buy"
+              ? "bg-green-500/10 text-green-500"
+              : "bg-red-500/10 text-red-500"
+          )}
+        >
+          {trade.side}
+        </span>
+      </TableCell>
+      <TableCell className="capitalize font-medium hidden sm:table-cell">{trade.outcome}</TableCell>
+      <TableCell className="text-right font-medium tabular-nums hidden sm:table-cell">{Number(trade.amount).toFixed(0)}</TableCell>
+      <TableCell className="text-right text-muted-foreground tabular-nums hidden sm:table-cell">${Number(trade.price).toFixed(3)}</TableCell>
+      <TableCell className="text-right font-semibold tabular-nums">${total.toFixed(2)}</TableCell>
+      <TableCell className="text-right text-muted-foreground hidden sm:table-cell">{formatTime(trade.executed_at)}</TableCell>
+    </TableRow>
   )
 })
 
 interface TradeFeedProps {
   trades: Trade[]
   loading?: boolean
-  hasMore?: boolean
-  fetchNextPage?: () => void
-  isFetchingNextPage?: boolean
   title?: string
+  listRef?: React.RefObject<HTMLDivElement | null>
 }
 
-function TradeFeed({ trades, loading, hasMore, fetchNextPage, isFetchingNextPage, title }: TradeFeedProps) {
-  const sentinelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!hasMore || !fetchNextPage) return
-    const el = sentinelRef.current
-    if (!el) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !isFetchingNextPage) {
-          fetchNextPage()
-        }
-      },
-      { rootMargin: "200px" }
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [hasMore, fetchNextPage, isFetchingNextPage])
-
+function TradeFeed({ trades, loading, title, listRef }: TradeFeedProps) {
   if (loading && trades.length === 0) {
     return (
       <div className="flex h-40 items-center justify-center">
@@ -78,32 +69,46 @@ function TradeFeed({ trades, loading, hasMore, fetchNextPage, isFetchingNextPage
 
   if (trades.length === 0) {
     return (
-      <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">No trades yet</div>
+      <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
+        No trades yet
+      </div>
     )
   }
 
   return (
     <section aria-label={title ?? "Trade feed"}>
       {title && <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>}
-      <div role="row" className="grid grid-cols-5 sm:grid-cols-7 gap-1.5 sm:gap-2 px-1 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border">
-        <span role="columnheader">Trader</span>
-        <span role="columnheader" className="text-center">Side</span>
-        <span role="columnheader" className="hidden sm:inline">Outcome</span>
-        <span role="columnheader" className="text-right">Shares</span>
-        <span role="columnheader" className="text-right hidden sm:inline">Price</span>
-        <span role="columnheader" className="text-right">Total</span>
-        <span role="columnheader" className="text-right hidden sm:inline">Time</span>
-      </div>
-      <div className="max-h-80 overflow-y-auto scrollbar-hide" role="list">
-        {trades.map((trade) => (
-          <TradeRow key={trade.id} trade={trade} />
-        ))}
-        {hasMore && (
-          <div ref={sentinelRef} role="status" className="flex justify-center py-3">
-            {isFetchingNextPage ? <Spinner className="size-4" /> : <span className="text-[10px] text-muted-foreground">Scroll for more</span>}
-          </div>
-        )}
-      </div>
+      <Card className="overflow-hidden pt-0">
+        <div ref={listRef} className="overflow-auto" style={{ maxHeight: "500px", minHeight: "200px" }}>
+          <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              <col className="w-[20%]" />
+              <col className="w-[10%]" />
+              <col className="w-[15%]" />
+              <col className="w-[10%]" />
+              <col className="w-[10%]" />
+              <col className="w-[15%]" />
+              <col className="w-[20%]" />
+            </colgroup>
+            <TableHeader className="sticky top-0 z-20 bg-muted">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-muted-foreground">Trader</TableHead>
+                <TableHead className="text-muted-foreground">Side</TableHead>
+                <TableHead className="text-muted-foreground hidden sm:table-cell">Outcome</TableHead>
+                <TableHead className="text-muted-foreground text-right hidden sm:table-cell">Shares</TableHead>
+                <TableHead className="text-muted-foreground text-right hidden sm:table-cell">Price</TableHead>
+                <TableHead className="text-muted-foreground text-right">Total</TableHead>
+                <TableHead className="text-muted-foreground text-right hidden sm:table-cell">Time</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {trades.map((trade) => (
+                <TradeRow key={trade.id} trade={trade} />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
     </section>
   )
 }

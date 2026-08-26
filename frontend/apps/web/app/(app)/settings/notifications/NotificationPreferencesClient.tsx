@@ -1,9 +1,10 @@
 "use client"
 
+import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 import { useNotificationPreferences, useUpdateNotificationPreferences } from "@/hooks/api/use-notifications"
 import { Switch } from "@workspace/ui/components/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
-import { Spinner } from "@workspace/ui/components/spinner"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { sileo } from "sileo"
 import type { NotificationPreference } from "@/lib/schemas/notifications"
 
@@ -43,8 +44,43 @@ export function NotificationPreferencesClient() {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spinner className="size-6" />
+      <div className="space-y-6">
+        {/* Email notifications card skeleton */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-3 w-24 mt-1" />
+          </CardHeader>
+          <CardContent className="divide-y">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex items-center justify-between py-3 gap-4">
+                <div className="space-y-1.5">
+                  <Skeleton className="h-3.5 w-28" />
+                  <Skeleton className="h-3 w-40" />
+                </div>
+                <Skeleton className="h-5 w-10 rounded-full" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        {/* In-app notifications card skeleton */}
+        <Card>
+          <CardHeader className="pb-3">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-32 mt-1" />
+          </CardHeader>
+          <CardContent className="divide-y">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center justify-between py-3 gap-4">
+                <div className="space-y-1.5">
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-3 w-48" />
+                </div>
+                <Skeleton className="h-5 w-10 rounded-full" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -60,7 +96,8 @@ export function NotificationPreferencesClient() {
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 space-y-6">
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <SettingsBreadcrumb page="Notifications" />
       <div>
         <h1 className="text-2xl font-semibold">Notification Preferences</h1>
         <p className="text-sm text-muted-foreground mt-1">Manage how you receive alerts</p>

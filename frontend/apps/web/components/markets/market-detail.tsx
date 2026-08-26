@@ -8,7 +8,8 @@ import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
 import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/api/use-markets"
+import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/api/use-markets"
+import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { claimWinnings, getOrderBook } from "@/lib/api/markets"
@@ -35,7 +36,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const queryClient = useQueryClient()
   const { data: market, isLoading: marketLoading } = useMarket(slug)
   const { data: activity } = useMarketActivity(slug)
-  const { data: tradesData, isLoading: tradesLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useMarketTrades(slug)
+  const { data: tradesData, isLoading: tradesLoading } = useSimpleMarketTrades(slug, { page_size: 200 })
   const { data: faqs } = useFAQs(slug)
   const { data: relatedMarkets } = useRelatedMarkets(slug)
   const { data: priceHistoryData } = usePriceHistory(slug)
@@ -366,11 +367,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </TabsContent>
             <TabsContent value="trades" role="tabpanel" className="min-h-[200px]">
               <TradeFeed
-                trades={[...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200)}
+                trades={[...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200) as Trade[]}
                 loading={tradesLoading}
-                hasMore={hasNextPage}
-                fetchNextPage={fetchNextPage}
-                isFetchingNextPage={isFetchingNextPage}
               />
             </TabsContent>
 

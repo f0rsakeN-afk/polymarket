@@ -56,7 +56,7 @@ export interface Trade {
   market_slug: string
   market_question: string
   outcome: string
-  side: "buy" | "sell"
+  side: string
   price: string
   amount: string
   executed_at: string
@@ -76,7 +76,7 @@ export interface TradesResponse {
 export interface MarketTrade {
   id: string
   outcome: string
-  side: "buy" | "sell"
+  side: string
   price: string
   amount: string
   timestamp: string

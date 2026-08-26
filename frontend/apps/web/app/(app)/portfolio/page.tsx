@@ -163,7 +163,7 @@ function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
     <div className="space-y-3">
       <Card>
         <CardHeader><CardTitle className="text-base">Open Positions</CardTitle></CardHeader>
-        <div className="divide-y overflow-auto" style={{ maxHeight: "400px" }}>
+        <div className="divide-y overflow-auto" style={{ maxHeight: "400px", minHeight: "200px" }}>
             {positions.map((pos) => {
               const unrealized = n(pos.unrealized_pnl)
               const isUp = unrealized >= 0
@@ -231,17 +231,17 @@ function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
     <div className="space-y-3">
       <Card>
         <CardHeader><CardTitle className="text-base">Recent Orders</CardTitle></CardHeader>
-        <div className="relative overflow-auto" style={{ maxHeight: "400px" }}>
-          <Table className="w-full">
-            <TableHeader>
+        <div className="overflow-auto" style={{ maxHeight: "400px", minHeight: "200px" }}>
+          <Table noWrapper className="w-full">
+            <TableHeader className="sticky top-0 z-20 bg-muted">
               <TableRow className="hover:bg-transparent">
-                <TableHead className="sticky top-0 z-10 bg-muted/50 backdrop-blur">Market</TableHead>
-                <TableHead className="sticky top-0 z-10 bg-muted/50 backdrop-blur">Side</TableHead>
-                <TableHead className="sticky top-0 z-10 bg-muted/50 backdrop-blur">Type</TableHead>
-                <TableHead className="text-right sticky top-0 z-10 bg-muted/50 backdrop-blur">Price</TableHead>
-                <TableHead className="text-right sticky top-0 z-10 bg-muted/50 backdrop-blur">Amount</TableHead>
-                <TableHead className="sticky top-0 z-10 bg-muted/50 backdrop-blur">Status</TableHead>
-                <TableHead className="sticky top-0 z-10 bg-muted/50 backdrop-blur">Time</TableHead>
+                <TableHead>Market</TableHead>
+                <TableHead>Side</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead className="text-right">Price</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Time</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

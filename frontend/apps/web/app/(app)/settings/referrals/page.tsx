@@ -2,9 +2,10 @@
 
 import { useCallback, useState } from "react"
 import { useReferralCode, useReferralStats } from "@/hooks/api/use-referrals"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
+import { Card, CardContent } from "@workspace/ui/components/card"
 import { Button } from "@workspace/ui/components/button"
-import { Spinner } from "@workspace/ui/components/spinner"
+import { Skeleton } from "@workspace/ui/components/skeleton"
 import { Badge } from "@workspace/ui/components/badge"
 import {
   Table,
@@ -150,23 +151,7 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
 
 // ── Referrals Table ────────────────────────────────────────────────────────────
 
-function ReferralsTable({
-  referrals,
-  isLoading,
-}: {
-  referrals: ReferralItem[]
-  isLoading: boolean
-}) {
-  if (isLoading) {
-    return (
-      <Card className="overflow-hidden pt-0">
-        <CardContent className="flex h-48 items-center justify-center">
-          <Spinner className="size-5" />
-        </CardContent>
-      </Card>
-    )
-  }
-
+function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
   if (referrals.length === 0) {
     return (
       <Card className="overflow-hidden pt-0">
@@ -179,26 +164,8 @@ function ReferralsTable({
 
   return (
     <Card className="overflow-hidden pt-0">
-      <Table className="w-full" style={{ tableLayout: "fixed" }}>
-        <colgroup>
-          <col className="w-[35%]" />
-          <col className="w-[15%]" />
-          <col className="w-[15%]" />
-          <col className="w-[20%]" />
-          <col className="w-[15%]" />
-        </colgroup>
-        <TableHeader className="sticky top-0 z-20 bg-muted shadow-sm">
-          <TableRow className="hover:bg-transparent">
-            <TableHead>Referred User</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Reward</TableHead>
-            <TableHead>Invited</TableHead>
-            <TableHead>Completed</TableHead>
-          </TableRow>
-        </TableHeader>
-      </Table>
-      <div className="overflow-y-auto" style={{ maxHeight: "calc(600px - 41px)" }}>
-        <Table className="w-full" style={{ tableLayout: "fixed" }}>
+      <div className="overflow-auto" style={{ maxHeight: "600px", minHeight: "200px" }}>
+        <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
           <colgroup>
             <col className="w-[35%]" />
             <col className="w-[15%]" />
@@ -206,6 +173,15 @@ function ReferralsTable({
             <col className="w-[20%]" />
             <col className="w-[15%]" />
           </colgroup>
+          <TableHeader className="sticky top-0 z-20 bg-muted">
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Referred User</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Reward</TableHead>
+              <TableHead>Invited</TableHead>
+              <TableHead>Completed</TableHead>
+            </TableRow>
+          </TableHeader>
           <TableBody>
             {referrals.map((ref: ReferralItem) => (
               <TableRow key={ref.id} className="hover:bg-accent/30 transition-colors">
@@ -243,17 +219,18 @@ function ReferralsTable({
 
 export default function ReferralsPage() {
   const { data: codeData, isLoading: codeLoading } = useReferralCode()
-  const { data: statsData, isLoading: statsLoading } = useReferralStats()
+  const { data: statsData } = useReferralStats()
 
   const referralCode = codeData?.referral_code ?? null
   const origin = typeof window !== "undefined" ? window.location.origin : ""
   const referralLink = referralCode ? `${origin}/register?ref=${referralCode}` : ""
 
   const stats = statsData ?? null
-  const isAnyLoading = codeLoading || statsLoading
+  const isAnyLoading = codeLoading
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <SettingsBreadcrumb page="Referrals" />
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Referrals</h1>
@@ -263,8 +240,67 @@ export default function ReferralsPage() {
       </div>
 
       {isAnyLoading ? (
-        <div className="flex justify-center py-12">
-          <Spinner className="size-6" />
+        <div className="space-y-6">
+          {/* Code + stats skeletons */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <Card>
+              <CardContent className="pt-6 space-y-4">
+                <Skeleton className="h-8 w-full rounded-lg" />
+                <Skeleton className="h-9 w-full rounded-lg" />
+                <Skeleton className="h-3 w-48" />
+              </CardContent>
+            </Card>
+            <div className="lg:col-span-2 grid grid-cols-3 gap-4">
+              {[1, 2, 3].map((i) => (
+                <Card key={i}>
+                  <CardContent className="pt-6">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1">
+                        <Skeleton className="h-3 w-20" />
+                        <Skeleton className="h-7 w-12 mt-2" />
+                        <Skeleton className="h-3 w-16 mt-1" />
+                      </div>
+                      <Skeleton className="size-9 rounded-lg" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+          {/* Table skeleton */}
+          <Card>
+            <div className="overflow-auto" style={{ maxHeight: "600px", minHeight: "200px" }}>
+              <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
+                <colgroup>
+                  <col className="w-[35%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[15%]" />
+                </colgroup>
+                <TableHeader className="sticky top-0 z-20 bg-muted">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Referred User</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Reward</TableHead>
+                    <TableHead>Invited</TableHead>
+                    <TableHead>Completed</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[1, 2, 3].map((i) => (
+                    <TableRow key={i} className="hover:bg-transparent">
+                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-12" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
         </div>
       ) : (
         <>
@@ -307,10 +343,7 @@ export default function ReferralsPage() {
           {/* Referral History */}
           <div>
             <h2 className="text-sm font-semibold text-foreground mb-3">Referral History</h2>
-            <ReferralsTable
-              referrals={(stats?.referrals as ReferralItem[]) ?? []}
-              isLoading={statsLoading}
-            />
+            <ReferralsTable referrals={(stats?.referrals as ReferralItem[]) ?? []} />
           </div>
         </>
       )}

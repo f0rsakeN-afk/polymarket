@@ -136,7 +136,7 @@ function OrderRow({ order }: { order: Order }) {
       <TableCell className="w-[10%] text-right tabular-nums text-sm">{n(order.amount).toFixed(0)}</TableCell>
       <TableCell className="w-[10%]"><StatusBadge status={order.status} /></TableCell>
       <TableCell className="w-[8%] text-muted-foreground text-xs">{formatTime(order.created_at)}</TableCell>
-      <TableCell className="w-[2%]">
+      <TableCell className="w-[4%]">
         {(order.status === "pending" || order.status === "partial") && <CancelButton order={order} />}
       </TableCell>
     </TableRow>
@@ -168,25 +168,10 @@ function OrdersTable({ orders, isLoading }: { orders: Order[]; isLoading: boolea
 
   return (
     <Card className="overflow-hidden pt-0">
-      <Table className="w-full" style={{ tableLayout: "fixed" }}>
-        <TableHeader className="sticky top-0 z-20 bg-muted shadow-sm">
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[40%]">Market</TableHead>
-            <TableHead className="w-[10%]">Side</TableHead>
-            <TableHead className="w-[10%]">Outcome</TableHead>
-            <TableHead className="w-[10%]">Type</TableHead>
-            <TableHead className="w-[10%] text-right">Price</TableHead>
-            <TableHead className="w-[10%] text-right">Amount</TableHead>
-            <TableHead className="w-[10%]">Status</TableHead>
-            <TableHead className="w-[8%]">Time</TableHead>
-            <TableHead className="w-[2%]" />
-          </TableRow>
-        </TableHeader>
-      </Table>
-      <div className="overflow-y-auto" style={{ maxHeight: "calc(600px - 41px)" }}>
-        <Table className="w-full" style={{ tableLayout: "fixed" }}>
+      <div className="overflow-auto" style={{ maxHeight: "600px", minHeight: "200px" }}>
+        <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
           <colgroup>
-            <col className="w-[40%]" />
+            <col className="w-[38%]" />
             <col className="w-[10%]" />
             <col className="w-[10%]" />
             <col className="w-[10%]" />
@@ -194,8 +179,21 @@ function OrdersTable({ orders, isLoading }: { orders: Order[]; isLoading: boolea
             <col className="w-[10%]" />
             <col className="w-[10%]" />
             <col className="w-[8%]" />
-            <col className="w-[2%]" />
+            <col className="w-[4%]" />
           </colgroup>
+          <TableHeader className="sticky top-0 z-20 bg-muted">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-[38%]">Market</TableHead>
+              <TableHead className="w-[10%]">Side</TableHead>
+              <TableHead className="w-[10%]">Outcome</TableHead>
+              <TableHead className="w-[10%]">Type</TableHead>
+              <TableHead className="w-[10%] text-right">Price</TableHead>
+              <TableHead className="w-[10%] text-right">Amount</TableHead>
+              <TableHead className="w-[10%]">Status</TableHead>
+              <TableHead className="w-[8%]">Time</TableHead>
+              <TableHead className="w-[4%]">Cancel</TableHead>
+            </TableRow>
+          </TableHeader>
           <TableBody>
             {orders.map((order) => (
               <OrderRow key={order.id} order={order} />

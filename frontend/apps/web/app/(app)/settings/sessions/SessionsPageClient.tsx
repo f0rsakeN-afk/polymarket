@@ -11,6 +11,7 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { sileo } from "sileo"
 import { Globe, Monitor, Smartphone, Trash2 } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
+import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 
 function formatDate(dateStr: string): string {
   return new Intl.DateTimeFormat("en", {
@@ -132,26 +133,8 @@ function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
 
   return (
     <Card className="overflow-hidden pt-0">
-      <Table className="w-full" style={{ tableLayout: "fixed" }}>
-        <colgroup>
-          <col className="w-[35%]" />
-          <col className="w-[15%]" />
-          <col className="w-[20%]" />
-          <col className="w-[20%]" />
-          <col className="w-[10%]" />
-        </colgroup>
-        <TableHeader className="sticky top-0 z-20 bg-muted shadow-sm">
-          <TableRow className="hover:bg-transparent">
-            <TableHead>Device</TableHead>
-            <TableHead>IP Address</TableHead>
-            <TableHead>Last Active</TableHead>
-            <TableHead>Expires</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-      </Table>
-      <div className="overflow-y-auto" style={{ maxHeight: "calc(600px - 41px)" }}>
-        <Table className="w-full" style={{ tableLayout: "fixed" }}>
+      <div className="overflow-auto" style={{ maxHeight: "600px", minHeight: "200px" }}>
+        <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
           <colgroup>
             <col className="w-[35%]" />
             <col className="w-[15%]" />
@@ -159,6 +142,15 @@ function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
             <col className="w-[20%]" />
             <col className="w-[10%]" />
           </colgroup>
+          <TableHeader className="sticky top-0 z-20 bg-muted">
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Device</TableHead>
+              <TableHead>IP Address</TableHead>
+              <TableHead>Last Active</TableHead>
+              <TableHead>Expires</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
           <TableBody>
             {sessions.map((session) => (
               <SessionRow
@@ -218,6 +210,7 @@ export function SessionsPageClient() {
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <SettingsBreadcrumb page="Sessions" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
