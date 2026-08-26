@@ -1,32 +1,36 @@
 "use client"
 
 import { useCallback, memo } from "react"
+import { useRouter } from "next/navigation"
 import { cn } from "@workspace/ui/lib/utils"
 import { useMarketCategories } from "@/hooks/api/use-markets"
 
 interface CategoryTabsProps {
   tag: string
-  onTagChange: (t: string) => void
 }
 
-function CategoryTabs({ tag, onTagChange }: CategoryTabsProps) {
+function CategoryTabs({ tag }: CategoryTabsProps) {
+  const router = useRouter()
   const { data: categories = [] } = useMarketCategories()
-  const handleClick = useCallback((cat: string) => {
-    onTagChange(cat)
-  }, [onTagChange])
+
+  const handleClick = useCallback(
+    (cat: string) => {
+      window.scrollTo({ top: 0, behavior: "instant" })
+      router.push(cat === "All" ? "/" : `/?tag=${cat.toLowerCase()}`)
+    },
+    [router]
+  )
 
   return (
-    <div role="tablist" aria-label="Market categories" className="flex items-center gap-1 border-b border-border overflow-x-auto">
-      {["All", ...(categories ?? [])].map((cat) => {
+    <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide">
+      {["All", ...categories].map((cat) => {
         const isSelected = tag.toLowerCase() === cat.toLowerCase()
         return (
           <button
             key={cat}
-            role="tab"
-            aria-selected={isSelected}
             onClick={() => handleClick(cat)}
             className={cn(
-              "px-4 py-2 text-xs font-medium whitespace-nowrap border-b-2 -mb-px transition-colors",
+              "px-4 py-2 text-xs font-medium whitespace-nowrap border-b-2 transition-colors",
               isSelected
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"

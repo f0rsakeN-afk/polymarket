@@ -1,4 +1,5 @@
 import { api } from "./client"
+import type { MutationResponse } from "@/lib/api/client"
 
 export interface SplitMergeResponse {
   market_id: string
@@ -20,13 +21,13 @@ export interface MergeResponse extends SplitMergeResponse {
 
 export const splitMergeApi = {
   split: (marketId: string, amount: number) =>
-    api.post<{ success: boolean; data: SplitResponse }>(
+    api.post<MutationResponse<SplitResponse>>(
       "/api/v1/split-merge/split",
       { market_id: marketId, amount }
     ),
 
   merge: (marketId: string, amount: number) =>
-    api.post<{ success: boolean; data: MergeResponse }>(
+    api.post<MutationResponse<MergeResponse>>(
       "/api/v1/split-merge/merge",
       { market_id: marketId, amount }
     ),

@@ -239,7 +239,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
             "email": existing_user.email,
             "username": existing_user.username,
             "email_resent": True,
-        })
+        }, message="Verification email resent")
 
     user = User(email=data.email, username=data.username, password_hash=hash_password(data.password), is_email_verified=False)
     db.add(user)
@@ -267,7 +267,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     await AuthAuditService.log_register(db, data.email, str(user.id), ip, ua)
 
     logger.info(f"User registered (unverified): {data.email} ({user.id})")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Account created — check your email to verify")
 
 
 @router.post("/verify-email", summary="Verify email")
@@ -277,7 +277,7 @@ async def verify_email(data: VerifyEmailRequest, request: Request, db: AsyncSess
     if not user:
         raise UnauthorizedError("User not found")
     if user.is_email_verified:
-        return success_response({"id": str(user.id), "email": user.email, "verified": True})
+        return success_response({"id": str(user.id), "email": user.email, "verified": True}, message="Email verified")
 
     ip = _get_client_ip(request)
     rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
@@ -299,7 +299,7 @@ async def verify_email(data: VerifyEmailRequest, request: Request, db: AsyncSess
     ua = request.headers.get("user-agent")
     await AuthAuditService.log_email_verified(db, data.email, str(user.id), ip, ua)
     logger.info(f"Email verified: {data.email}")
-    return success_response({"id": str(user.id), "email": user.email, "verified": True})
+    return success_response({"id": str(user.id), "email": user.email, "verified": True}, message="Email verified")
 
 
 @router.post("/resend-verification", summary="Resend verification code")
@@ -335,7 +335,7 @@ async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSess
 
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
     logger.info(f"Password set for user {user.id}")
-    return success_response({"status": "password_set"})
+    return success_response({"status": "password_set"}, message="Password set successfully")
 
 
 # ─── Magic link ───────────────────────────────────────────────────────────────
@@ -417,14 +417,14 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
         # Issue partial token, require 2FA completion
         partial = str(uuid.uuid4())
         await redis_cb.call(lambda: r.set(f"partial:{partial}", f"{user_id}:{ip}", ex=300))
-        return success_response({"requires_2fa": True, "partial_token": partial})
+        return success_response({"requires_2fa": True, "partial_token": partial}, message="Login successful")
 
     access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
     logger.info(f"Magic URL login: {user.email}")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Login successful")
 
 
 @router.post("/verify-magic-url-2fa", summary="Complete magic URL login with 2FA")
@@ -483,7 +483,7 @@ async def verify_magic_url_2fa(
     set_auth_cookies(response, access_token, refresh_token)
 
     logger.info(f"Magic URL + 2FA login: {user.email}")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Login successful")
 
 
 @router.post("/verify-magic", summary="Verify magic link code")
@@ -515,7 +515,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
             r = await get_redis()
             partial = str(uuid.uuid4())
             await redis_cb.call(lambda: r.set(f"magic_partial:{partial}", f"{user.id}:{data.email}", ex=300))
-            return success_response({"requires_2fa": True, "partial_token": partial})
+            return success_response({"requires_2fa": True, "partial_token": partial}, message="Login successful")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
             await RateLimitService.record_failure(data.email, ip)
@@ -527,7 +527,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
     set_auth_cookies(response, access_token, refresh_token)
 
     logger.info(f"Magic login: {data.email}")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Login successful")
 
 
 @router.post("/verify-magic-2fa", summary="Complete magic link login with 2FA using partial token")
@@ -563,7 +563,7 @@ async def verify_magic_2fa(
     set_auth_cookies(response, access_token, refresh_token)
 
     logger.info(f"Magic + 2FA login: {email}")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Login successful")
 
 
 # ─── 2FA (TOTP) ───────────────────────────────────────────────────────────────
@@ -575,7 +575,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
 
     if user.is_2fa_enabled:
-        return success_response({"already_enabled": True})
+        return success_response({"already_enabled": True}, message="2FA already enabled")
 
     # Clear any stale pending state from a previous incomplete setup
     if user.is_2fa_pending:
@@ -599,7 +599,7 @@ async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     await AuthAuditService.log_2fa_setup_requested(db, str(user.id), ip, ua)
 
     logger.info(f"2FA setup initiated: {user.email}")
-    return success_response(TwoFactorSetupResponse(uri=uri).model_dump())
+    return success_response(TwoFactorSetupResponse(uri=uri).model_dump(), message="2FA setup ready")
 
 
 @router.post("/2fa/enable", summary="Confirm and enable 2FA")
@@ -634,7 +634,7 @@ async def enable_2fa(
     await AuthAuditService.log_2fa_enabled(db, str(user.id), ip, ua)
 
     logger.info(f"2FA enabled: {user.email}")
-    return success_response({"status": "2fa_enabled"})
+    return success_response({"status": "2fa_enabled"}, message="2FA enabled")
 
 
 @router.post("/2fa/disable", summary="Disable 2FA")
@@ -666,7 +666,7 @@ async def disable_2fa(
     await AuthAuditService.log_2fa_disabled(db, str(user.id), ip, ua)
 
     logger.info(f"2FA disabled: {user.email}")
-    return success_response({"status": "2fa_disabled"})
+    return success_response({"status": "2fa_disabled"}, message="2FA disabled")
 
 
 @router.get("/2fa/status", summary="Get 2FA status")
@@ -735,7 +735,7 @@ async def reset_password(data: ResetPasswordRequest, request: Request, db: Async
 
     await AuthAuditService.log_password_reset_success(db, data.email, str(user.id), ip, ua)
     logger.info(f"Password reset: {data.email}")
-    return success_response({"status": "password_reset"})
+    return success_response({"status": "password_reset"}, message="Password reset successful")
 
 
 # ─── Login / Logout ───────────────────────────────────────────────────────────
@@ -790,7 +790,7 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
 
     await AuthAuditService.log_login_success(db, data.email, str(user.id), ip, ua)
     logger.info(f"Login: {data.email}")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username})
+    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Login successful")
 
 
 @router.post("/logout", summary="Logout (current device)")
@@ -820,7 +820,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 
     clear_auth_cookies(response)
     await AuthAuditService.log_logout(db, str(user.id), ip, ua)
-    return success_response({"status": "logged_out"})
+    return success_response({"status": "logged_out"}, message="Signed out")
 
 
 @router.post("/logout-all", summary="Logout all devices")
@@ -842,7 +842,7 @@ async def logout_all(request: Request, response: Response, db: AsyncSession = De
     clear_auth_cookies(response)
     await AuthAuditService.log_logout_all(db, str(user.id), ip, ua)
     logger.info(f"Logout all: {user.id}")
-    return success_response({"status": "logged_out_all_devices"})
+    return success_response({"status": "logged_out_all_devices"}, message="All sessions revoked")
 
 
 @router.get("/sessions", summary="List active sessions")
@@ -899,7 +899,7 @@ async def revoke_session(session_id: str, request: Request, db: AsyncSession = D
     ua = request.headers.get("user-agent")
     await AuthAuditService.log(db, "session_revoked", True, user_id=str(user.id), ip_address=ip, user_agent=ua)
 
-    return success_response({"status": "session_revoked"})
+    return success_response({"status": "session_revoked"}, message="Session revoked")
 
 
 @router.post("/change-password", summary="Change password")
@@ -939,7 +939,7 @@ async def change_password(
     set_auth_cookies(response, new_access, new_refresh)
 
     logger.info(f"Password changed: {user.id}")
-    return success_response({"status": "password_changed"})
+    return success_response({"status": "password_changed"}, message="Password changed")
 
 
 @router.post("/refresh", summary="Refresh access token")
@@ -981,7 +981,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     access_token, jti = create_access_token(user_id)
     set_auth_cookies(response, access_token, new_refresh)
     await db.commit()
-    return success_response({"status": "refreshed"})
+    return success_response({"status": "refreshed"}, message="Token refreshed")
 
 
 @router.get("/me", summary="Get current user")

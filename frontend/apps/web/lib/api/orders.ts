@@ -1,4 +1,5 @@
 import { api } from "./client"
+import type { MutationResponse } from "@/lib/api/client"
 import { z } from "zod"
 import { placeOrderSchema } from "@/lib/schemas/trading"
 import { getQuoteSchema } from "@/lib/schemas/orders"
@@ -65,22 +66,22 @@ export interface SingleOrderResponse {
 }
 
 export function getOrder(orderId: string) {
-  return api.get<{ success: boolean; data: SingleOrderResponse }>(`/api/v1/orders/${orderId}`)
+  return api.get<MutationResponse<SingleOrderResponse>>(`/api/v1/orders/${orderId}`)
 }
 
 export function placeOrder(order: PlaceOrderPayload) {
-  return api.post<{ success: boolean; data: PlaceOrderResponse }>(
+  return api.post<MutationResponse<PlaceOrderResponse>>(
     "/api/v1/orders/",
     placeOrderSchema.parse(order)
   )
 }
 
 export function cancelOrder(orderId: string) {
-  return api.delete<{ success: boolean }>(`/api/v1/orders/${orderId}`)
+  return api.delete<MutationResponse<void>>(`/api/v1/orders/${orderId}`)
 }
 
 export function getQuote(params: { market_id: string; outcome: string; side: "buy" | "sell"; amount: string | number }) {
-  return api.post<{ success: boolean; data: import("@/lib/schemas/orders").QuoteResponse }>(
+  return api.post<MutationResponse<import("@/lib/schemas/orders").QuoteResponse>>(
     "/api/v1/orders/quote",
     getQuoteSchema.parse(params)
   )

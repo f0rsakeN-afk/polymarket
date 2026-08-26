@@ -9,15 +9,16 @@ import { MenuIcon, SunIcon, MoonIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { UserMenu } from "@/components/auth/user-menu"
 import { NotificationBell } from "@/components/notifications/notification-bell"
+import { SearchInput } from "@/components/shared/search-input"
 
-const navLinks = [
+const navLinks: { href: string; label: string }[] = [
   // { href: "/", label: "Markets" },
   // { href: "/trades", label: "Trade Feed" },
   // { href: "/orders", label: "Orders" },
   // { href: "/portfolio", label: "Portfolio" },
 ]
 
-// ── Theme Toggle ───────────────────────────────────────────────────────────────
+// ── Theme Toggle ────────────────────────────────────────────────────────────────
 
 const ThemeToggle = memo(function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme()
@@ -27,9 +28,7 @@ const ThemeToggle = memo(function ThemeToggle() {
     setTheme(resolvedTheme === "dark" ? "light" : "dark")
   }, [resolvedTheme, setTheme])
 
-  if (!mounted) {
-    return <div className="size-8" />
-  }
+  if (!mounted) return <div className="size-8" />
 
   return (
     <button
@@ -38,15 +37,12 @@ const ThemeToggle = memo(function ThemeToggle() {
       title="Toggle theme"
       aria-label="Toggle theme"
     >
-      {resolvedTheme === "dark"
-        ? <SunIcon className="size-4" />
-        : <MoonIcon className="size-4" />
-      }
+      {resolvedTheme === "dark" ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
     </button>
   )
 })
 
-// ── Polygon Logo ──────────────────────────────────────────────────────────────
+// ── Polygon Logo ───────────────────────────────────────────────────────────────
 
 const PolygonIcon = memo(function PolygonIcon() {
   return (
@@ -63,24 +59,16 @@ const PolygonIcon = memo(function PolygonIcon() {
   )
 })
 
-// ── Nav Link ──────────────────────────────────────────────────────────────────
+// ── Nav Link ───────────────────────────────────────────────────────────────────
 
-const NavLink = memo(function NavLink({
-  href, label, isActive,
-}: {
-  href: string
-  label: string
-  isActive: boolean
-}) {
+const NavLink = memo(function NavLink({ href, label, isActive }: { href: string; label: string; isActive: boolean }) {
   return (
     <Link
       href={href}
       aria-current={isActive ? "page" : undefined}
       className={cn(
         "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-        isActive
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
       )}
     >
       {label}
@@ -88,38 +76,32 @@ const NavLink = memo(function NavLink({
   )
 })
 
-// ── Header ───────────────────────────────────────────────────────────────────
+// ── Header ─────────────────────────────────────────────────────────────────────
 
-function Header() {
+export default function Header() {
   const pathname = usePathname()
 
-  const isActive = useCallback((href: string) => {
-    return href === "/" ? pathname === "/" : pathname.startsWith(href)
-  }, [pathname])
+  const isActive = useCallback(
+    (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href)),
+    [pathname]
+  )
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-      <div className="container mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 font-bold tracking-wide">
-          <PolygonIcon />
-          <span>PredictX</span>
-        </Link>
+      <div className="container mx-auto flex h-14 max-w-7xl items-center px-4">
+        {/* Left: Logo + Search */}
+        <div className="flex items-center gap-4 flex-1 min-w-0">
+          <Link href="/" className="flex items-center gap-2 font-bold tracking-wide shrink-0">
+            <PolygonIcon />
+            <span>PredictX</span>
+          </Link>
+          <div className="relative w-full max-w-xs">
+            <SearchInput />
+          </div>
+        </div>
 
-        {/* Nav */}
-        <nav className="hidden items-center gap-1 sm:flex">
-          {navLinks.map(({ href, label }) => (
-            <NavLink
-              key={href}
-              href={href}
-              label={label}
-              isActive={isActive(href)}
-            />
-          ))}
-        </nav>
-
-        {/* Right */}
-        <div className="flex items-center gap-2">
+        {/* Right: Theme + Bell + User */}
+        <div className="flex items-center gap-2 shrink-0">
           <ThemeToggle />
           <NotificationBell />
           <UserMenu />
@@ -132,12 +114,7 @@ function Header() {
             <SheetContent side="right" className="w-64 p-0">
               <nav className="flex flex-col p-6 gap-1">
                 {navLinks.map(({ href, label }) => (
-                  <NavLink
-                    key={href}
-                    href={href}
-                    label={label}
-                    isActive={isActive(href)}
-                  />
+                  <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
                 ))}
               </nav>
             </SheetContent>
@@ -147,5 +124,3 @@ function Header() {
     </header>
   )
 }
-
-export default Header

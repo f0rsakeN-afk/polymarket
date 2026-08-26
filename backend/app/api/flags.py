@@ -114,4 +114,4 @@ async def resolve_flag(
     return success_response({
         "flag_id": str(flag.id),
         "status": req.status,
-    })
+    }, message=f"Flag {'resolved' if req.status == 'resolved' else 'escalated'}")

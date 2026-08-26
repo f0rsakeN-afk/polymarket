@@ -1,4 +1,5 @@
-import { api } from "./client";
+import { api } from "./client"
+import type { MutationResponse } from "@/lib/api/client"
 
 export interface MeResponse {
   id: string;
@@ -26,30 +27,30 @@ export const authApi = {
   me: () => api.get<{ success: boolean; data: MeResponse }>("/api/v1/auth/me"),
 
   login: (email: string, password: string, totpCode?: string) =>
-    api.post<{ success: boolean; data?: { id: string } }>("/api/v1/auth/login", {
+    api.post<MutationResponse<{ id: string }>>("/api/v1/auth/login", {
       email,
       password,
       totp_code: totpCode,
     }),
 
-  logout: () => api.post<{ success: boolean }>("/api/v1/auth/logout"),
+  logout: () => api.post<MutationResponse<void>>("/api/v1/auth/logout"),
 
-  logoutAll: () => api.post<{ success: boolean }>("/api/v1/auth/logout-all"),
+  logoutAll: () => api.post<MutationResponse<void>>("/api/v1/auth/logout-all"),
 
   sessions: () =>
     api.get<{ success: boolean; data: Session[] }>("/api/v1/auth/sessions"),
 
   revokeSession: (sessionId: string) =>
-    api.delete<{ success: boolean }>(`/api/v1/auth/sessions/${sessionId}`),
+    api.delete<MutationResponse<void>>(`/api/v1/auth/sessions/${sessionId}`),
 
-  refresh: () => api.post<{ success: boolean }>("/api/v1/auth/refresh"),
+  refresh: () => api.post<MutationResponse<void>>("/api/v1/auth/refresh"),
 };
 
 // ─── Registration ──────────────────────────────────────────────────────────────
 
 export const registerApi = {
   register: (email: string, username: string, password: string, referralCode?: string) =>
-    api.post<{ success: boolean; message?: string }>("/api/v1/auth/register", {
+    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/register", {
       email,
       username,
       password,
@@ -57,10 +58,10 @@ export const registerApi = {
     }),
 
   verifyEmail: (email: string, code: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/verify-email", { email, code }),
+    api.post<MutationResponse<{ id: string; email: string; verified: boolean }>>("/api/v1/auth/verify-email", { email, code }),
 
   resendVerification: (email: string) =>
-    api.post<{ success: boolean; message?: string }>(
+    api.post<MutationResponse<{ email_resent: boolean }>>(
       "/api/v1/auth/resend-verification",
       { email }
     ),
@@ -70,36 +71,32 @@ export const registerApi = {
 
 export const magicLinkApi = {
   sendCode: (email: string) =>
-    api.post<{ success: boolean; message?: string }>("/api/v1/auth/magic-link", {
-      email,
-    }),
+    api.post<MutationResponse<void>>("/api/v1/auth/magic-link", { email }),
 
   verifyCode: (email: string, code: string, totpCode?: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/verify-magic", {
+    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic", {
       email,
       code,
       totp_code: totpCode,
     }),
 
   requestUrl: (email: string) =>
-    api.post<{ success: boolean; message?: string }>("/api/v1/auth/magic-link/url", {
-      email,
-    }),
+    api.post<MutationResponse<void>>("/api/v1/auth/magic-link/url", { email }),
 
   verifyUrl: (token: string) =>
-    api.post<{ success: boolean; data?: { requires_2fa: boolean; partial_token?: string } }>(
+    api.post<MutationResponse<{ id: string; email: string; username: string }>>(
       "/api/v1/auth/verify-magic-url",
       { token }
     ),
 
   verifyUrl2fa: (partialToken: string, totpCode: string) =>
-    api.post<{ success: boolean; message?: string }>("/api/v1/auth/verify-magic-url-2fa", {
+    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-url-2fa", {
       partial_token: partialToken,
       totp_code: totpCode,
     }),
 
   verifyMagic2fa: (partialToken: string, totpCode: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/verify-magic-2fa", {
+    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-2fa", {
       partial_token: partialToken,
       totp_code: totpCode,
     }),
@@ -109,13 +106,13 @@ export const magicLinkApi = {
 
 export const passwordApi = {
   forgotPassword: (email: string) =>
-    api.post<{ success: boolean; message?: string }>(
+    api.post<MutationResponse<void>>(
       "/api/v1/auth/forgot-password",
       { email }
     ),
 
   resetPassword: ({ email, code, newPassword }: { email: string; code: string; newPassword: string }) =>
-    api.post<{ success: boolean }>("/api/v1/auth/reset-password", {
+    api.post<MutationResponse<void>>("/api/v1/auth/reset-password", {
       email,
       code,
       new_password: newPassword,
@@ -126,10 +123,10 @@ export const passwordApi = {
 
 export const accountApi = {
   setPassword: (password: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/set-password", { password }),
+    api.post<MutationResponse<{ status: string }>>("/api/v1/auth/set-password", { password }),
 
   changePassword: (params: { old_password: string; new_password: string; totp_code?: string }) =>
-    api.post<{ success: boolean }>("/api/v1/auth/change-password", params),
+    api.post<MutationResponse<void>>("/api/v1/auth/change-password", params),
 }
 
 // ─── 2FA ──────────────────────────────────────────────────────────────────────
@@ -148,13 +145,13 @@ export const twoFactorApi = {
     api.get<{ success: boolean; data: TwoFactorStatus }>("/api/v1/auth/2fa/status"),
 
   setup: () =>
-    api.get<{ success: boolean; data: TwoFactorSetup }>("/api/v1/auth/2fa/setup"),
+    api.get<MutationResponse<TwoFactorSetup>>("/api/v1/auth/2fa/setup"),
 
   enable: (code: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/2fa/enable", { code }),
+    api.post<MutationResponse<void>>("/api/v1/auth/2fa/enable", { code }),
 
   disable: (code: string, password: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/2fa/disable", {
+    api.post<MutationResponse<void>>("/api/v1/auth/2fa/disable", {
       code,
       password,
     }),

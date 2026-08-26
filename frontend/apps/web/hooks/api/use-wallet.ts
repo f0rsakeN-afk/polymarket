@@ -3,6 +3,7 @@
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getWallet, deposit, withdraw, listTransactions } from "@/lib/api/wallet"
 import { queryKeys } from "@/lib/api/queryKeys"
+import { sileo } from "sileo"
 import type { Wallet, Transaction } from "@/hooks/api/types/wallet"
 
 export function useWallet() {
@@ -38,9 +39,13 @@ export function useDeposit() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deposit,
-    onSuccess: () => {
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Deposit initiated", description: "Complete payment to add funds." })
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
       qc.invalidateQueries({ queryKey: queryKeys.transactions() })
+    },
+    onError: (err) => {
+      sileo.error({ title: err instanceof Error ? err.message : "Deposit failed" })
     },
   })
 }
@@ -49,9 +54,13 @@ export function useWithdraw() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: withdraw,
-    onSuccess: () => {
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Withdrawal submitted", description: "Funds will arrive after blockchain confirmation." })
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
       qc.invalidateQueries({ queryKey: queryKeys.transactions() })
+    },
+    onError: (err) => {
+      sileo.error({ title: err instanceof Error ? err.message : "Withdrawal failed" })
     },
   })
 }

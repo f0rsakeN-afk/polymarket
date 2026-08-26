@@ -129,7 +129,7 @@ async def split(
         "yes_shares": str(amount_after_fee),
         "no_shares": str(amount_after_fee),
         "balance_after": str(wallet.balance),
-    })
+    }, message="Liquidity split successfully")
 
 
 @router.post("/merge", summary="Merge equal YES+NO shares back into USDC")
@@ -227,4 +227,4 @@ async def merge(
         "fee": str(fee),
         "amount_received": str(amount_after_fee),
         "balance_after": str(wallet.balance),
-    })
+    }, message="Liquidity merged successfully")

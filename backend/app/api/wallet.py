@@ -80,7 +80,7 @@ async def withdraw(
 ):
     user = await get_current_user(request, db)
     result = await WalletService.withdraw(db, user, Decimal(str(data.amount)), data.idempotency_key)
-    return success_response(result)
+    return success_response(result, message="Withdrawal submitted")
 
 
 @router.post("/withdraw/{withdrawal_id}/confirm")
@@ -101,7 +101,8 @@ async def confirm_withdrawal(
     result = await WalletService.confirm_withdrawal(
         db, withdrawal_id, confirmed=confirmed,
     )
-    return success_response(result)
+    msg = "Withdrawal confirmed" if confirmed else "Withdrawal rejected"
+    return success_response(result, message=msg)
 
 
 @router.get("/transactions")

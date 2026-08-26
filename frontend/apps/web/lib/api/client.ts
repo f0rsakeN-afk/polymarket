@@ -55,6 +55,13 @@ export interface NormalizedResponse<T> {
   total?: number
 }
 
+/** Wraps mutation responses — backend always includes optional message */
+export type MutationResponse<T = void> = {
+  success: boolean
+  data: T
+  message?: string
+}
+
 export function parseResponse<T>(raw: unknown): NormalizedResponse<T> {
   if (!raw || typeof raw !== "object") {
     return { success: true, data: raw as T }

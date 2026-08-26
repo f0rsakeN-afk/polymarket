@@ -25,7 +25,7 @@ async def get_quote(data: QuoteRequest, request: Request, db: AsyncSession = Dep
     result = await OrderService.compute_quote(
         db, data.market_id, data.outcome, data.side, Decimal(str(data.amount))
     )
-    return success_response(result)
+    return success_response(result, message="Quote computed")
 
 
 @router.post("/", summary="Place a market order")
@@ -48,15 +48,15 @@ async def place_order(data: OrderRequest, request: Request, db: AsyncSession = D
         "wallet_balance": str(result.wallet_balance),
     }
     if result.status == "duplicate":
-        return success_response({**resp, "duplicate": True})
-    return success_response(resp)
+        return success_response({**resp, "duplicate": True}, message="Order already placed")
+    return success_response(resp, message="Order placed successfully")
 
 
 @router.delete("/{order_id}", summary="Cancel a pending order")
 async def cancel_order(order_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
     await OrderService.cancel_order(db, user, order_id)
-    return success_response({"order_id": order_id, "status": "cancelled"})
+    return success_response({"order_id": order_id, "status": "cancelled"}, message="Order cancelled")
 
 
 @router.get("/{order_id}", summary="Get order details")

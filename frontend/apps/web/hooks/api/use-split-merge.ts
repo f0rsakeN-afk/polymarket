@@ -10,13 +10,13 @@ export function useSplit() {
   return useMutation({
     mutationFn: ({ marketId, amount }: { marketId: string; amount: number }) =>
       splitMergeApi.split(marketId, amount),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
       qc.invalidateQueries({ queryKey: queryKeys.positions() })
-      sileo.success({ title: "Shares split", description: "USDC converted to YES/NO shares" })
+      sileo.success({ title: res.message ?? "Liquidity split successfully" })
     },
     onError: (err) => {
-      sileo.error({ title: "Split failed", description: err instanceof Error ? err.message : "Unknown error" })
+      sileo.error({ title: err instanceof Error ? err.message : "Split failed" })
     },
   })
 }
@@ -26,13 +26,13 @@ export function useMerge() {
   return useMutation({
     mutationFn: ({ marketId, amount }: { marketId: string; amount: number }) =>
       splitMergeApi.merge(marketId, amount),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
       qc.invalidateQueries({ queryKey: queryKeys.positions() })
-      sileo.success({ title: "Shares merged", description: "YES/NO shares converted to USDC" })
+      sileo.success({ title: res.message ?? "Liquidity merged successfully" })
     },
     onError: (err) => {
-      sileo.error({ title: "Merge failed", description: err instanceof Error ? err.message : "Unknown error" })
+      sileo.error({ title: err instanceof Error ? err.message : "Merge failed" })
     },
   })
 }

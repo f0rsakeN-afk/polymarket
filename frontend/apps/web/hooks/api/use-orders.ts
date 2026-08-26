@@ -2,6 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { listOrders, placeOrder, cancelOrder } from "@/lib/api/orders"
+import { sileo } from "sileo"
 import type { Order } from "@/hooks/api/types/order"
 
 export function useOrders(filters?: {
@@ -29,13 +30,17 @@ export function usePlaceOrder() {
     mutationFn: placeOrder,
     onSuccess: (res) => {
       if (res.data.duplicate) {
-        // Duplicate order — no new position created, just refresh order list
+        sileo.info({ title: res.message ?? "Duplicate order", description: "This order was already placed." })
         qc.invalidateQueries({ queryKey: ["orders"] })
         return
       }
+      sileo.success({ title: res.message ?? "Order placed", description: "Your order has been submitted." })
       qc.invalidateQueries({ queryKey: ["orders"] })
       qc.invalidateQueries({ queryKey: ["wallet"] })
       qc.invalidateQueries({ queryKey: ["positions"] })
+    },
+    onError: (err) => {
+      sileo.error({ title: err instanceof Error ? err.message : "Order failed" })
     },
   })
 }
@@ -44,10 +49,14 @@ export function useCancelOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: cancelOrder,
-    onSuccess: () => {
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Order cancelled" })
       qc.invalidateQueries({ queryKey: ["orders"] })
       qc.invalidateQueries({ queryKey: ["wallet"] })
       qc.invalidateQueries({ queryKey: ["positions"] })
+    },
+    onError: (err) => {
+      sileo.error({ title: err instanceof Error ? err.message : "Cancel failed" })
     },
   })
 }

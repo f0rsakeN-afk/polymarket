@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -50,45 +51,47 @@ export function UserMenu() {
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="font-normal">
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">{user.username}</p>
-            <p className="text-xs text-muted-foreground">{user.email}</p>
-          </div>
-        </DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="font-normal">
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-medium">{user.username}</p>
+              <p className="text-xs text-muted-foreground">{user.email}</p>
+            </div>
+          </DropdownMenuLabel>
 
-        <DropdownMenuSeparator />
+          <DropdownMenuSeparator />
 
-        <DropdownMenuItem>
-          <Link href="/portfolio" className="w-full">Portfolio</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Link href="/orders" className="w-full">Orders</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Link href="/settings/sessions" className="w-full">Sessions</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Link href="/settings/referrals" className="w-full">Referrals</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Link href="/settings/notifications" className="w-full">Notifications</Link>
-        </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/portfolio" className="w-full">Portfolio</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/orders" className="w-full">Orders</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/settings/sessions" className="w-full">Sessions</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/settings/referrals" className="w-full">Referrals</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/settings/notifications" className="w-full">Notifications</Link>
+          </DropdownMenuItem>
 
-        {user.is_admin && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <Link href="/admin" className="w-full">Admin</Link>
-            </DropdownMenuItem>
-          </>
-        )}
+          {user.is_admin && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <Link href="/admin" className="w-full">Admin</Link>
+              </DropdownMenuItem>
+            </>
+          )}
 
-        <DropdownMenuSeparator />
+          <DropdownMenuSeparator />
 
-        <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
-          Sign out
-        </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
