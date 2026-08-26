@@ -26,7 +26,7 @@ function OutcomeOrderbook({
   )
 
   const bestBid = bids[0] ? n(bids[0].price) : null
-  const bestAsk = asks[0] ? n(asks[asks.length - 1].price) : null
+  const bestAsk = asks.length > 0 ? n(asks[asks.length - 1]!.price) : null
   const spread =
     bestBid !== null && bestAsk !== null
       ? ((bestAsk - bestBid) * 100).toFixed(2)

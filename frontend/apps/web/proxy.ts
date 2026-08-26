@@ -76,7 +76,7 @@ async function validateSession(request: NextRequest): Promise<{
   return { user: null, refreshed: false };
 }
 
-function setSecurityHeaders(response: NextResponse, _request: NextRequest) {
+function setSecurityHeaders(response: NextResponse) {
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-XSS-Protection", "1; mode=block");
@@ -97,7 +97,7 @@ export default async function proxy(request: NextRequest) {
     pathname.includes(".")
   ) {
     const response = NextResponse.next();
-    setSecurityHeaders(response, request);
+    setSecurityHeaders(response);
     return response;
   }
 
@@ -112,7 +112,7 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL(rawNext, request.url));
     }
     const response = NextResponse.next();
-    setSecurityHeaders(response, request);
+    setSecurityHeaders(response);
     return response;
   }
 
@@ -135,13 +135,13 @@ export default async function proxy(request: NextRequest) {
     const response = NextResponse.next();
     response.headers.set("x-user-id", user.id);
     response.headers.set("x-user-email", user.email);
-    setSecurityHeaders(response, request);
+    setSecurityHeaders(response);
     return response;
   }
 
   // All other routes (including /api/*) — apply security headers only
   const response = NextResponse.next();
-  setSecurityHeaders(response, request);
+  setSecurityHeaders(response);
   return response;
 }
 

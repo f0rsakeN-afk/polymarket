@@ -3,7 +3,6 @@
 import { useNotificationPreferences, useUpdateNotificationPreferences } from "@/hooks/api/use-notifications"
 import { Switch } from "@workspace/ui/components/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
-import { Button } from "@workspace/ui/components/button"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { sileo } from "sileo"
 import type { NotificationPreference } from "@/lib/schemas/notifications"

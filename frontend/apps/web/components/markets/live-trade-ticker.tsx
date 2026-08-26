@@ -69,7 +69,7 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
     }
   }
 
-  const { status } = useMarketSocket({
+  useMarketSocket({
     marketId,
     onMessage: handleWSMessage,
     enabled: !!marketId,

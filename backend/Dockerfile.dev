@@ -2,17 +2,20 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+# Install deps — layer is cached unless pyproject.toml or uv.lock changes
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev
+
+COPY . .
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PYTHONOPTIMIZE=1 \
+    PATH="/app/.venv/bin:$PATH"
 
-# Install all deps (including dev) for --reload to work
-COPY pyproject.toml uv.lock* ./
-RUN pip install uv && uv sync
-
-COPY . .
+EXPOSE 8000

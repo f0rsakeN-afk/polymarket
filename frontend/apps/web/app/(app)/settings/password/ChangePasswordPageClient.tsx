@@ -49,7 +49,7 @@ export function ChangePasswordPageClient() {
   });
 
   const mutation = useMutation({
-    mutationFn: (data: Input) => accountApi.changePassword(data.oldPassword, data.newPassword),
+    mutationFn: (data: Input) => accountApi.changePassword({ old_password: data.oldPassword, new_password: data.newPassword }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["me"] });
       form.reset();

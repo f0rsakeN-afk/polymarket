@@ -1,5 +1,3 @@
-import Link from "next/link"
-
 export const metadata = {
   title: "Documentation",
   description: "Developer documentation and API reference for building on PredictX.",

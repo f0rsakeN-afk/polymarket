@@ -11,7 +11,7 @@ import { PositionsList } from "@/components/orders/positions-list"
 export function PositionsPageClient() {
   const qc = useQueryClient()
   const { data: user } = useCurrentUser()
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = usePositions()
+  const { data, fetchNextPage, isFetchingNextPage, isLoading } = usePositions()
   const positions = data?.positions ?? []
   const hasMore = data?.hasMore ?? false
 

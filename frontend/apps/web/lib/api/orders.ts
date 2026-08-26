@@ -1,13 +1,10 @@
 import { api } from "./client"
 import { z } from "zod"
 import { placeOrderSchema } from "@/lib/schemas/trading"
-import type { OrdersResponse, QuoteResponse } from "@/hooks/api/types/order"
+import { getQuoteSchema } from "@/lib/schemas/orders"
+import type { OrdersResponse } from "@/hooks/api/types/order"
 
 export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
-
-export function parseOrder(data: unknown): PlaceOrderPayload {
-  return placeOrderSchema.parse(data)
-}
 
 export function listOrders(params?: {
   page?: number
@@ -52,19 +49,19 @@ export interface PlaceOrderResponse {
 export interface SingleOrderResponse {
   id: string
   market_id: string
-  market_slug: string
   outcome: string
   side: string
   order_type: string
-  amount: string
-  remaining_amount: string
-  price: string
   status: string
+  amount: string
+  price: string
   shares_bought: string | null
   shares_sold: string | null
-  fees_paid: string | null
+  fee: string | null
+  quote_id: string | null
+  client_order_id: string | null
   created_at: string
-  executed_at: string | null
+  expires_at: string | null
 }
 
 export function getOrder(orderId: string) {
@@ -82,11 +79,9 @@ export function cancelOrder(orderId: string) {
   return api.delete<{ success: boolean }>(`/api/v1/orders/${orderId}`)
 }
 
-export function getQuote(params: {
-  market_id: string
-  outcome: string
-  side: "buy" | "sell"
-  amount: number
-}) {
-  return api.post<{ success: boolean; data: QuoteResponse }>("/api/v1/orders/quote", params)
+export function getQuote(params: { market_id: string; outcome: string; side: "buy" | "sell"; amount: string | number }) {
+  return api.post<{ success: boolean; data: import("@/lib/schemas/orders").QuoteResponse }>(
+    "/api/v1/orders/quote",
+    getQuoteSchema.parse(params)
+  )
 }

@@ -1,16 +1,29 @@
 "use client"
 
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { listMarkets, getMarket, getMarketActivity, getMarketTrades, getGlobalTrades, getMarketComments, postComment, updateComment, deleteComment, getMarketFAQs, getRelatedMarkets, getPriceHistory, resolveMarket, createMarket } from "@/lib/api/markets"
+import {
+  listMarkets,
+  getMarket,
+  getMarketActivity,
+  getMarketTrades,
+  getGlobalTrades,
+  getMarketFAQs,
+  getRelatedMarkets,
+  getPriceHistory,
+  resolveMarket,
+  createMarket,
+  claimWinnings,
+  getOrderBook,
+} from "@/lib/api/markets"
 import { api } from "@/lib/api/client"
+import { queryKeys } from "@/lib/api/queryKeys"
 import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade } from "@/hooks/api/types/market"
-import type { Comment } from "@/hooks/api/types/comment"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
 
 export function useMarkets(params?: { q?: string; category?: string; status?: string; sort?: string }) {
   return useInfiniteQuery({
-    queryKey: ["markets", params] as const,
+    queryKey: queryKeys.markets(params),
     queryFn: ({ pageParam = 1 }) => listMarkets({ ...params, page: pageParam, page_size: 20 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
@@ -19,6 +32,7 @@ export function useMarkets(params?: { q?: string; category?: string; status?: st
       markets: data.pages.flatMap((p) => p.data) as MarketResponse[],
       hasMore: data.pages[data.pages.length - 1]?.has_more ?? false,
     }),
+    staleTime: 30_000,
   })
 }
 
@@ -26,9 +40,10 @@ export function useMarkets(params?: { q?: string; category?: string; status?: st
 
 export function useMarket(slug: string) {
   return useQuery({
-    queryKey: ["market", slug] as const,
+    queryKey: queryKeys.market(slug),
     queryFn: () => getMarket(slug).then((r) => r.data as MarketDetailResponse),
     enabled: !!slug,
+    staleTime: 30_000,
   })
 }
 
@@ -36,17 +51,18 @@ export function useMarket(slug: string) {
 
 export function useMarketActivity(slug: string) {
   return useQuery({
-    queryKey: ["market-activity", slug] as const,
+    queryKey: queryKeys.marketActivity(slug),
     queryFn: () => getMarketActivity(slug).then((r) => r.data as MarketActivity),
     enabled: !!slug,
+    staleTime: 15_000,
   })
 }
 
-// ─── Market Trades ──────────────────────────────────────────────────────────
+// ─── Market Trades (infinite) ─────────────────────────────────────────────────
 
 export function useMarketTrades(slug: string) {
   return useInfiniteQuery({
-    queryKey: ["market-trades", slug] as const,
+    queryKey: queryKeys.marketTrades(slug),
     queryFn: ({ pageParam }) => getMarketTrades(slug, { page: pageParam, page_size: 50 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
@@ -56,14 +72,15 @@ export function useMarketTrades(slug: string) {
       trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
       hasMore: data.pages[data.pages.length - 1]?.data.trades.length === 50,
     }),
+    staleTime: 10_000,
   })
 }
 
-// ─── Global Trades ──────────────────────────────────────────────────────────
+// ─── Global Trades (infinite) ─────────────────────────────────────────────────
 
 export function useGlobalTrades(params?: { market_slug?: string }) {
   return useInfiniteQuery({
-    queryKey: ["global-trades", params?.market_slug] as const,
+    queryKey: queryKeys.globalTrades(params?.market_slug),
     queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
@@ -72,68 +89,76 @@ export function useGlobalTrades(params?: { market_slug?: string }) {
       trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
       hasMore: data.pages[data.pages.length - 1]?.data.trades.length === 50,
     }),
+    staleTime: 10_000,
   })
 }
 
-// ─── Comments ───────────────────────────────────────────────────────────────
-
-export function useComments(slug: string) {
-  return useQuery({
-    queryKey: ["comments", slug] as const,
-    queryFn: () => getMarketComments(slug).then((r) => r.data.comments as Comment[]),
-    enabled: !!slug,
-  })
-}
-
-export function usePostComment(slug: string) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ content, parent_id }: { content: string; parent_id?: string }) =>
-      postComment(slug, content, parent_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", slug] }),
-  })
-}
-
-export function useEditComment(slug: string) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ commentId, content }: { commentId: string; content: string }) =>
-      updateComment(slug, commentId, content),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", slug] }),
-  })
-}
-
-export function useDeleteComment(slug: string) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ commentId }: { commentId: string }) =>
-      deleteComment(slug, commentId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["comments", slug] }),
-  })
-}
+// ─── FAQs ─────────────────────────────────────────────────────────────────────
 
 export function useFAQs(slug: string) {
   return useQuery({
-    queryKey: ["faqs", slug] as const,
+    queryKey: queryKeys.faqs(slug),
     queryFn: () => getMarketFAQs(slug).then((r) => r.data),
     enabled: !!slug,
+    staleTime: 60_000,
   })
 }
 
+// ─── Related Markets ─────────────────────────────────────────────────────────
+
 export function useRelatedMarkets(slug: string) {
   return useQuery({
-    queryKey: ["related-markets", slug] as const,
+    queryKey: queryKeys.relatedMarkets(slug),
     queryFn: () => getRelatedMarkets(slug).then((r) => r.data),
     enabled: !!slug,
+    staleTime: 60_000,
   })
 }
+
+// ─── Price History ───────────────────────────────────────────────────────────
+
+export function usePriceHistory(slug: string, interval = "5m") {
+  return useQuery({
+    queryKey: queryKeys.priceHistory(slug, interval),
+    queryFn: () => getPriceHistory(slug, { interval }).then((r) => r.data),
+    enabled: !!slug,
+    refetchInterval: 300_000,
+    staleTime: 300_000,
+  })
+}
+
+// ─── Order Book ──────────────────────────────────────────────────────────────
+
+export function useOrderBook(slug: string) {
+  return useQuery({
+    queryKey: queryKeys.orderBook(slug),
+    queryFn: () => getOrderBook(slug).then((r) => r.data),
+    enabled: !!slug,
+    staleTime: 5_000,
+  })
+}
+
+// ─── Market Categories ────────────────────────────────────────────────────────
+
+export function useMarketCategories() {
+  return useQuery({
+    queryKey: queryKeys.marketCategories(),
+    queryFn: () =>
+      api.get<{ success: boolean; data: { categories: string[] } }>("/api/v1/markets/categories").then(
+        (r) => r.data?.categories ?? []
+      ),
+    staleTime: 300_000,
+  })
+}
+
+// ─── Create / Resolve / Claim ────────────────────────────────────────────────
 
 export function useCreateMarket() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: Parameters<typeof createMarket>[0]) => createMarket(data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["markets"] })
+      qc.invalidateQueries({ queryKey: queryKeys.markets() })
     },
   })
 }
@@ -144,29 +169,22 @@ export function useResolveMarket() {
     mutationFn: ({ slug, winning_outcome_id }: { slug: string; winning_outcome_id: string }) =>
       resolveMarket(slug, winning_outcome_id),
     onSuccess: (_, { slug }) => {
-      qc.invalidateQueries({ queryKey: ["market", slug] })
-      qc.invalidateQueries({ queryKey: ["market-activity", slug] })
-      qc.invalidateQueries({ queryKey: ["positions"] })
-      qc.invalidateQueries({ queryKey: ["markets"] })
+      qc.invalidateQueries({ queryKey: queryKeys.market(slug) })
+      qc.invalidateQueries({ queryKey: queryKeys.marketActivity(slug) })
+      qc.invalidateQueries({ queryKey: queryKeys.positions() })
+      qc.invalidateQueries({ queryKey: queryKeys.markets() })
     },
   })
 }
 
-export function usePriceHistory(slug: string, interval = "5m") {
-  return useQuery({
-    queryKey: ["price-history", slug, interval] as const,
-    queryFn: () => getPriceHistory(slug, { interval }).then((r) => r.data),
-    enabled: !!slug,
-    refetchInterval: 300_000,
-  })
-}
-
-export function useMarketCategories() {
-  return useQuery<string[]>({
-    queryKey: ["market-categories"],
-    queryFn: () =>
-      api.get<{ success: boolean; data: { categories: string[] } }>("/api/v1/markets/categories").then(
-        (r) => r.data?.categories ?? []
-      ),
+export function useClaimWinnings(slug: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => claimWinnings(slug),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.positions() })
+      qc.invalidateQueries({ queryKey: queryKeys.wallet() })
+      qc.invalidateQueries({ queryKey: queryKeys.market(slug) })
+    },
   })
 }

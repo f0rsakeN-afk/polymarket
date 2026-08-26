@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { disputesApi } from "@/lib/api/disputes"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 import type {
   CreateDisputeParams,
@@ -11,9 +12,10 @@ import type {
 
 export function useDisputesForMarket(marketId: string) {
   return useQuery({
-    queryKey: ["disputes", marketId] as const,
+    queryKey: queryKeys.disputes(marketId),
     queryFn: () => disputesApi.getForMarket(marketId).then((r) => r.data),
     enabled: !!marketId,
+    staleTime: 30_000,
   })
 }
 

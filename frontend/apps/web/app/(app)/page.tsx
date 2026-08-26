@@ -1,6 +1,5 @@
-import { Suspense, lazy } from "react";
+import { lazy } from "react";
 import type { Metadata } from "next";
-import { Spinner } from "@workspace/ui/components/spinner";
 
 const HomePageContent = lazy(() => import("@/components/home/home-page-content"));
 

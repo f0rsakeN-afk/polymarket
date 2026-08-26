@@ -2,13 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createAlert, listAlerts, deleteAlert } from "@/lib/api/alerts"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 
 export function useAlerts() {
   return useQuery({
-    queryKey: ["alerts"],
+    queryKey: queryKeys.alerts(),
     queryFn: listAlerts,
     select: (res) => res.data,
+    staleTime: 30_000,
   })
 }
 
@@ -17,7 +19,7 @@ export function useCreateAlert() {
   return useMutation({
     mutationFn: createAlert,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["alerts"] })
+      qc.invalidateQueries({ queryKey: queryKeys.alerts() })
     },
   })
 }
@@ -27,7 +29,7 @@ export function useDeleteAlert() {
   return useMutation({
     mutationFn: deleteAlert,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["alerts"] })
+      qc.invalidateQueries({ queryKey: queryKeys.alerts() })
       sileo.success({ title: "Alert deleted" })
     },
     onError: (err) => {

@@ -96,7 +96,7 @@ export default function ReferralsPage() {
                 <p className="text-xs text-muted-foreground">Completed</p>
               </div>
               <div>
-                <p className="text-2xl font-bold">${stats.total_rewards_earned?.toFixed(2) ?? "0.00"}</p>
+                <p className="text-2xl font-bold">${Number(stats.total_rewards_earned ?? 0).toFixed(2)}</p>
                 <p className="text-xs text-muted-foreground">Rewards Earned</p>
               </div>
             </div>

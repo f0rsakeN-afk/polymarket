@@ -12,7 +12,7 @@ import { useMarket, useMarketActivity, useMarketTrades, useFAQs, useRelatedMarke
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { claimWinnings, getOrderBook } from "@/lib/api/markets"
-import { api } from "@/lib/api/client"
+import type { OrderBook as MarketOrderBook } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
 import { AlertDialog } from "@/components/alerts/alert-dialog"
@@ -34,7 +34,7 @@ interface MarketDetailProps {
 function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const queryClient = useQueryClient()
   const { data: market, isLoading: marketLoading } = useMarket(slug)
-  const { data: activity, isLoading: activityLoading } = useMarketActivity(slug)
+  const { data: activity } = useMarketActivity(slug)
   const { data: tradesData, isLoading: tradesLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useMarketTrades(slug)
   const { data: faqs } = useFAQs(slug)
   const { data: relatedMarkets } = useRelatedMarkets(slug)
@@ -43,10 +43,13 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const { data: orderbookData } = useQuery({
     queryKey: ["orderbook-header", slug] as const,
     queryFn: () => getOrderBook(slug),
+    select: (res: { data?: MarketOrderBook }) => {
+      const outcomes = res.data?.outcomes
+      return outcomes ? Object.values(outcomes)[0] ?? null : null
+    },
     enabled: !!slug,
     refetchInterval: 5000,
   })
-
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
   const [outcomeNames, setOutcomeNames] = useState<string[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
@@ -108,6 +111,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     enabled: !!market?.id,
   })
 
+  const isMultiOutcome = useMemo(
+    () => (market as MarketDetailResponse)?.outcomes?.length > 2,
+    [market]
+  )
+
   useEffect(() => {
     if (priceHistoryData && priceHistoryData.length > 0) {
       const first = priceHistoryData[0]!
@@ -146,7 +154,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       seedPoint2["No"] = market.no_price
     }
     setPriceHistory([seedPoint, seedPoint2] as LiveLinePoint[])
-  }, [market, priceHistoryData])
+  }, [market, priceHistoryData, isMultiOutcome])
 
   const { data: currentUser } = useCurrentUser()
   const { mutateAsync: resolveMarket, isPending: isResolving } = useResolveMarket()
@@ -165,11 +173,6 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const handleTrade = useCallback(
     async (order: PlaceOrderInput) => { await onTrade?.(order) },
     [onTrade]
-  )
-
-  const isMultiOutcome = useMemo(
-    () => (market as MarketDetailResponse)?.outcomes?.length > 2,
-    [market]
   )
 
   const outcomes = useMemo(
@@ -282,7 +285,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
                       <div className="text-lg font-bold text-green-500">${Number(market.yes_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.data?.bids?.[0] ? `${Number(orderbookData.data.bids[0].size).toFixed(0)} shares` : ""}
+                        {orderbookData?.bids?.[0] ? `${Number(orderbookData.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
@@ -290,7 +293,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
                       <div className="text-lg font-bold text-red-500">${Number(market.no_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.data?.asks?.[0] ? `${Number(orderbookData.data.asks[0].size).toFixed(0)} shares` : ""}
+                        {orderbookData?.asks?.[0] ? `${Number(orderbookData.asks[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                   </>

@@ -88,7 +88,7 @@ export function LoginForm() {
   const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/portfolio"
 
   const [step, setStep] = useState<Step>("email");
-  const [email, setEmail] = useState("");
+  const [email] = useState("");
   const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
@@ -100,22 +100,6 @@ export function LoginForm() {
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "", totp_code: undefined },
   });
-
-  useEffect(() => {
-    if (resendTimer <= 0) return;
-    const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
-    return () => clearInterval(id);
-  }, [resendTimer]);
-
-  // Auto-submit OTP on 6 digits
-  useEffect(() => {
-    if (step === "otp" && otp.length === 6) handleVerifyOtp();
-  }, [otp, step]);
-
-  // Auto-submit 2FA on 6 digits
-  useEffect(() => {
-    if (step === "totp2fa" && totp2faCode.length === 6) handleTotp2fa(totp2faCode);
-  }, [totp2faCode, step]);
 
   // ── Password login ─────────────────────────────────────────────────────────
   const handlePasswordLogin = useCallback(
@@ -185,10 +169,8 @@ export function LoginForm() {
       setIsLoading(true);
       try {
         if (magicPartialToken) {
-          // Magic code was already verified, use partial token flow
           await magicLinkApi.verifyMagic2fa(magicPartialToken, totpCode);
         } else {
-          // Magic URL 2FA flow (original URL-based flow)
           await magicLinkApi.verifyUrl2fa(totp2faCode, totp2faCode);
         }
         window.location.href = next;
@@ -197,7 +179,7 @@ export function LoginForm() {
         setIsLoading(false);
       }
     },
-    [magicPartialToken, otp, next]  
+    [magicPartialToken, totp2faCode, next]
   );
 
   // ── Resend ───────────────────────────────────────────────────────────────
@@ -210,6 +192,22 @@ export function LoginForm() {
       sileo.error({ title: "Failed to resend" });
     }
   }, [email]);
+
+  useEffect(() => {
+    if (resendTimer <= 0) return;
+    const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
+    return () => clearInterval(id);
+  }, [resendTimer]);
+
+  // Auto-submit OTP on 6 digits
+  useEffect(() => {
+    if (step === "otp" && otp.length === 6) handleVerifyOtp();
+  }, [otp, step]);
+
+  // Auto-submit 2FA on 6 digits
+  useEffect(() => {
+    if (step === "totp2fa" && totp2faCode.length === 6) handleTotp2fa(totp2faCode);
+  }, [totp2faCode, step]);
 
   const { title, sub } = STEP_LABELS[step];
 

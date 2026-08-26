@@ -22,15 +22,6 @@ import {
 import { Badge } from "@workspace/ui/components/badge";
 import { sileo } from "sileo";
 
-interface Session {
-  id: string;
-  ip_address: string | null;
-  user_agent: string | null;
-  created_at: string;
-  last_active_at: string;
-  expires_at: string;
-}
-
 function formatDate(dateStr: string): string {
   return new Intl.DateTimeFormat("en", {
     dateStyle: "medium",

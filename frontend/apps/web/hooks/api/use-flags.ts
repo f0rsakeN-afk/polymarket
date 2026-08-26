@@ -2,14 +2,16 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { flagsApi } from "@/lib/api/flags"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 import type { CreateFlagParams, ResolveFlagParams } from "@/lib/api/flags"
 
 export function useFlagsForMarket(marketId: string) {
   return useQuery({
-    queryKey: ["flags", marketId] as const,
+    queryKey: queryKeys.flags(marketId),
     queryFn: () => flagsApi.getForMarket(marketId).then((r) => r.data),
     enabled: !!marketId,
+    staleTime: 30_000,
   })
 }
 

@@ -44,7 +44,7 @@ export function ResetPasswordClient() {
   })
 
   const mutation = useMutation({
-    mutationFn: (data: ResetPasswordInput) => passwordApi.resetPassword(data.email, data.code, data.newPassword),
+    mutationFn: (data: ResetPasswordInput) => passwordApi.resetPassword({ email: data.email, code: data.code, newPassword: data.newPassword }),
     onSuccess: () => {
       sileo.success({ title: "Password reset!" })
       router.push("/login")

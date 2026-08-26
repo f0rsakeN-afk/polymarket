@@ -5,9 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
 import CategoryTabs from "@/components/home/category-tabs"
 import { MarketList } from "@/components/markets/market-list"
-import { useMarkets, useMarketCategories } from "@/hooks/api/use-markets"
+import { useMarkets } from "@/hooks/api/use-markets"
 import { useGlobalTrades } from "@/hooks/api/use-markets"
-import { SkeletonTrendingCarousel, SkeletonMarketGrid, SkeletonTradeFeed } from "@/components/shared/skeletons"
+import { SkeletonTrendingCarousel, SkeletonTradeFeed } from "@/components/shared/skeletons"
 import { SearchIcon } from "lucide-react"
 
 const LazyTradeFeed = lazy(() =>

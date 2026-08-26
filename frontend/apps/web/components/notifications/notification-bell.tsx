@@ -50,7 +50,7 @@ export function NotificationBell() {
     [qc]
   )
 
-  const { status } = useUserSocket({
+  useUserSocket({
     userId: user?.id ?? "",
     onMessage: handleWsMessage,
     enabled: !!user?.id,
@@ -71,7 +71,7 @@ export function NotificationBell() {
       return { ...prev, readIds: allIds }
     })
     markAllRead()
-  }, [markAllRead])
+  }, [markAllRead, notifications])
 
   if (!user) return null
 

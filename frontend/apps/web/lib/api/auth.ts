@@ -114,13 +114,13 @@ export const passwordApi = {
       { email }
     ),
 
-  resetPassword: (email: string, code: string, newPassword: string) =>
+  resetPassword: ({ email, code, newPassword }: { email: string; code: string; newPassword: string }) =>
     api.post<{ success: boolean }>("/api/v1/auth/reset-password", {
       email,
       code,
       new_password: newPassword,
     }),
-};
+}
 
 // ─── Password (authenticated) ──────────────────────────────────────────────────
 
@@ -128,12 +128,9 @@ export const accountApi = {
   setPassword: (password: string) =>
     api.post<{ success: boolean }>("/api/v1/auth/set-password", { password }),
 
-  changePassword: (oldPassword: string, newPassword: string) =>
-    api.post<{ success: boolean }>("/api/v1/auth/change-password", {
-      old_password: oldPassword,
-      new_password: newPassword,
-    }),
-};
+  changePassword: (params: { old_password: string; new_password: string; totp_code?: string }) =>
+    api.post<{ success: boolean }>("/api/v1/auth/change-password", params),
+}
 
 // ─── 2FA ──────────────────────────────────────────────────────────────────────
 

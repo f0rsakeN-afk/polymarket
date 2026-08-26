@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { z } from "zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -20,7 +19,7 @@ import {
 } from "@workspace/ui/components/field"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { placeOrderSchema, type PlaceOrderInput } from "@/lib/schemas/trading"
+import { placeOrderSchema, type PlaceOrderInput, z } from "@/lib/schemas/trading"
 import { getQuote } from "@/lib/api/orders"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useWallet } from "@/hooks/api/use-wallet"
@@ -28,7 +27,7 @@ import type { Outcome } from "@/hooks/api/types/market"
 import type { QuoteResponse } from "@/hooks/api/types/order"
 import Link from "next/link"
 
-type FormInput = z.infer<typeof placeOrderSchema>
+type FormInput = z.input<typeof placeOrderSchema>
 
 interface TradeFormProps {
   marketId: string
@@ -200,7 +199,7 @@ function TradeForm({
       ? price ?? quote?.price ?? effectivePrice
       : quote?.price ?? effectivePrice
 
-  const total = amount && displayPrice ? amount * Number(displayPrice) : 0
+  const total = amount && displayPrice ? Number(amount) * Number(displayPrice) : 0
 
   const isMarketOpen = marketStatus !== BLOCKED_STATUS
   const availableBalance = Number(wallet?.available_balance ?? 0)
@@ -210,7 +209,7 @@ function TradeForm({
 
   useEffect(() => {
     if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
-    if (!amount || amount <= 0 || orderType !== "market") {
+    if (!amount || Number(amount) <= 0 || orderType !== "market") {
       setQuote(null)
       return
     }
@@ -229,10 +228,6 @@ function TradeForm({
       if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
     }
   }, [amount, outcome, side, marketId, orderType])
-
-  // ── Guards ────────────────────────────────────────────────────────────────
-
-  if (!currentUser) return <NotLoggedIn />
 
   // ── Handlers ────────────────────────────────────────────────────────────
 
@@ -264,6 +259,10 @@ function TradeForm({
     },
     [onSubmit, clientOrderId, quote]
   )
+
+  // ── Guards ────────────────────────────────────────────────────────────────
+
+  if (!currentUser) return <NotLoggedIn />
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -352,7 +351,7 @@ function TradeForm({
 
         <Field>
           <FieldLabel htmlFor="max_slippage">
-            Slippage Tolerance — {((watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
+            Slippage Tolerance — {(Number(watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
           </FieldLabel>
           <FieldContent>
             <Input
@@ -366,7 +365,7 @@ function TradeForm({
             <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
               <span>0.1%</span>
               <span className="font-medium text-foreground">
-                {((watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
+                {(Number(watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
               </span>
               <span>10%</span>
             </div>
@@ -421,7 +420,7 @@ function TradeForm({
           </>
         )}
 
-        {amount > 0 && (
+        {Number(amount) > 0 && (
           <div className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Price</span>

@@ -35,7 +35,7 @@ type EnableInput = z.infer<typeof enableSchema>;
 
 export function TwoFactorPageClient() {
   const queryClient = useQueryClient();
-  const [setupData, setSetupData] = useState<{ uri: string; secret: string } | null>(null);
+  const [setupData, setSetupData] = useState<{ uri: string } | null>(null);
   const [step, setStep] = useState<"status" | "setup" | "enable">("status");
   const [code, setCode] = useState("");
 
@@ -222,7 +222,7 @@ export function TwoFactorPageClient() {
               <p className="text-xs text-muted-foreground">
                 Can&apos;t scan? Enter this secret manually:{" "}
                 <code className="font-mono text-xs bg-muted px-1 rounded break-all">
-                  {setupData.secret}
+                  {(() => { try { return new URL(setupData.uri).searchParams.get("secret") ?? "—" } catch { return "—" } })()}
                 </code>
               </p>
             </div>

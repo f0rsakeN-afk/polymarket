@@ -1,5 +1,9 @@
 import { z } from "zod"
 
+// Backend Decimal fields are serialized as strings
+const moneyField = z.string()
+const positiveMoney = z.string()
+
 export const cancelOrderSchema = z.object({})
 
 export const listOrdersSchema = z.object({
@@ -17,7 +21,20 @@ export const getQuoteSchema = z.object({
   market_id: z.string(),
   outcome: z.string(),
   side: z.enum(["buy", "sell"]),
-  amount: z.string(), // ponytail: string — Decimal serialized from backend
+  amount: positiveMoney,
+})
+
+export const quoteResponseSchema = z.object({
+  quote_id: z.string(),
+  market_id: z.string(),
+  outcome: z.string(),
+  side: z.string(),
+  amount: moneyField,
+  price: moneyField,
+  slippage: moneyField,
+  yes_price: moneyField,
+  no_price: moneyField,
+  expires_at: z.number(), // unix timestamp float
 })
 
 export const orderResponseSchema = z.object({
@@ -27,28 +44,15 @@ export const orderResponseSchema = z.object({
   side: z.string(),
   order_type: z.string(),
   status: z.string(),
-  amount: z.string(), // ponytail: string — Decimal serialized from backend
-  price: z.string().nullable(), // ponytail: string — Decimal serialized from backend
-  filled_amount: z.string(), // ponytail: string — Decimal serialized from backend
-  avg_fill_price: z.string().nullable(), // ponytail: string — Decimal serialized from backend
-  quote_id: z.string().nullable(),
-  client_order_id: z.string().nullable(),
+  amount: moneyField,
+  price: moneyField.nullable(),
+  shares_bought: moneyField.nullable().optional(),
+  shares_sold: moneyField.nullable().optional(),
+  fee: moneyField.nullable().optional(),
+  quote_id: z.string().nullable().optional(),
+  client_order_id: z.string().nullable().optional(),
   created_at: z.string(),
-  updated_at: z.string(),
-  expires_at: z.string().nullable(),
-})
-
-export const quoteResponseSchema = z.object({
-  quote_id: z.string(),
-  market_id: z.string(),
-  outcome: z.string(),
-  side: z.string(),
-  amount: z.string(), // ponytail: string — Decimal serialized from backend
-  price: z.string(), // ponytail: string — Decimal serialized from backend
-  min_shares_out: z.string(), // ponytail: string — Decimal serialized from backend
-  max_slippage: z.string(), // ponytail: string — Decimal serialized from backend
-  expires_at: z.string(),
-  created_at: z.string(),
+  expires_at: z.string().nullable().optional(),
 })
 
 export type ListOrdersInput = z.infer<typeof listOrdersSchema>

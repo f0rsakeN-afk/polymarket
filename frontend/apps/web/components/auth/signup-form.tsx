@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { registerApi } from "@/lib/api/auth";
@@ -68,7 +68,6 @@ function StepContent({ step, children }: { step: string; children: React.ReactNo
 const RESEND_COOLDOWN = 60;
 
 export function SignupForm() {
-  const router = useRouter();
   const [step, setStep] = useState<"details" | "otp">("details");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -82,24 +81,6 @@ export function SignupForm() {
     resolver: zodResolver(registerSchema),
     defaultValues: { email: "", username: "", password: "", referral_code: "" },
   });
-
-  useEffect(() => {
-    if (resendTimer <= 0) return;
-    const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
-    return () => clearInterval(id);
-  }, [resendTimer]);
-
-  // Auto-verify on 6 digits
-  useEffect(() => {
-    if (step === "otp" && otp.length === 6) handleVerifyOtp();
-  }, [otp, step]);
-
-  // Pre-fill referral code from ?ref= URL param
-  useEffect(() => {
-    if (refParam) {
-      form.setValue("referral_code", refParam);
-    }
-  }, [refParam, form]);
 
   const onSubmit = useCallback(
     async (data: RegisterInput) => {
@@ -144,6 +125,24 @@ export function SignupForm() {
       sileo.error({ title: err instanceof Error ? err.message : "Failed to resend code" });
     }
   }, [email]);
+
+  useEffect(() => {
+    if (resendTimer <= 0) return;
+    const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
+    return () => clearInterval(id);
+  }, [resendTimer]);
+
+  // Auto-verify on 6 digits
+  useEffect(() => {
+    if (step === "otp" && otp.length === 6) handleVerifyOtp();
+  }, [otp, step]);
+
+  // Pre-fill referral code from ?ref= URL param
+  useEffect(() => {
+    if (refParam) {
+      form.setValue("referral_code", refParam);
+    }
+  }, [refParam, form]);
 
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center px-4 py-12">

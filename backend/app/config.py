@@ -44,6 +44,7 @@ class Settings(BaseSettings):
 
     # JWT
     jwt_secret: str = "change-me-in-production"
+    secret_key: str = "change-me-in-production"
     jwt_access_expire: int = 900
     jwt_refresh_expire: int = 604800
 

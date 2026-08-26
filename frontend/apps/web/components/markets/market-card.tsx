@@ -2,7 +2,7 @@
 
 import { memo } from "react"
 import Link from "next/link"
-import type { MarketResponse, Outcome } from "@/hooks/api/types/market"
+import type { MarketResponse } from "@/hooks/api/types/market"
 
 function formatVolume(v: string | number) {
   const n = Number(v)

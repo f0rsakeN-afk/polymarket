@@ -12,7 +12,7 @@ export function OrdersPageClient() {
   const { data: user } = useCurrentUser()
   const qc = useQueryClient()
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useOrders()
+  const { data, fetchNextPage, isFetchingNextPage, isLoading } = useOrders()
   const orders = data?.orders ?? []
   const hasMore = data?.hasMore ?? false
 
