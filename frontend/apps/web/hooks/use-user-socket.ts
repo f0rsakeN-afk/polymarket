@@ -20,7 +20,6 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
   const enabledRef = useRef(enabled)
   const userIdRef = useRef(userId)
   const mountedRef = useRef(true)
-  const connectRef = useRef<() => void>(() => {})
 
   // Keep message handler ref in sync
   useEffect(() => {
@@ -77,6 +76,8 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
     }
   }, [])
 
+  // connectRef is assigned after connect is defined — it is set in the effect below
+  const connectRef = useRef<() => void>(connect)
   // Store connect in ref so onclose can call the latest version
   useEffect(() => {
     connectRef.current = connect

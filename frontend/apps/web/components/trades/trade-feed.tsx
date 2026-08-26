@@ -58,7 +58,7 @@ interface TradeFeedProps {
   listRef?: React.RefObject<HTMLDivElement | null>
 }
 
-function TradeFeed({ trades, loading, title, listRef }: TradeFeedProps) {
+const TradeFeed = memo(function TradeFeed({ trades, loading, title, listRef }: TradeFeedProps) {
   if (loading && trades.length === 0) {
     return (
       <div className="flex h-40 items-center justify-center">
@@ -111,6 +111,6 @@ function TradeFeed({ trades, loading, title, listRef }: TradeFeedProps) {
       </Card>
     </section>
   )
-}
+})
 
 export { TradeFeed, TradeRow }

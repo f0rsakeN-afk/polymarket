@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, memo } from "react"
+import { useState, useRef, useEffect, memo, useCallback } from "react"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -50,20 +50,26 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
   const [items, setItems] = useState<TickerItem[]>([])
   const animRef = useRef<Map<string, number>>(new Map())
   const frameRef = useRef<number>(0)
+  const mountedRef = useRef(true)
 
-  const handleWSMessage = (data: unknown) => {
+  const handleWSMessage = useCallback((data: unknown) => {
     const msg = data as { type?: string; trade?: TickerItem }
     if (msg.type === "trade:new" && msg.trade) {
       const item = { ...msg.trade, id: Math.random().toString(36).slice(2) }
       setItems((prev) => [item, ...prev].slice(0, 5))
       animRef.current.set(item.id, Date.now())
-      animate()
+      if (mountedRef.current) {
+        cancelAnimationFrame(frameRef.current)
+        frameRef.current = requestAnimationFrame(animate)
+      }
     }
-  }
+  }, [])
 
   function animate() {
+    if (!mountedRef.current) return
     const now = Date.now()
-    const elapsed = now - (animRef.current.values().next().value ?? now)
+    const firstTs = animRef.current.values().next().value
+    const elapsed = firstTs ? now - firstTs : 3000
     if (elapsed < 3000) {
       frameRef.current = requestAnimationFrame(animate)
     }
@@ -75,10 +81,11 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
     enabled: !!marketId,
   })
 
-  // Cancel RAF loop on unmount to prevent memory leak
   useEffect(() => {
+    mountedRef.current = true
     return () => {
-      if (frameRef.current) cancelAnimationFrame(frameRef.current)
+      mountedRef.current = false
+      cancelAnimationFrame(frameRef.current)
       animRef.current.clear()
     }
   }, [])

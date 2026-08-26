@@ -1,5 +1,6 @@
 "use client"
 
+import { memo, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getOrderBook } from "@/lib/api/markets"
 import type { OrderBookEntry } from "@/lib/api/markets"
@@ -10,7 +11,7 @@ function n(v: string | number | null | undefined, fallback = 0): number {
   return isNaN(parsed) ? fallback : parsed
 }
 
-function OutcomeOrderbook({
+const OutcomeOrderbook = memo(function OutcomeOrderbook({
   name,
   bids,
   asks,
@@ -19,11 +20,11 @@ function OutcomeOrderbook({
   bids: OrderBookEntry[]
   asks: OrderBookEntry[]
 }) {
-  const maxDepth = Math.max(
+  const maxDepth = useMemo(() => Math.max(
     ...bids.map((b) => n(b.size)),
     ...asks.map((a) => n(a.size)),
     1
-  )
+  ), [bids, asks])
 
   const bestBid = bids[0] ? n(bids[0].price) : null
   const bestAsk = asks.length > 0 ? n(asks[asks.length - 1]!.price) : null
@@ -99,14 +100,17 @@ function OutcomeOrderbook({
       </div>
     </div>
   )
-}
+})
 
 function OrderBook({ slug }: { slug: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["orderbook", slug] as const,
     queryFn: () => getOrderBook(slug),
     enabled: !!slug,
-    refetchInterval: 5000,
+    // No refetchInterval — WS 'orderbook:update' message drives cache invalidation.
+    // Each WS message triggers one fresh fetch, which is the correct push model.
+    // If backend sends full orderbook in the WS message, this can be replaced
+    // with cache.setQueryData for zero-latency update (no extra round-trip).
   })
 
   const outcomes = data?.data?.outcomes ?? {}

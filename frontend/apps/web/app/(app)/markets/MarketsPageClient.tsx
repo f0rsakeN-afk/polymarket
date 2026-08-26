@@ -16,12 +16,11 @@ export function MarketsPageClient() {
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setQuery(search)
     }, 300)
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
+    debounceRef.current = timeoutId
+    return () => clearTimeout(timeoutId)
   }, [search])
 
   const activeCategory = category === "All" ? undefined : category

@@ -1,6 +1,5 @@
 "use client"
 
-import { useCallback } from "react"
 import TrendingCarouselItem from "./trending-carousel-item"
 import { useCarouselScroll } from "@/hooks/use-carousel-scroll"
 import type { MarketResponse } from "@/hooks/api/types/market"
@@ -12,9 +11,6 @@ interface TrendingCarouselProps {
 
 function TrendingCarousel({ markets }: TrendingCarouselProps) {
   const { containerRef, canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useCarouselScroll()
-
-  const handleScrollLeft = useCallback(() => scrollLeft(), [scrollLeft])
-  const handleScrollRight = useCallback(() => scrollRight(), [scrollRight])
 
   if (markets.length === 0) return null
 
@@ -33,7 +29,7 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
       </div>
       {canScrollLeft && (
         <button
-          onClick={handleScrollLeft}
+          onClick={scrollLeft}
           aria-label="Scroll left"
           className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
         >
@@ -42,7 +38,7 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
       )}
       {canScrollRight && (
         <button
-          onClick={handleScrollRight}
+          onClick={scrollRight}
           aria-label="Scroll right"
           className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
         >

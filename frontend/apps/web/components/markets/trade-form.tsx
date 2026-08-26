@@ -213,7 +213,7 @@ function TradeForm({
       setQuote(null)
       return
     }
-    quoteDebounceRef.current = setTimeout(async () => {
+    const timeoutId = setTimeout(async () => {
       setQuoteLoading(true)
       try {
         const res = await getQuote({ market_id: marketId, outcome, side, amount })
@@ -224,9 +224,8 @@ function TradeForm({
         setQuoteLoading(false)
       }
     }, 300)
-    return () => {
-      if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
-    }
+    quoteDebounceRef.current = timeoutId
+    return () => clearTimeout(timeoutId)
   }, [amount, outcome, side, marketId, orderType])
 
   // ── Handlers ────────────────────────────────────────────────────────────

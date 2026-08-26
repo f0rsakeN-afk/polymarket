@@ -10,21 +10,17 @@ import type { Order } from "@/hooks/api/types/order"
 
 interface OrderRowProps {
   order: Order
+  onCancel: (orderId: string) => void
+  isCancelling?: boolean
 }
 
-function OrderRow({ order }: OrderRowProps) {
-  const { mutateAsync: cancelOrder, isPending } = useCancelOrder()
+function OrderRow({ order, onCancel, isCancelling }: OrderRowProps) {
   const [open, setOpen] = useState(false)
 
   const handleCancelConfirm = useCallback(async () => {
-    try {
-      await cancelOrder(order.id)
-      sileo.success({ title: "Order cancelled" })
-      setOpen(false)
-    } catch (e) {
-      sileo.error({ title: "Cancel failed", description: e instanceof Error ? e.message : "Unknown error" })
-    }
-  }, [cancelOrder, order.id])
+    setOpen(false)
+    onCancel(order.id)
+  }, [onCancel, order.id])
 
   const handleDialogOpenChange = useCallback((next: boolean) => {
     setOpen(next)
@@ -77,7 +73,7 @@ function OrderRow({ order }: OrderRowProps) {
               <AlertDialogFooter>
                 <AlertDialogCancel>Keep Order</AlertDialogCancel>
                 <AlertDialogAction onClick={handleCancelConfirm}>
-                  {isPending ? "Cancelling..." : "Cancel Order"}
+                  {isCancelling ? "Cancelling..." : "Cancel Order"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -96,6 +92,21 @@ interface OrdersListProps {
 }
 
 function OrdersList({ orders, loading, hasMore, onLoadMore }: OrdersListProps) {
+  const { mutateAsync: cancelOrder, isPending: isCancelling } = useCancelOrder()
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+
+  const handleCancel = useCallback(async (orderId: string) => {
+    setCancellingId(orderId)
+    try {
+      await cancelOrder(orderId)
+      sileo.success({ title: "Order cancelled" })
+    } catch (e) {
+      sileo.error({ title: "Cancel failed", description: e instanceof Error ? e.message : "Unknown error" })
+    } finally {
+      setCancellingId(null)
+    }
+  }, [cancelOrder])
+
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -129,7 +140,12 @@ function OrdersList({ orders, loading, hasMore, onLoadMore }: OrdersListProps) {
         <>
           <div>
             {orders.map((order) => (
-              <OrderRow key={order.id} order={order} />
+              <OrderRow
+                key={order.id}
+                order={order}
+                onCancel={handleCancel}
+                isCancelling={cancellingId === order.id}
+              />
             ))}
           </div>
           <div ref={sentinelRef} className="flex justify-center py-3">

@@ -277,7 +277,7 @@ function CommentForm({ slug }: { slug: string }) {
   )
 }
 
-function CommentList({ slug }: { slug: string }) {
+const CommentList = memo(function CommentList({ slug }: { slug: string }) {
   const { data: comments, isLoading, error } = useComments(slug)
 
   if (isLoading) {
@@ -309,6 +309,6 @@ function CommentList({ slug }: { slug: string }) {
       ))}
     </div>
   )
-}
+})
 
 export { CommentList, CommentForm }

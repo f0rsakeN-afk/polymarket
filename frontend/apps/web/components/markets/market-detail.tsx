@@ -49,7 +49,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       return outcomes ? Object.values(outcomes)[0] ?? null : null
     },
     enabled: !!slug,
-    refetchInterval: 5000,
+    // No refetchInterval — WS 'orderbook:update' message triggers refresh.
+    // Initial fetch populates cache so header shows data immediately.
   })
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
   const [outcomeNames, setOutcomeNames] = useState<string[]>([])
@@ -96,6 +97,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       })
     }
     if (msg.type === "orderbook:update") {
+      queryClient.invalidateQueries({ queryKey: ["orderbook", slug] })
       queryClient.invalidateQueries({ queryKey: ["orderbook-header", slug] })
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {

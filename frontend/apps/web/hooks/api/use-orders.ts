@@ -12,7 +12,7 @@ export function useOrders(filters?: {
   market_id?: string
 }) {
   return useInfiniteQuery({
-    queryKey: ["orders", filters] as const,
+    queryKey: ["orders", filters?.status, filters?.side, filters?.order_type, filters?.market_id] as const,
     queryFn: ({ pageParam }) => listOrders({ page: pageParam, page_size: 20, ...filters }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>

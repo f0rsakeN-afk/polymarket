@@ -28,12 +28,12 @@ export function SearchInput({ className }: SearchInputProps) {
     [router]
   )
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     isUserTypingRef.current = true
     const v = e.target.value
     setValue(v)
     updateURL(v)
-  }
+  }, [updateURL])
 
   // Sync with URL when back/forward is pressed — runs on every navigation
   useEffect(() => {
