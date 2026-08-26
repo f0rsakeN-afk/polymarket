@@ -1,7 +1,7 @@
 import logging
 import os
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
 
 from app.config import settings
@@ -24,7 +24,6 @@ _TRUSTED_PROXY_IPS = [
 def _get_real_client_ip(websocket: WebSocket) -> str:
     direct_ip = websocket.client[0] if websocket.client else None
     if direct_ip in _TRUSTED_PROXY_IPS:
-        import warnings
         forwarded = websocket.headers.get("x-forwarded-for")
         if forwarded:
             return RateLimitService._normalize_ip(forwarded.split(",")[0].strip())

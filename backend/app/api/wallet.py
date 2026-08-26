@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError, IdempotencyError, NotFoundError, ValidationError
+from app.api.exceptions import (
+    ForbiddenError,
+    NotFoundError,
+)
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db, get_db_replica

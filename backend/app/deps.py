@@ -4,8 +4,6 @@ from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
-
-logger = logging.getLogger("polymarket")
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +12,8 @@ from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.redis import get_redis, redis_cb
+
+logger = logging.getLogger("polymarket")
 
 ALGORITHM = "HS256"
 

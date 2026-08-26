@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import NotFoundError
 from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
@@ -109,7 +110,6 @@ async def mark_read(
     )
     notification = result.scalar_one_or_none()
     if not notification:
-        from app.api.exceptions import NotFoundError
         raise NotFoundError("Notification not found")
     ok = await NotificationService.mark_read(db, current_user.id, notification_id)
     if not ok:

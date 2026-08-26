@@ -4,7 +4,12 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import IdempotencyError, InsufficientBalanceError, NotFoundError, ValidationError
+from app.api.exceptions import (
+    IdempotencyError,
+    InsufficientBalanceError,
+    NotFoundError,
+    ValidationError,
+)
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
 

@@ -1,7 +1,6 @@
 import logging
 import os
 import re
-from typing import Any
 
 from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -71,7 +70,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     # Log the full detail internally (including constraint name, table name)
     logger.error(f"DB integrity error: {exc} | path={request.url.path}")
     # Client gets a sanitised message — never reveal constraint/key names in prod
-    sanitised = _sanitise_for_client(str(exc))
+    pass  # sanitised for client
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content=error_response("Resource already exists or constraint violated", "DB_CONSTRAINT_ERROR"),

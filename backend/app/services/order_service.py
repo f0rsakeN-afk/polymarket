@@ -18,7 +18,6 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.config import settings
-from app.services.cache_service import cache_invalidate_market, cache_invalidate_market_lists
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
@@ -29,6 +28,10 @@ from app.models.user import User
 from app.models.wallet import Transaction, Wallet
 from app.redis import get_redis, redis_cb
 from app.schemas.order import OrderRequest
+from app.services.cache_service import (
+    cache_invalidate_market,
+    cache_invalidate_market_lists,
+)
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 

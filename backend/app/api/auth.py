@@ -398,7 +398,7 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
     rest = stored[first_colon + 1:] if first_colon != -1 else ""
     second_colon = rest.find(":")
     stored_ip = rest[:second_colon] if second_colon != -1 else rest
-    stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""
+    stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""  # noqa: F841
 
     # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
     # Do NOT delete the token — if IP mismatch is due to NAT/proxy rotation, the legitimate

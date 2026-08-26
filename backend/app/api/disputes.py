@@ -18,7 +18,10 @@ from app.schemas.dispute import (
     DisputeResponse,
     ProposeResolutionRequest,
 )
-from app.services.cache_service import cache_invalidate_market, cache_invalidate_market_lists
+from app.services.cache_service import (
+    cache_invalidate_market,
+    cache_invalidate_market_lists,
+)
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("polymarket")

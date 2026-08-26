@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from app.api.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user

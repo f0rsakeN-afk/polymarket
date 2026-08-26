@@ -10,25 +10,9 @@ from decimal import Decimal
 from celery import shared_task
 from sqlalchemy import delete, select
 
-# Thread-local event loops — each Celery thread gets its own loop, reused across tasks
-_thread_local = threading.local()
-
-
-def celery_run(coro):
-    """
-    Run a coroutine from a Celery thread.
-
-    Each thread maintains its own event loop in thread-local storage.
-    Loops are reused across tasks on the same thread and closed on thread shutdown.
-    """
-    loop = getattr(_thread_local, "loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        _thread_local.loop = loop
-    return loop.run_until_complete(coro)
-
 from app.amm.engine import BinaryAMM
 from app.config import settings
+from app.database import async_session as _get_session
 from app.models import (
     Alert,
     LiquidityPool,
@@ -51,9 +35,22 @@ from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
-# Reuse the shared database session from app.database — aligns pool management
-# with the rest of the app instead of creating a second independent pool.
-from app.database import async_session as _get_session
+# Thread-local event loops — each Celery thread gets its own loop, reused across tasks
+_thread_local = threading.local()
+
+
+def celery_run(coro):
+    """
+    Run a coroutine from a Celery thread.
+
+    Each thread maintains its own event loop in thread-local storage.
+    Loops are reused across tasks on the same thread and closed on thread shutdown.
+    """
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _thread_local.loop = loop
+    return loop.run_until_complete(coro)
 
 
 def get_session():
@@ -351,10 +348,10 @@ def check_limit_order_execution(self):
                          )
                          db.add(tx)
 
-                if re_locked_order.status in ("filled", "partial") or remaining_after_book != order_amount:
+                if re_locked_order.status in ("filled", "partial") or float(remaining_after_book) != float(order_amount):
                     await db.commit()
 
-                    if re_locked_order.status == "filled" or remaining_after_book != order_amount:
+                    if re_locked_order.status == "filled" or float(remaining_after_book) != float(order_amount):
                         total = float(pool.yes_shares) + float(pool.no_shares)
                         yes_price = float(pool.no_shares) / total if total > 0 else 0.5
                         no_price = float(pool.yes_shares) / total if total > 0 else 0.5
@@ -369,7 +366,7 @@ def check_limit_order_execution(self):
                                 "market_id": str(market.id),
                                 "status": re_locked_order.status,
                                 "side": order_side,
-                                "shares": float(order_amount - remaining),
+                                "shares": float(order_amount) - float(remaining),
                                 "price": float(amm_price_val) if amm_price_val > 0 else float(re_locked_order.price),
                             })
                             # Also dispatch in-app notification
@@ -387,7 +384,7 @@ def check_limit_order_execution(self):
                                 "type": "position:update",
                                 "market_id": str(market.id),
                                 "outcome": outcome.name if outcome else None,
-                                "shares": float(order_amount - remaining),
+                                "shares": float(order_amount) - float(remaining),
                                 "side": order_side,
                             })
                         except Exception:
@@ -1052,7 +1049,6 @@ def enqueue_otp(self, email: str, purpose: str):
         key = f"otp:{purpose}:{email}"
 
         # Store in Redis synchronously inside the task
-        import asyncio
         async def _store():
             from app.redis import get_redis, redis_cb
             r = await get_redis()

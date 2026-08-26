@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import logging
-import random
 
 from app.redis import get_redis, redis_cb
 

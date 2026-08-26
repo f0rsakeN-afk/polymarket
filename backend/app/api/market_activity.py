@@ -78,7 +78,6 @@ async def get_market_activity(
 
     if outcome_ids:
         from sqlalchemy import func, over
-        from sqlalchemy.orm import aliased
 
         # Rank positions per outcome, fetch top 10 per outcome
         ranked = (

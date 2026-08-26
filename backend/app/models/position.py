@@ -1,4 +1,11 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Numeric, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Index,
+    Numeric,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
