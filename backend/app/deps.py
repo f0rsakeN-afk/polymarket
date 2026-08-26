@@ -181,7 +181,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
     - httponly: True (never accessible to JavaScript)
     - samesite=lax: sent on same-origin requests and safe top-level navigations
     """
-    is_prod = not settings.debug
+    # Secure cookie only when actually in production (HTTPS). Localhost and dev
+    # environments must use non-secure cookies even when DEBUG=false.
+    is_prod = settings.app_env == "production"
+    # Domain=localhost allows the cookie to work across frontend (:3000) and
+    # backend (:8000) on different ports during local development.
+    cookie_domain = "localhost" if not is_prod else None
 
     response.set_cookie(
         key="access_token",
@@ -191,6 +196,7 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
         samesite="lax",
         max_age=settings.jwt_access_expire,
         path="/",
+        domain=cookie_domain,
     )
     if refresh_token:
         response.set_cookie(
@@ -201,10 +207,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
             samesite="lax",
             max_age=settings.jwt_refresh_expire,
             path="/",
+            domain=cookie_domain,
         )
 
 
 def clear_auth_cookies(response: Response):
-    is_prod = not settings.debug
-    response.delete_cookie("access_token", path="/", secure=is_prod)
-    response.delete_cookie("refresh_token", path="/", secure=is_prod)
+    is_prod = settings.app_env == "production"
+    cookie_domain = "localhost" if not is_prod else None
+    response.delete_cookie("access_token", path="/", secure=is_prod, domain=cookie_domain)
+    response.delete_cookie("refresh_token", path="/", secure=is_prod, domain=cookie_domain)

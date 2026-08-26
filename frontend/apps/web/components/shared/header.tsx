@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useCallback, useEffect, useState, memo } from "react"
+import { useCallback, useSyncExternalStore, memo } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@workspace/ui/components/sheet"
 import { MenuIcon, SunIcon, MoonIcon } from "lucide-react"
@@ -11,19 +11,17 @@ import { UserMenu } from "@/components/auth/user-menu"
 import { NotificationBell } from "@/components/notifications/notification-bell"
 
 const navLinks = [
-  { href: "/", label: "Markets" },
-  { href: "/trades", label: "Trade Feed" },
-  { href: "/orders", label: "Orders" },
-  { href: "/portfolio", label: "Portfolio" },
+  // { href: "/", label: "Markets" },
+  // { href: "/trades", label: "Trade Feed" },
+  // { href: "/orders", label: "Orders" },
+  // { href: "/portfolio", label: "Portfolio" },
 ]
 
 // ── Theme Toggle ───────────────────────────────────────────────────────────────
 
 const ThemeToggle = memo(function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => { setMounted(true) }, [])
+  const mounted = useSyncExternalStore(() => () => {}, () => true, () => false)
 
   const handleToggle = useCallback(() => {
     setTheme(resolvedTheme === "dark" ? "light" : "dark")
