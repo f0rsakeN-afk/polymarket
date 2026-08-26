@@ -32,7 +32,7 @@ const sections = [
 
 export default function SettingsPage() {
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-10 space-y-8">
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <SettingsBreadcrumb page="Overview" />
 
       <div>

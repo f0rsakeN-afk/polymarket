@@ -1,5 +1,9 @@
 import { TransactionsPageClient } from "./TransactionsPageClient"
 
-export const metadata = { robots: { index: false, follow: false } }
+export const metadata = {
+  title: "Transactions",
+  description: "View your transaction history on PredictX. See all deposits, withdrawals, and trading activity.",
+  robots: { index: false, follow: false },
+}
 
 export default TransactionsPageClient

@@ -35,7 +35,7 @@ export function MarketsPageClient() {
   }, [fetchMarketsNextPage])
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-6 space-y-6">
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Markets</h1>
         <p className="mt-1 text-muted-foreground text-sm">

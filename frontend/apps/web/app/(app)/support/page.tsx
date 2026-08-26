@@ -3,23 +3,77 @@ export const metadata = {
   description: "Get help with your PredictX account, trading, and platform questions.",
 }
 
+import Link from "next/link"
+
 export default function SupportPage() {
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-12">
-      <h1 className="text-2xl font-bold mb-6">Support</h1>
-      <div className="space-y-4 text-sm">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h2 className="font-semibold mb-1">Email</h2>
-          <p className="text-muted-foreground text-xs">support@predictx.io</p>
+    <div className="container mx-auto max-w-7xl px-4 py-8">
+      <div className="mb-12">
+        <h1 className="text-2xl font-bold tracking-tight">Support</h1>
+        <p className="mt-3 text-sm text-muted-foreground leading-relaxed max-w-md">
+          Get help with your PredictX account, trading, and platform questions.
+        </p>
+      </div>
+
+      <div className="divide-y border-y">
+        <div className="flex items-center justify-between py-5 gap-8">
+          <div>
+            <p className="text-sm font-medium">Email</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              <a href="mailto:support@predictx.io" className="text-primary hover:underline">
+                support@predictx.io
+              </a>
+            </p>
+          </div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h2 className="font-semibold mb-1">Discord</h2>
-          <p className="text-muted-foreground text-xs">Join our Discord server for community support and discussion.</p>
-        </div>
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h2 className="font-semibold mb-1">FAQ</h2>
-          <p className="text-muted-foreground text-xs">Check our <a href="/faq" className="text-primary hover:underline">FAQ page</a> for answers to common questions.</p>
-        </div>
+
+        <a
+          href="https://discord.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group flex items-center justify-between py-5 gap-8 hover:no-underline"
+        >
+          <div>
+            <p className="text-sm font-medium group-hover:text-primary transition-colors">Discord</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Join our Discord server for community support and discussion.
+            </p>
+          </div>
+          <svg
+            className="size-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path
+              d="M11 2a2 2 0 1 1 0 4H7M9 11l4-4M9 11H3m6 4h2a2 2 0 0 0 2-2V5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </a>
+
+        <Link
+          href="/faq"
+          className="group flex items-center justify-between py-5 gap-8 hover:no-underline"
+        >
+          <div>
+            <p className="text-sm font-medium group-hover:text-primary transition-colors">FAQ</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Common questions about PredictX — trading, market resolution, fees, and more.
+            </p>
+          </div>
+          <svg
+            className="size-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
       </div>
     </div>
   )

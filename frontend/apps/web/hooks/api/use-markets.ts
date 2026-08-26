@@ -66,7 +66,7 @@ export function useMarketTrades(slug: string) {
     queryFn: ({ pageParam }) => getMarketTrades(slug, { page: pageParam, page_size: 50 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.data.trades.length === 50 ? lastPageParam + 1 : undefined,
+      lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
     enabled: !!slug,
     select: (data) => ({
       trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
@@ -84,7 +84,7 @@ export function useGlobalTrades(params?: { market_slug?: string }) {
     queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.data.trades.length === 50 ? lastPageParam + 1 : undefined,
+      lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
     select: (data) => ({
       trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
       hasMore: data.pages[data.pages.length - 1]?.data.trades.length === 50,

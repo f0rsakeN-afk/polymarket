@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import {
@@ -238,9 +239,13 @@ export function NotificationBell() {
         {/* Footer */}
         {notifications.length > 0 && (
           <div className="px-4 py-2.5 border-t shrink-0">
-            <button className="block w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors font-medium">
+            <Link
+              href="/notifications"
+              onClick={() => setOpen(false)}
+              className="block w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
+            >
               View all notifications
-            </button>
+            </Link>
           </div>
         )}
       </PopoverContent>

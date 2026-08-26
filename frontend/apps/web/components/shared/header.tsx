@@ -12,10 +12,8 @@ import { NotificationBell } from "@/components/notifications/notification-bell"
 import { SearchInput } from "@/components/shared/search-input"
 
 const navLinks: { href: string; label: string }[] = [
-  // { href: "/", label: "Markets" },
-  // { href: "/trades", label: "Trade Feed" },
-  // { href: "/orders", label: "Orders" },
-  // { href: "/portfolio", label: "Portfolio" },
+  { href: "/markets", label: "Markets" },
+  { href: "/trades", label: "Trades" },
 ]
 
 // ── Theme Toggle ────────────────────────────────────────────────────────────────
@@ -67,11 +65,16 @@ const NavLink = memo(function NavLink({ href, label, isActive }: { href: string;
       href={href}
       aria-current={isActive ? "page" : undefined}
       className={cn(
-        "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-        isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        "relative px-3 py-1.5 text-xs font-medium transition-colors duration-200",
+        isActive
+          ? "text-primary"
+          : "text-muted-foreground hover:text-foreground"
       )}
     >
       {label}
+      {isActive && (
+        <span className="absolute bottom-0 left-3 right-3 h-px bg-foreground rounded-full" />
+      )}
     </Link>
   )
 })
@@ -100,6 +103,13 @@ export default function Header() {
           </div>
         </div>
 
+        {/* Desktop nav */}
+        <nav className="hidden md:flex items-center gap-1 mr-4">
+          {navLinks.map(({ href, label }) => (
+            <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
+          ))}
+        </nav>
+
         {/* Right: Theme + Bell + User */}
         <div className="flex items-center gap-2 shrink-0">
           <ThemeToggle />
@@ -108,7 +118,7 @@ export default function Header() {
 
           {/* Mobile menu */}
           <Sheet>
-            <SheetTrigger className="sm:hidden inline-flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
+            <SheetTrigger className="md:hidden inline-flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
               <MenuIcon className="size-5" />
             </SheetTrigger>
             <SheetContent side="right" className="w-64 p-0">

@@ -62,6 +62,12 @@ export function UserMenu() {
           <DropdownMenuSeparator />
 
           <DropdownMenuItem>
+            <Link href="/markets" className="w-full">Markets</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/trades" className="w-full">Trades</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
             <Link href="/portfolio" className="w-full">Portfolio</Link>
           </DropdownMenuItem>
           <DropdownMenuItem>
@@ -74,7 +80,7 @@ export function UserMenu() {
             <Link href="/settings/referrals" className="w-full">Referrals</Link>
           </DropdownMenuItem>
           <DropdownMenuItem>
-            <Link href="/settings/notifications" className="w-full">Notifications</Link>
+            <Link href="/notifications" className="w-full">Notifications</Link>
           </DropdownMenuItem>
 
           {user.is_admin && (

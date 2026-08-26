@@ -34,6 +34,9 @@ export function OtpInput({
               <InputOTPSlot
                 key={index}
                 index={index}
+                char={slot.char}
+                isActive={slot.isActive}
+                hasFakeCaret={slot.hasFakeCaret}
                 className={cn(
                   "h-12 w-10 text-center text-lg font-semibold",
                   error && "border-destructive data-[state=checked]:border-destructive"

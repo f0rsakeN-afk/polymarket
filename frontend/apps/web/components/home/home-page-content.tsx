@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, lazy, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
@@ -35,6 +36,7 @@ export default function HomePageContent() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Trending Markets</h2>
+          <Link href="/markets" className="text-sm text-muted-foreground hover:text-foreground transition-colors">View all</Link>
         </div>
         {marketsLoading && trending.length === 0 ? (
           <SkeletonTrendingCarousel />
@@ -57,20 +59,26 @@ export default function HomePageContent() {
       )}
 
       <section>
-        <div className="mt-6">
-          <MarketList
-            markets={filteredMarkets}
-            loading={marketsLoading}
-            hasMore={marketsHasMore ?? false}
-            onLoadMore={handleLoadMore}
-          />
+        <div className="flex items-center justify-between mt-6 mb-4">
+          <h2 className="text-lg font-semibold">Markets</h2>
+          <Link href="/markets" className="text-sm text-muted-foreground hover:text-foreground transition-colors">View all</Link>
         </div>
+        <MarketList
+          markets={filteredMarkets}
+          loading={marketsLoading}
+          hasMore={marketsHasMore ?? false}
+          onLoadMore={handleLoadMore}
+        />
       </section>
 
       {tag.toLowerCase() === "all" && (
-        <section className="lg:hidden">
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Global Activity</h2>
+            <Link href="/trades" className="text-sm text-muted-foreground hover:text-foreground transition-colors">View all</Link>
+          </div>
           <Suspense fallback={<SkeletonTradeFeed />}>
-            <LazyTradeFeed title="Global Activity" trades={tradesData?.trades.slice(0, 15) ?? []} />
+            <LazyTradeFeed title="" trades={tradesData?.trades.slice(0, 15) ?? []} />
           </Suspense>
         </section>
       )}
