@@ -1,8 +1,8 @@
-"use client";
+"use client"
 
-import { useCallback } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useCallback } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,26 +11,26 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu";
-import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar";
-import { Button } from "@workspace/ui/components/button";
-import { useAuth } from "@/hooks/use-auth-context";
+} from "@workspace/ui/components/dropdown-menu"
+import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar"
+import { Button } from "@workspace/ui/components/button"
+import { useAuth } from "@/hooks/use-auth-context"
 
 export function UserMenu() {
-  const { user, logout } = useAuth();
-  const router = useRouter();
+  const { user, logout } = useAuth()
+  const router = useRouter()
 
   const handleLogout = useCallback(async () => {
-    await logout();  // logout() already calls authApi.logout() internally
-    router.push("/");
-  }, [logout, router]);
+    await logout()
+    router.push("/")
+  }, [logout, router])
 
   if (!user) {
     return (
       <Button variant="outline" onClick={() => router.push("/login")}>
         Sign in
       </Button>
-    );
+    )
   }
 
   const initials = (user.username ?? user.email ?? "?")
@@ -38,7 +38,7 @@ export function UserMenu() {
     .map((p) => p[0] ?? "")
     .join("")
     .toUpperCase()
-    .slice(0, 2);
+    .slice(0, 2)
 
   return (
     <DropdownMenu>
@@ -94,5 +94,5 @@ export function UserMenu() {
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+  )
 }
