@@ -9,6 +9,8 @@ from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
+from app.services.market_service import MarketService
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 
@@ -98,6 +100,21 @@ class LiquidityService:
 
         logger.info(f"Liquidity added: user={user.id} market={market.slug} amount={float(amount)} lp_tokens={float(lp_tokens_minted)}")
 
+        # Publish WS events — liquidity changes affect AMM prices
+        try:
+            yes_price, no_price = MarketService.compute_prices(pool)
+            await redis_pubsub.publish_price_update(
+                str(market.id), float(yes_price), float(no_price), float(market.total_liquidity or 0)
+            )
+            await redis_pubsub.publish_market_event(str(market.id), "liquidity:add", {
+                "user_id": str(user.id),
+                "amount": float(amount),
+                "lp_tokens": float(lp_tokens_minted),
+                "pool_lp_token_supply": float(pool.lp_token_supply),
+            })
+        except Exception:
+            pass
+
         return {
             "lp_tokens_minted": str(lp_tokens_minted),
             "pool_lp_token_supply": str(pool.lp_token_supply),
@@ -166,6 +183,22 @@ class LiquidityService:
         await db.commit()
 
         logger.info(f"Liquidity removed: user={user.id} market={market.slug} lp_tokens={float(lp_tokens)} redeemed={float(total_redeemed)}")
+
+        # Publish WS events — liquidity changes affect AMM prices
+        try:
+            yes_price, no_price = MarketService.compute_prices(pool)
+            await redis_pubsub.publish_price_update(
+                str(market.id), float(yes_price), float(no_price), float(market.total_liquidity or 0)
+            )
+            await redis_pubsub.publish_market_event(str(market.id), "liquidity:remove", {
+                "user_id": str(user.id),
+                "lp_tokens": float(lp_tokens),
+                "yes_redeemed": float(yes_redeemed),
+                "no_redeemed": float(no_redeemed),
+                "pool_lp_token_supply": float(pool.lp_token_supply),
+            })
+        except Exception:
+            pass
 
         return {
             "yes_redeemed": str(yes_redeemed),

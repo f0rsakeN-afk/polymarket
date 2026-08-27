@@ -1,5 +1,5 @@
 import { api } from "./client"
-import { addLiquiditySchema } from "@/lib/schemas/liquidity"
+import { addLiquiditySchema, removeLiquiditySchema } from "@/lib/schemas/liquidity"
 
 export interface LPAnalyticsResponse {
   success: boolean
@@ -38,7 +38,7 @@ export function addLiquidity(marketId: string, data: { amount: number }) {
 export function removeLiquidity(marketId: string, data: { lp_tokens: number }) {
   return api.delete<{ success: boolean; data: { yes_redeemed: string; no_redeemed: string; total_redeemed: string; wallet_balance: string } }>(
     `/api/v1/markets/${marketId}/liquidity`,
-    data
+    removeLiquiditySchema.parse(data)
   )
 }
 

@@ -53,9 +53,17 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
   const mountedRef = useRef(true)
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; trade?: TickerItem }
-    if (msg.type === "trade:new" && msg.trade) {
-      const item = { ...msg.trade, id: Math.random().toString(36).slice(2) }
+    // Backend publishes flat fields: { type, market_id, outcome, side, price, amount, username }
+    const msg = data as { type?: string; outcome?: string; side?: "buy" | "sell"; price?: number; amount?: number; username?: string }
+    if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price != null && msg.amount != null) {
+      const item: TickerItem = {
+        id: Math.random().toString(36).slice(2),
+        outcome: msg.outcome,
+        side: msg.side,
+        price: msg.price,
+        amount: msg.amount,
+        username: msg.username ?? "Unknown",
+      }
       setItems((prev) => [item, ...prev].slice(0, 5))
       animRef.current.set(item.id, Date.now())
       if (mountedRef.current) {

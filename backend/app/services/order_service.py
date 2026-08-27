@@ -150,7 +150,7 @@ class OrderService:
         db: AsyncSession,
         user: User,
         data: OrderRequest,
-    ) -> OrderResult:
+    ):
         amount = Decimal(str(data.amount))
 
         # ── Step 1: Lock Market + Pool + Wallet (serialization point) ──
@@ -268,16 +268,19 @@ class OrderService:
         )
 
         # Compute remaining shares to fill the order
-        if data.side == "buy":
-            remaining_shares = amount - matched_shares
+        # For SELL: amount is shares; remaining = amount - shares already matched
+        # For BUY: amount is USDC budget; remaining_shares is not used (remaining_usdc tracks budget)
+        if data.side == "sell":
+            remaining_shares = max(amount - matched_shares, Decimal(0))
         else:
-            remaining_shares = amount - matched_shares
+            remaining_shares = Decimal(0)
+            remaining_usdc = max(amount - matched_usdc, Decimal(0))
 
         # USDC needed for remaining shares (for BUY, locked at limit price; for SELL, not applicable)
         if data.side == "buy":
-            remaining_usdc = remaining_shares * (limit_price or Decimal(1))
+            remaining_usdc_for_limit = remaining_usdc
         else:
-            remaining_usdc = Decimal(0)
+            remaining_usdc_for_limit = Decimal(0)
 
         amm_shares = Decimal(0)
         amm_price_val = Decimal(0)
@@ -285,7 +288,14 @@ class OrderService:
         amm_slippage = Decimal(0)
         sell_proceeds_amm = Decimal(0)
 
-        if remaining_shares > 0:
+        # For BUY: remaining shares to fill via AMM = remaining USDC budget / AMM price
+        # For SELL: remaining shares = amount - matched_shares (already computed above)
+        if data.side == "buy":
+            buy_remaining_shares = remaining_usdc / price_before if price_before > 0 else Decimal(0)
+        else:
+            buy_remaining_shares = Decimal(0)
+
+        if (remaining_shares if data.side == "sell" else buy_remaining_shares) > 0:
             if data.order_type in ("limit", "fill_or_kill"):
                 # Check post_only BEFORE AMM fills — post_only means don't cross the spread
                 if data.post_only and limit_price is not None:

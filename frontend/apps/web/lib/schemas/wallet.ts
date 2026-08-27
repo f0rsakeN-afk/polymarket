@@ -1,6 +1,7 @@
 import { z } from "zod"
 
-const positiveMoney = z.string() // gt=0, Decimal serialized as string
+// Accept both string (form/API) and number (parseFloat result) — backend Decimal coerces either
+const positiveMoney = z.union([z.string(), z.number()])
 
 export const depositSchema = z.object({
   amount: positiveMoney,

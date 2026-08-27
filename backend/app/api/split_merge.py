@@ -14,6 +14,7 @@ from app.models.market import Market, Outcome
 from app.models.position import Position
 from app.models.wallet import Transaction, Wallet
 from app.services.market_service import MarketService
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
 SPLIT_MERGE_FEE_RATE = Decimal("0.02")
@@ -130,6 +131,22 @@ async def split(
 
     logger.info(f"Split: user={user.id} market={market_id} amount={amount} fee={float(fee)}")
 
+    # Publish WS events — split changes the supply of YES/NO shares in circulation
+    try:
+        yes_price, no_price = MarketService.compute_prices(pool)
+        await redis_pubsub.publish_price_update(
+            str(market.id), float(yes_price), float(no_price), float(market.total_liquidity or 0)
+        )
+        await redis_pubsub.publish_market_event(str(market.id), "split", {
+            "user_id": str(user.id),
+            "amount": float(amount),
+            "fee": float(fee),
+            "yes_shares": float(amount_after_fee),
+            "no_shares": float(amount_after_fee),
+        })
+    except Exception:
+        pass
+
     return success_response({
         "market_id": market_id,
         "amount": amount,
@@ -230,6 +247,26 @@ async def merge(
     await db.commit()
 
     logger.info(f"Merge: user={user.id} market={market_id} amount={amount} fee={float(fee)}")
+
+    # Publish WS events — merge removes YES/NO shares from circulation
+    try:
+        pool_result = await db.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == market.id)
+        )
+        pool = pool_result.scalar_one_or_none()
+        if pool:
+            yes_price, no_price = MarketService.compute_prices(pool)
+            await redis_pubsub.publish_price_update(
+                str(market.id), float(yes_price), float(no_price), float(market.total_liquidity or 0)
+            )
+        await redis_pubsub.publish_market_event(str(market.id), "merge", {
+            "user_id": str(user.id),
+            "amount": float(amount),
+            "fee": float(fee),
+            "amount_received": float(amount_after_fee),
+        })
+    except Exception:
+        pass
 
     return success_response({
         "market_id": market_id,

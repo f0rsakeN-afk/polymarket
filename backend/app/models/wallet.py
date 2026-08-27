@@ -24,8 +24,11 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
         Index("ix_transactions_user_id", "user_id"),
         Index("ix_transactions_user_created", "user_id", "created_at"),
         Index("ix_transactions_wallet_id", "wallet_id"),
-        # Idempotency: prevent duplicate deposits for the same Stripe PaymentIntent
-        UniqueConstraint("reference_id", "type", name="uq_transaction_reference_type"),
+        # NOTE: unique constraint on (reference_id, type) was removed.
+        # Idempotency for deposits/withdrawals is handled at the application layer
+        # (see wallet_service.py). reference_id can legitimately repeat across
+        # different transaction types (e.g. multiple trades per order, multiple
+        # liquidity ops per pool). Each row is already unique by primary key (id).
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

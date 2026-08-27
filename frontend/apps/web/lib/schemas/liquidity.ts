@@ -1,13 +1,14 @@
 import { z } from "zod"
 
+// marketId goes in the URL path, not the body — backend AddLiquidityRequest only has 'amount'
+// Accept both string (form input) and number (parseFloat result) — backend Decimal coerces either
 export const addLiquiditySchema = z.object({
-  marketId: z.string(),
-  amount: z.string(), // ponytail: string — Decimal serialized from backend
+  amount: z.union([z.string(), z.number()]),
 })
 
+// marketId goes in the URL path, not the body — backend RemoveLiquidityRequest only has 'lp_tokens'
 export const removeLiquiditySchema = z.object({
-  marketId: z.string(),
-  lpTokens: z.string(), // ponytail: string — Decimal serialized from backend
+  lp_tokens: z.union([z.string(), z.number()]),
 })
 
 export const lpPositionResponseSchema = z.object({

@@ -149,7 +149,9 @@ class MatchingEngine:
             if seller_pos:
                 cost_basis = seller_pos.average_price * match_shares
                 realized_pnl = usdc_value - cost_basis
-                seller_pos.shares_held -= match_shares
+                # Clamp: shares_held can legitimately be 0 if the seller has no position
+                # remaining, and the orderbook matched more than expected due to concurrent fills
+                seller_pos.shares_held = max(seller_pos.shares_held - match_shares, Decimal(0))
                 seller_pos.realized_pnl += realized_pnl
 
             buyer_pos = await db.execute(
@@ -231,7 +233,9 @@ class MatchingEngine:
             if seller_pos:
                 cost_basis = seller_pos.average_price * match_shares
                 realized_pnl = usdc_value - cost_basis
-                seller_pos.shares_held -= match_shares
+                # Clamp to 0: prevents negative shares_held from race conditions
+                # between orderbook matching and position updates
+                seller_pos.shares_held = max(seller_pos.shares_held - match_shares, Decimal(0))
                 seller_pos.realized_pnl += realized_pnl
 
         return {

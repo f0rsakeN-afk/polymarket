@@ -10,6 +10,7 @@ import Link from "next/link"
 import { addLiquidity, removeLiquidity } from "@/lib/api/liquidity"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useWallet } from "@/hooks/api/use-wallet"
+import { queryKeys } from "@/lib/api/queryKeys"
 
 export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string; marketStatus: string }) {
   const { data: currentUser } = useCurrentUser()
@@ -29,7 +30,9 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
       sileo.success({ title: "Liquidity added" })
       setAmount("")
       qc.invalidateQueries({ queryKey: ["market", marketId] })
-      qc.invalidateQueries({ queryKey: ["liquidity-analytics"] })
+      qc.invalidateQueries({ queryKey: queryKeys.lpAnalytics() })
+      qc.invalidateQueries({ queryKey: queryKeys.lpPosition(marketId) })
+      qc.invalidateQueries({ queryKey: queryKeys.wallet() })
     },
     onError: (e) => sileo.error({ title: "Failed to add liquidity", description: e instanceof Error ? e.message : "Unknown error" }),
   })
@@ -40,7 +43,9 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
       sileo.success({ title: "Liquidity removed" })
       setLpTokens("")
       qc.invalidateQueries({ queryKey: ["market", marketId] })
-      qc.invalidateQueries({ queryKey: ["liquidity-analytics"] })
+      qc.invalidateQueries({ queryKey: queryKeys.lpAnalytics() })
+      qc.invalidateQueries({ queryKey: queryKeys.lpPosition(marketId) })
+      qc.invalidateQueries({ queryKey: queryKeys.wallet() })
     },
     onError: (e) => sileo.error({ title: "Failed to remove liquidity", description: e instanceof Error ? e.message : "Unknown error" }),
   })

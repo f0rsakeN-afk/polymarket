@@ -8,12 +8,11 @@ import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
 import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket } from "@/hooks/api/use-markets"
+import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket } from "@/hooks/use-market-socket"
-import { claimWinnings, getOrderBook } from "@/lib/api/markets"
-import type { OrderBook as MarketOrderBook } from "@/lib/api/markets"
+import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
 import { AlertDialog } from "@/components/alerts/alert-dialog"
@@ -41,17 +40,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const { data: relatedMarkets } = useRelatedMarkets(slug)
   const { data: priceHistoryData } = usePriceHistory(slug)
 
-  const { data: orderbookData } = useQuery({
-    queryKey: ["orderbook-header", slug] as const,
-    queryFn: () => getOrderBook(slug),
-    select: (res: { data?: MarketOrderBook }) => {
-      const outcomes = res.data?.outcomes
-      return outcomes ? Object.values(outcomes)[0] ?? null : null
-    },
-    enabled: !!slug,
-    // No refetchInterval — WS 'orderbook:update' message triggers refresh.
-    // Initial fetch populates cache so header shows data immediately.
-  })
+  // useOrderBook already uses queryKeys.orderBook(slug) = ["orderbook", slug]
+  // which is the same key the WS 'orderbook:update' message writes to — no extra fetch on WS events
+  const { data: orderbookData } = useOrderBook(slug)
+  // Derive first outcome's bids/asks for the header display (same select as before)
+  const headerOutcome = useMemo(() => {
+    if (!orderbookData?.outcomes) return null
+    return Object.values(orderbookData.outcomes)[0] ?? null
+  }, [orderbookData])
   // Seed with empty array — chart renders nothing until market loads, then useEffect seeds it
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
   // outcomeNames starts empty — component won't render until market loads anyway
@@ -97,16 +93,19 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       queryClient.invalidateQueries({ queryKey: ["markets"] })
       queryClient.invalidateQueries({ queryKey: ["positions"] })
     }
-    if (msg.type === "alert:triggered") {
+    // publish_notification wraps with type:"notification", so check that first then inspect inner fields
+    if (msg.type === "notification" && (msg as { alert_id?: string }).alert_id) {
+      const n = msg as { outcome?: string; condition?: string; trigger_price?: number }
       sileo.success({
         title: "Price Alert!",
-        description: `${(msg as { outcome?: string }).outcome?.toUpperCase()} ${(msg as { condition?: string }).condition} $${(msg as { trigger_price?: number }).trigger_price?.toFixed(2)}`,
+        description: `${n.outcome?.toUpperCase()} ${n.condition} $${n.trigger_price?.toFixed(2)}`,
       })
     }
     if (msg.type === "orderbook:update" && (msg as { outcomes?: unknown }).outcomes) {
-      // Push full orderbook directly to all orderbook consumers — no HTTP refetch.
-      // All clients subscribed to this market receive the same WS broadcast instantly.
-      queryClient.setQueryData(["orderbook", slug] as const, { data: (msg as { outcomes: unknown }).outcomes })
+      // WS sends raw outcomes dict { outcome: { bids, asks } }; HTTP API returns { success, data: { outcomes } }.
+      // Set both levels so both the direct consumer (header select) and OrderBook (reads data.data.outcomes) work.
+      const rawOutcomes = (msg as { outcomes: unknown }).outcomes as Record<string, { bids: unknown[]; asks: unknown[] }>
+      queryClient.setQueryData(["orderbook", slug] as const, { data: { outcomes: rawOutcomes } })
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
@@ -314,7 +313,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
                       <div className="text-lg font-bold text-green-500">${Number(market.yes_price ?? 0.5).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.bids?.[0] ? `${Number(orderbookData.bids[0].size).toFixed(0)} shares` : ""}
+                        {headerOutcome?.bids?.[0] ? `${Number(headerOutcome.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
@@ -322,7 +321,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
                       <div className="text-lg font-bold text-red-500">${Number(market.no_price).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {orderbookData?.asks?.[0] ? `${Number(orderbookData.asks[0].size).toFixed(0)} shares` : ""}
+                        {headerOutcome?.asks?.[0] ? `${Number(headerOutcome.asks[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                   </>
