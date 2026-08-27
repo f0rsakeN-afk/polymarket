@@ -39,6 +39,7 @@ from app.services.cache_service import (
     cache_set_market,
     cache_set_market_list,
     cache_set_orderbook,
+    build_orderbook,
 )
 from app.services.market_service import MarketService
 from app.workers.tasks import resolve_market
@@ -251,49 +252,7 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
     if cached is not None:
         return cached
 
-    from app.models.order import Order
-
-    pending = await db.execute(
-        select(
-            Order.outcome_id,
-            Order.side,
-            Order.price,
-            func.sum(Order.remaining_amount).label("total_size"),
-        )
-        .where(
-            Order.market_id == market.id,
-            Order.status == "pending",
-            Order.order_type.in_(["limit", "fill_or_kill"]),
-        )
-        .group_by(Order.outcome_id, Order.side, Order.price)
-        .order_by(Order.outcome_id, Order.side, Order.price.desc())
-    )
-    rows = pending.all()
-
-    outcomes_result = await db.execute(
-        select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
-    )
-    outcomes = outcomes_result.scalars().all()
-    outcome_names = {str(o.id): o.name.lower() for o in outcomes}
-
-    # Structure: { outcome_name: { bids: [], asks: [] } }
-    outcome_orderbook: dict[str, dict[str, list[dict]]] = {
-        o.name.lower(): {"bids": [], "asks": []} for o in outcomes
-    }
-    for row in rows:
-        outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
-        if outcome_name not in outcome_orderbook:
-            continue
-        entry = {
-            "price": str(row.price),
-            "size": str(row.total_size),
-        }
-        if row.side == "buy":
-            outcome_orderbook[outcome_name]["bids"].append(entry)
-        else:
-            outcome_orderbook[outcome_name]["asks"].append(entry)
-
-    data = {"outcomes": outcome_orderbook}
+    data = await build_orderbook(db, str(market.id))
     await cache_set_orderbook(str(market.id), data, ttl=60)
     return success_response(data)
 
@@ -456,16 +415,26 @@ async def get_price_history(
         bucket = ts - (ts % interval_seconds)
         grouped.setdefault(bucket, []).append(r)
 
+    # Track last known price per outcome for carry-forward when one outcome has no snapshot in a bucket
+    last_prices: dict[str, float] = {}
+
     samples = []
     for bucket_ts in sorted(grouped):
         bucket_rows = grouped[bucket_ts]
         ts_dt = datetime.fromtimestamp(bucket_ts, tz=UTC)
-        outcome_prices = {}
+        outcome_prices: dict[str, float] = {}
         total_vol = 0
         for r in bucket_rows:
             oid = str(r.outcome_id)
             outcome_prices[oid] = float(r.price)
+            last_prices[oid] = float(r.price)
             total_vol += float(r.total_volume or 0)
+
+        # Carry forward last known price for outcomes missing in this bucket
+        for oid, price in last_prices.items():
+            if oid not in outcome_prices:
+                outcome_prices[oid] = price
+
         samples.append(
             {
                 "timestamp": ts_dt.isoformat(),
@@ -473,11 +442,9 @@ async def get_price_history(
                     {
                         "id": oid,
                         "name": outcomes_map.get(oid, "Unknown"),
-                        "price": outcome_prices[oid],
+                        "price": str(price),
                     }
-                    for oid in sorted(
-                        outcome_prices, key=lambda x: outcomes_map.get(x, "")
-                    )
+                    for oid, price in sorted(outcome_prices.items(), key=lambda x: outcomes_map.get(x[0], ""))
                 ],
                 "total_volume": str(total_vol),
             }
@@ -550,20 +517,21 @@ async def resolve_market_endpoint(
         if not outcome:
             raise ValidationError("Winning outcome does not belong to this market")
 
-        # Queue-level idempotency: prevent two API workers from both enqueueing.
-        # SET NX returns False if key already exists (1h TTL).
-        task_dedup_key = f"resolve_task:{market.id}"
-        if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
-            raise ConflictError("Resolution task already enqueued")
-
-        # Enqueue settlement BEFORE committing — if this fails, market stays unresolved
-        # so a retry or manual intervention can pick it up safely.
+        # Enqueue settlement — if this fails, market stays unresolved so a retry can pick it up safely.
         try:
             resolve_market.delay(str(market.id), str(outcome.id))
         except Exception:
-            await r.delete(task_dedup_key)
             logger.exception(f"Failed to enqueue settlement for market {market.id}")
             raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
+
+        # Queue-level idempotency: set dedup key AFTER successful enqueue.
+        # If the task was already enqueued by a concurrent request, we get nx=False here
+        # and must not commit — another worker already owns this resolution.
+        task_dedup_key = f"resolve_task:{market.id}"
+        if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
+            # Task already enqueued by a concurrent request — do not double-resolve
+            await db.rollback()
+            raise ConflictError("Resolution task already enqueued")
 
         # Only mark resolved after settlement task is confirmed queued.
         market.status = "resolved"

@@ -52,7 +52,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     // No refetchInterval — WS 'orderbook:update' message triggers refresh.
     // Initial fetch populates cache so header shows data immediately.
   })
+  // Seed with empty array — chart renders nothing until market loads, then useEffect seeds it
   const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
+  // outcomeNames starts empty — component won't render until market loads anyway
   const [outcomeNames, setOutcomeNames] = useState<string[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
 
@@ -70,10 +72,15 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       setPriceHistory((prev) => {
         const point: Record<string, number | string> = { time: now }
         if (msg.outcome_prices) {
+          const prices = Object.values(msg.outcome_prices)
+          // value = first outcome price for animation
+          point["value"] = prices[0] ?? 0
           for (const [name, price] of Object.entries(msg.outcome_prices)) {
             point[name] = price
           }
         } else if (msg.yes_price != null && msg.no_price != null) {
+          // Binary: value=YES for smooth YES line animation, YES/NO keys for the two colored lines
+          point["value"] = msg.yes_price
           point["Yes"] = msg.yes_price
           point["No"] = msg.no_price
         }
@@ -96,9 +103,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         description: `${(msg as { outcome?: string }).outcome?.toUpperCase()} ${(msg as { condition?: string }).condition} $${(msg as { trigger_price?: number }).trigger_price?.toFixed(2)}`,
       })
     }
-    if (msg.type === "orderbook:update") {
-      queryClient.invalidateQueries({ queryKey: ["orderbook", slug] })
-      queryClient.invalidateQueries({ queryKey: ["orderbook-header", slug] })
+    if (msg.type === "orderbook:update" && (msg as { outcomes?: unknown }).outcomes) {
+      // Push full orderbook directly to all orderbook consumers — no HTTP refetch.
+      // All clients subscribed to this market receive the same WS broadcast instantly.
+      queryClient.setQueryData(["orderbook", slug] as const, { data: (msg as { outcomes: unknown }).outcomes })
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
@@ -114,50 +122,74 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     enabled: !!market?.id,
   })
 
-  const isMultiOutcome = useMemo(
-    () => (market as MarketDetailResponse)?.outcomes?.length > 2,
-    [market]
-  )
-
-  useEffect(() => {
-    if (priceHistoryData && priceHistoryData.length > 0) {
-      const first = priceHistoryData[0]!
-      const names = first.outcomes.map((o) => o.name)
-      setOutcomeNames(names)
-      setPriceHistory(
-        priceHistoryData.map((p: PriceHistoryPoint) => {
-          const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000, value: 0 }
-          for (const o of p.outcomes) {
-            point[o.name] = o.price
-          }
-          return point as LiveLinePoint
-        })
-      )
-      return
+  const { yesOutcome, noOutcome, outcomeList } = useMemo(() => {
+    const outcomes = (market as MarketDetailResponse)?.outcomes ?? []
+    const yes = outcomes.find((o) => o.name.toLowerCase() === "yes")
+    const no = outcomes.find((o) => o.name.toLowerCase() === "no")
+    return {
+      yesOutcome: yes ?? outcomes[0],
+      noOutcome: no ?? outcomes[1],
+      outcomeList: outcomes,
     }
+  }, [market])
+
+  const isBinary = !!(yesOutcome && noOutcome)
+
+  // Seed priceHistory from market prices on mount — always valid numbers, chart renders immediately
+  useEffect(() => {
     if (!market) return
-    const names = isMultiOutcome
-      ? (market as MarketDetailResponse).outcomes.map((o) => o.name)
-      : ["Yes", "No"]
+
+    const names = outcomeList.map((o) => o.name)
     setOutcomeNames(names)
+
     const now = Math.floor(Date.now() / 1000)
     const seedPoint: Record<string, number | string> = { time: now - 60 }
     const seedPoint2: Record<string, number | string> = { time: now }
-    if (isMultiOutcome) {
-      const outcomes = (market as MarketDetailResponse).outcomes
-      const uniform = 1 / outcomes.length
-      for (const o of outcomes) {
-        seedPoint[o.name] = uniform
-        seedPoint2[o.name] = uniform
-      }
+
+    if (isBinary) {
+      const yesPrice = Number(market.yes_price ?? 0.5)
+      const noPrice = Number(market.no_price ?? 0.5)
+      seedPoint["value"] = yesPrice
+      seedPoint["Yes"] = yesPrice
+      seedPoint["No"] = noPrice
+      seedPoint2["value"] = yesPrice
+      seedPoint2["Yes"] = yesPrice
+      seedPoint2["No"] = noPrice
     } else {
-      seedPoint["Yes"] = market.yes_price
-      seedPoint["No"] = market.no_price
-      seedPoint2["Yes"] = market.yes_price
-      seedPoint2["No"] = market.no_price
+      const uniform = outcomeList.length > 0 ? 1 / outcomeList.length : 0.5
+      const firstPrice = Number((outcomeList[0] as { price?: number })?.price ?? uniform)
+      seedPoint["value"] = isNaN(firstPrice) ? uniform : firstPrice
+      seedPoint2["value"] = seedPoint["value"]
+      for (const o of outcomeList) {
+        const p = Number((o as { price?: number }).price ?? uniform)
+        seedPoint[o.name] = isNaN(p) ? uniform : p
+        seedPoint2[o.name] = isNaN(p) ? uniform : p
+      }
     }
     setPriceHistory([seedPoint, seedPoint2] as LiveLinePoint[])
-  }, [market, priceHistoryData, isMultiOutcome])
+  }, [market, outcomeList, isBinary])
+
+  // Layer in historical price history data when it arrives — prepend so chart shows history behind now
+  useEffect(() => {
+    if (!priceHistoryData || priceHistoryData.length === 0) return
+
+    const historical = priceHistoryData.map((p: PriceHistoryPoint) => {
+      const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000 }
+      // value drives the first LiveLine (YES for binary)
+      const firstOutcome = p.outcomes[0]
+      point["value"] = Number(firstOutcome?.price ?? 0)
+      for (const o of p.outcomes) {
+        point[o.name] = Number((o as unknown as { price?: string }).price ?? 0)
+      }
+      return point as LiveLinePoint
+    })
+
+    setPriceHistory((prev) => {
+      // Remove the two seed points and prepend historical data
+      const rest = prev.slice(2)
+      return [...historical, ...rest]
+    })
+  }, [priceHistoryData])
 
   const { data: currentUser } = useCurrentUser()
   const { mutateAsync: resolveMarket, isPending: isResolving } = useResolveMarket()
@@ -275,18 +307,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         <div className="relative rounded-xl border border-border bg-card p-5 overflow-hidden">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex flex-wrap items-center gap-3">
-              {isMultiOutcome
-                ? (market as MarketDetailResponse).outcomes.map((outcome, i) => (
-                    <div key={outcome.id} className="flex items-center gap-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{outcome.name}</div>
-                      {i < (market as MarketDetailResponse).outcomes.length - 1 && <div className="h-6 w-px bg-border" />}
-                    </div>
-                  ))
-                : (
+              {isBinary
+                ? (
                   <>
                     <div className="flex items-center gap-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
-                      <div className="text-lg font-bold text-green-500">${Number(market.yes_price).toFixed(2)}</div>
+                      <div className="text-lg font-bold text-green-500">${Number(market.yes_price ?? 0.5).toFixed(2)}</div>
                       <div className="text-xs text-muted-foreground">
                         {orderbookData?.bids?.[0] ? `${Number(orderbookData.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
@@ -301,6 +327,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                     </div>
                   </>
                 )
+                : outcomeList.slice(0, 4).map((outcome, i) => (
+                    <div key={outcome.id} className="flex items-center gap-2">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{outcome.name}</div>
+                      <div className="text-lg font-bold" style={{ color: chartColors[i % chartColors.length] }}>
+                        ${Number((outcome as { price?: number }).price ?? 0).toFixed(2)}
+                      </div>
+                    </div>
+                  ))
               }
             </div>
             <div className="flex items-center gap-2">
@@ -316,22 +350,37 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </div>
           </div>
           <div className="h-[220px]">
+            {priceHistory.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Loading chart...</div>
+            ) : (
             <LiveLineChart
               data={priceHistory}
-              value={priceHistory.at(-1)?.[outcomeNames[0] ?? "Yes"] as number ?? market.yes_price}
-              valueNo={outcomeNames.length > 1 ? priceHistory.at(-1)?.[outcomeNames[1]!] as number ?? market.no_price : undefined}
+              // value = first outcome's latest price (drives smooth interpolation)
+              value={priceHistory.at(-1)?.["value"] as number ?? Number(market.yes_price ?? 0)}
+              // valueNo = second outcome's latest price (drives secondary line for binary)
+              valueNo={isBinary ? (priceHistory.at(-1)?.["No"] as number ?? Number(market.no_price ?? 0)) : undefined}
               window={60}
               numXTicks={5}
               height={220}
               margin={{ top: 16, right: 36, bottom: 40, left: 48 }}
-              multiOutcome={outcomeNames.length > 2}
+              multiOutcome={!isBinary}
             >
               <LiveXAxis />
               <LiveYAxis />
-              {outcomeNames.map((name, i) => (
-                <LiveLine key={name} dataKey={name} stroke={chartColors[i % chartColors.length]} fill />
-              ))}
+              {isBinary ? (
+                // Binary: YES = green primary line, NO = red secondary line
+                <>
+                  <LiveLine key="Yes" dataKey="Yes" stroke="var(--green-500, #22c55e)" fill />
+                  <LiveLine key="No" dataKey="No" stroke="var(--red-500, #ef4444)" fill />
+                </>
+              ) : (
+                // Multi-outcome: one line per outcome, capped at 4 to avoid visual overload
+                outcomeNames.slice(0, 4).map((name, i) => (
+                  <LiveLine key={name} dataKey={name} stroke={chartColors[i % chartColors.length]} fill />
+                ))
+              )}
             </LiveLineChart>
+            )}
           </div>
           {/* Live Trade Ticker - floats over the chart */}
           <div className="absolute bottom-3 left-3 right-3 z-10 pointer-events-none">
@@ -353,66 +402,62 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
         {/* Tabs: Orderbook / Trades / Positions / Discussion / FAQs */}
         <Tabs defaultValue="orderbook" className="rounded-xl border border-border bg-card overflow-hidden">
-          <TabsList role="tablist" aria-label="Market details" className="w-full justify-start rounded-none border-b border-border bg-muted/50 p-0 h-auto">
-            <TabsTrigger value="orderbook" role="tab" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Orderbook</TabsTrigger>
-            <TabsTrigger value="trades" role="tab" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Trades</TabsTrigger>
-            <TabsTrigger value="positions" role="tab" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Positions</TabsTrigger>
-            <TabsTrigger value="discussion" role="tab" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">Discussion</TabsTrigger>
+          <TabsList role="tablist" aria-label="Market details" className="w-full justify-start rounded-none bg-muted/50 p-0 h-auto">
+            <TabsTrigger value="orderbook" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Orderbook</TabsTrigger>
+            <TabsTrigger value="trades" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Trades</TabsTrigger>
+            <TabsTrigger value="positions" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Positions</TabsTrigger>
+            <TabsTrigger value="discussion" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Discussion</TabsTrigger>
             {faqs && faqs.length > 0 && (
-              <TabsTrigger value="faqs" role="tab" className="rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-card px-4 py-2.5 text-xs font-semibold">FAQs</TabsTrigger>
+              <TabsTrigger value="faqs" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">FAQs</TabsTrigger>
             )}
           </TabsList>
 
-          <div className="p-4">
-            <TabsContent value="orderbook" role="tabpanel" className="min-h-[200px]">
+          <div className="p-4 space-y-3">
+            <TabsContent value="orderbook" role="tabpanel" className="max-h-[400px] overflow-y-auto">
               <OrderBook slug={slug} />
             </TabsContent>
-            <TabsContent value="trades" role="tabpanel" className="min-h-[200px]">
+            <TabsContent value="trades" role="tabpanel" className="max-h-[400px] overflow-y-auto">
               <TradeFeed
                 trades={[...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200) as Trade[]}
                 loading={tradesLoading}
               />
             </TabsContent>
 
-            <TabsContent value="positions" role="tabpanel" className="min-h-[200px]">
+            <TabsContent value="positions" role="tabpanel" className="max-h-[400px] overflow-y-auto">
               {holderOutcomes.length > 0 ? (
-                <div className="max-h-64 overflow-y-auto scrollbar-hide">
-                  <div className={holderOutcomes.length > 1 ? "grid grid-cols-2 gap-6" : ""}>
-                    {holderOutcomes.map(([outcomeName, holders]) => (
-                      <div key={outcomeName}>
-                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                          {outcomeName}
-                        </h4>
-                        <ul className="space-y-1.5">
-                          {holders.slice(0, 10).map((holder, i) => (
-                            <li key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/50 last:border-0">
-                              <span className="text-muted-foreground font-medium">{holder.username}</span>
-                              <span className="font-semibold">{Number(holder.shares_held).toFixed(0)} <span className="text-muted-foreground text-[10px]">shares</span></span>
-                            </li>
-                          ))}
-                          {holders.length === 0 && (
-                            <li className="text-xs text-muted-foreground py-2">No positions yet</li>
-                          )}
-                        </ul>
-                      </div>
-                    ))}
-                  </div>
+                <div className={holderOutcomes.length > 1 ? "grid grid-cols-2 gap-6" : ""}>
+                  {holderOutcomes.map(([outcomeName, holders]) => (
+                    <div key={outcomeName}>
+                      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        {outcomeName}
+                      </h4>
+                      <ul className="space-y-1.5">
+                        {holders.slice(0, 10).map((holder, i) => (
+                          <li key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/50 last:border-0">
+                            <span className="text-muted-foreground font-medium">{holder.username}</span>
+                            <span className="font-semibold">{Number(holder.shares_held).toFixed(0)} <span className="text-muted-foreground text-[10px]">shares</span></span>
+                          </li>
+                        ))}
+                        {holders.length === 0 && (
+                          <li className="text-xs text-muted-foreground py-2">No positions yet</li>
+                        )}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="py-8 text-center text-xs text-muted-foreground">No positions yet</div>
               )}
             </TabsContent>
 
-            <TabsContent value="discussion" role="tabpanel" className="min-h-[200px]">
-              <div className="mb-4">
-                <CommentForm slug={slug} />
-              </div>
+            <TabsContent value="discussion" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+              <CommentForm slug={slug} />
               <CommentList slug={slug} />
             </TabsContent>
 
-            <TabsContent value="faqs" role="tabpanel" className="min-h-[200px]">
+            <TabsContent value="faqs" role="tabpanel" className="max-h-[400px] overflow-y-auto">
               {faqs && faqs.length > 0 ? (
-                <div className="max-h-64 overflow-y-auto scrollbar-hide space-y-3">
+                <div className="space-y-3">
                   {faqs.map((faq, i) => (
                     <article key={faq.id} className={i > 0 ? "pt-3 border-t border-border" : ""}>
                       <h4 className="text-xs font-semibold text-foreground mb-1">{faq.question}</h4>
@@ -492,7 +537,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 <dd className="font-medium">{((Number((market as MarketDetailResponse).spread)) * 100).toFixed(1)}%</dd>
               </div>
             )}
-            {isMultiOutcome && (
+            {!isBinary && (
               <div className="flex items-center justify-between text-xs">
                 <dt className="text-muted-foreground">Type</dt>
                 <dd className="font-medium">Multi-outcome</dd>

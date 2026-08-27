@@ -18,7 +18,7 @@ router = APIRouter(tags=["trades"])
 @router.get("/trades", summary="Global trade feed", description="Public global feed of recent trades across all markets.")
 async def list_trades(
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=100),
+    page_size: int = Query(50, ge=1, le=200),
     market_slug: str | None = None,
     db: AsyncSession = Depends(get_db_replica),
 ):
@@ -64,7 +64,7 @@ async def list_trades(
 async def list_market_trades(
     slug: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=100),
+    page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_replica),
 ):
     market_result = await db.execute(select(Market).where(Market.slug == slug))

@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import NotFoundError, ValidationError
@@ -94,14 +94,24 @@ async def split(
             pos.shares_held += amount_after_fee
             pos.average_price = total_cost / pos.shares_held
         else:
-            pos = Position(
-                user_id=user.id,
-                market_id=market.id,
-                outcome_id=outcome_obj.id,
-                shares_held=amount_after_fee,
-                average_price=Decimal(str(avg_price)),
+            avg_p = Decimal(str(avg_price))
+            # Atomic upsert — eliminates SELECT-then-INSERT race
+            await db.execute(
+                text("""
+                    INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                    VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                    ON CONFLICT (user_id, market_id, outcome_id)
+                    DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                 average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                """),
+                {
+                    "user_id": user.id,
+                    "market_id": market.id,
+                    "outcome_id": outcome_obj.id,
+                    "shares_held": amount_after_fee,
+                    "average_price": avg_p,
+                }
             )
-            db.add(pos)
 
     await update_position(yes_outcome, yes_price)
     await update_position(no_outcome, no_price)

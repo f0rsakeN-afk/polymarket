@@ -16,10 +16,10 @@ export function useOrders(filters?: {
     queryFn: ({ pageParam }) => listOrders({ page: pageParam, page_size: 20, ...filters }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.data.has_more ? lastPageParam + 1 : undefined,
+      lastPage?.data?.has_more ? lastPageParam + 1 : undefined,
     select: (data) => ({
-      orders: data.pages.flatMap((p) => p.data.orders) as Order[],
-      hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
+      orders: data.pages.flatMap((p) => p.data.orders ?? []) as Order[],
+      hasMore: data.pages[data.pages.length - 1]?.data?.has_more ?? false,
     }),
   })
 }
@@ -40,7 +40,26 @@ export function usePlaceOrder() {
       qc.invalidateQueries({ queryKey: ["positions"] })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Order failed" })
+      const apiErr = err as { error_code?: string; message: string }
+      switch (apiErr.error_code) {
+        case "SLIPPAGE_EXCEEDED":
+          sileo.error({ title: "Slippage exceeded", description: "Price moved too much — try increasing slippage tolerance or reducing the order size." })
+          break
+        case "INSUFFICIENT_BALANCE":
+          sileo.error({ title: "Insufficient balance", description: "Not enough funds — deposit more to continue trading." })
+          break
+        case "INSUFFICIENT_SHARES":
+          sileo.error({ title: "Insufficient shares", description: "You don't hold enough shares for this sell order." })
+          break
+        case "MARKET_CLOSED":
+          sileo.error({ title: "Market closed", description: "This market is no longer active for trading." })
+          break
+        case "POST_ONLY_WOULD_CROSS":
+          sileo.error({ title: "Post-only order rejected", description: "Order would cross the spread — try increasing your limit price." })
+          break
+        default:
+          sileo.error({ title: apiErr.message || "Order failed" })
+      }
     },
   })
 }
@@ -56,7 +75,14 @@ export function useCancelOrder() {
       qc.invalidateQueries({ queryKey: ["positions"] })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Cancel failed" })
+      const apiErr = err as { error_code?: string; message: string }
+      switch (apiErr.error_code) {
+        case "NOT_FOUND":
+          sileo.error({ title: "Order not found", description: "This order may have already been cancelled or filled." })
+          break
+        default:
+          sileo.error({ title: apiErr.message || "Cancel failed" })
+      }
     },
   })
 }

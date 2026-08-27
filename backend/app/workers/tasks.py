@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.amm.engine import BinaryAMM
 from app.config import settings
@@ -68,6 +68,7 @@ def expire_stale_orders(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             async with get_session() as db:
@@ -84,7 +85,7 @@ def expire_stale_orders(self):
                 if not orders:
                     return "No orders to expire"
 
-                expired_ids = []
+                expired_count = 0
                 for order in orders:
                     order.status = "expired"
                     order.executed_at = datetime.now(UTC)
@@ -95,7 +96,7 @@ def expire_stale_orders(self):
                         wallet = wallet_result.scalar_one_or_none()
                         if wallet:
                             wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
-                    expired_ids.append(str(order.id))
+                    expired_count += 1
 
                 await db.commit()
 
@@ -110,7 +111,7 @@ def expire_stale_orders(self):
                     return_exceptions=True,
                 )
 
-                return f"Expired {len(expired_ids)} orders"
+                return f"Expired {expired_count} orders"
 
         result = celery_run(_run())
     finally:
@@ -135,6 +136,7 @@ def check_limit_order_execution(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             async with get_session() as db:
@@ -269,14 +271,23 @@ def check_limit_order_execution(self):
                                  pos.shares_held = total_shares_pos
                              else:
                                  avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
-                                 pos = Position(
-                                     user_id=re_locked_order.user_id,
-                                     market_id=market.id,
-                                     outcome_id=outcome.id,
-                                     shares_held=amm_shares,
-                                     average_price=avg_price,
+                                 # Upsert: INSERT ON CONFLICT DO UPDATE — atomic, no race between SELECT and INSERT
+                                 await db.execute(
+                                     text("""
+                                         INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                                         VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                                         ON CONFLICT (user_id, market_id, outcome_id)
+                                         DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                                      average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                                     """),
+                                     {
+                                         "user_id": re_locked_order.user_id,
+                                         "market_id": market.id,
+                                         "outcome_id": outcome.id,
+                                         "shares_held": amm_shares,
+                                         "average_price": avg_price,
+                                     }
                                  )
-                                 db.add(pos)
 
                              market.total_volume += remaining
                              market.num_trades += 1
@@ -348,10 +359,10 @@ def check_limit_order_execution(self):
                          )
                          db.add(tx)
 
-                if re_locked_order.status in ("filled", "partial") or float(remaining_after_book) != float(order_amount):
+                if re_locked_order.status in ("filled", "partial"):
                     await db.commit()
 
-                    if re_locked_order.status == "filled" or float(remaining_after_book) != float(order_amount):
+                    if re_locked_order.status == "filled":
                         total = float(pool.yes_shares) + float(pool.no_shares)
                         yes_price = float(pool.no_shares) / total if total > 0 else 0.5
                         no_price = float(pool.yes_shares) / total if total > 0 else 0.5
@@ -421,6 +432,7 @@ def sync_amm_prices(self):
         async def _run():
             from app.models import LiquidityPool, Market
             from app.redis import get_redis
+            from app.websocket.manager import redis_pubsub
 
             async with get_session() as db:
                 result = await db.execute(
@@ -451,6 +463,10 @@ def sync_amm_prices(self):
                     "updated_at": datetime.now(UTC).isoformat(),
                 })
                 pipe.expire(key, 300)  # 5 min TTL
+
+                # Push WS update for every active market — extends chart lines in real-time
+                await redis_pubsub.publish_price_update(
+                    str(market.id), yes_price, no_price, float(market.total_volume))
 
             await pipe.execute()
             return f"Synced prices for {len(rows)} markets"
@@ -561,6 +577,7 @@ def check_markets_ready_to_resolve(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             async with get_session() as db:
@@ -712,6 +729,9 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 is_winner = str(pos.outcome_id) == winning_outcome_id
                 # Use Decimal throughout to avoid float rounding — convert to float only at DB write
                 payout: Decimal = pos.shares_held if is_winner else Decimal(0)
+
+                # Mark as settled — prevents double-claim if claim_winnings is called after Celery settles
+                pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
 
                 if payout > 0:
                     wallet.balance += payout
@@ -1095,14 +1115,14 @@ def distribute_protocol_fees(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             async with get_session() as db:
-                result = await LiquidityService.distribute_protocol_fees(db)
-                logger.info(f"Protocol fees distributed: {result}")
-                return result
+                return await LiquidityService.distribute_protocol_fees(db)
 
         result = celery_run(_run())
+        logger.info(f"Protocol fees distributed: {result}")
     finally:
         duration_ms = (time.perf_counter() - start) * 1000
         logger.info(json.dumps({

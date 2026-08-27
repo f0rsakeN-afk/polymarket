@@ -35,16 +35,7 @@ class DecimalField:
 
     @classmethod
     def _validate(cls, v: any, info: any = None) -> Decimal:
-        if isinstance(v, Decimal):
-            d = Decimal(str(v))
-        elif isinstance(v, float):
-            d = Decimal(str(v))
-        elif isinstance(v, int):
-            d = Decimal(v)
-        elif isinstance(v, str):
-            d = Decimal(v)
-        else:
-            d = Decimal(str(v))
+        d = Decimal(str(v)) if not isinstance(v, Decimal) else v
         # Quantize first — don't reject zero here (MoneyField allows 0, only PositiveMoney rejects it)
         return d.quantize(Decimal("0.00000001"))
 

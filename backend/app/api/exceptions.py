@@ -65,5 +65,5 @@ class SlippageExceededError(AppException):
         super().__init__(400, message, "SLIPPAGE_EXCEEDED", details or {
             "expected_price": expected_price,
             "actual_price": actual_price,
-            "max_slippage": max_slippage,
+            "max_slippage": float(max_slippage),
         })

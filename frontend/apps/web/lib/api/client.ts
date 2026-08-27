@@ -176,14 +176,21 @@ async function doRefresh(): Promise<string | null> {
   }
 }
 
+// Routes that are publicly accessible — 401 on these means "unauthenticated", not "session expired"
+const PUBLIC_PATHS = ["/markets", "/trades"]
+
+function isPublicPath(pathname: string) {
+  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+}
+
 function redirectToLogin() {
-  if (
-    typeof window !== "undefined" &&
-    !window.location.pathname.startsWith("/login") &&
-    !window.location.pathname.startsWith("/signup")
-  ) {
-    window.location.href = "/login"
-  }
+  if (typeof window === "undefined") return
+  const { pathname } = window.location
+  // Never redirect if already on an auth page
+  if (pathname.startsWith("/login") || pathname.startsWith("/signup")) return
+  // Don't redirect for public pages — show empty/error state instead
+  if (isPublicPath(pathname)) return
+  window.location.href = "/login"
 }
 
 // ─── Pending request deduplication ──────────────────────────────────────────

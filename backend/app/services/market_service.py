@@ -64,7 +64,12 @@ class MarketService:
                         return None
                 except ValueError:
                     pass
-            return float(data["yes_price"]), float(data["no_price"])
+            yes_price = float(data["yes_price"])
+            no_price = float(data["no_price"])
+            # 0 prices = uninitialized market, fall through to DB
+            if yes_price == 0 or no_price == 0:
+                return None
+            return yes_price, no_price
         except Exception:
             return None
 

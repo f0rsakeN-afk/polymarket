@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.amm.engine import BinaryAMM
@@ -29,8 +29,9 @@ from app.models.wallet import Transaction, Wallet
 from app.redis import get_redis, redis_cb
 from app.schemas.order import OrderRequest
 from app.services.cache_service import (
-    cache_invalidate_market,
+    build_orderbook,
     cache_invalidate_market_lists,
+    cache_set_orderbook,
 )
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
@@ -244,10 +245,10 @@ class OrderService:
                 ).with_for_update()
             )
             position = pos_result.scalar_one_or_none()
-            if not position or position.shares_held < amount:
+            if not position or float(position.shares_held or 0) < float(amount):
                 raise ValidationError(
                     f"Insufficient {data.outcome} shares. "
-                    f"Held: {float(position.shares_held) if position else 0}, "
+                    f"Position: {float(position.shares_held) if position else 0}, "
                     f"Requested: {float(amount)}"
                 )
 
@@ -488,14 +489,23 @@ class OrderService:
                 position.shares_held = total_shares_pos
             else:
                 avg_price = total_cost / total_shares if total_shares > 0 else Decimal(0)
-                position = Position(
-                    user_id=user.id,
-                    market_id=market.id,
-                    outcome_id=outcome.id,
-                    shares_held=total_shares,
-                    average_price=avg_price,
+                # Upsert: atomic INSERT ON CONFLICT DO UPDATE — eliminates race between SELECT and INSERT
+                await db.execute(
+                    text("""
+                        INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                        VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                        ON CONFLICT (user_id, market_id, outcome_id)
+                        DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                     average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                    """),
+                    {
+                        "user_id": user.id,
+                        "market_id": market.id,
+                        "outcome_id": outcome.id,
+                        "shares_held": total_shares,
+                        "average_price": avg_price,
+                    }
                 )
-                db.add(position)
 
         market.total_volume += amount
         market.num_trades += 1
@@ -599,8 +609,10 @@ class OrderService:
                 "amount": float(total_shares),
                 "username": user.username,
             })
-            await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", {})
-            await cache_invalidate_market(str(market.id))
+            # Build and cache the new orderbook, then push it directly through WS
+            orderbook_data = await build_orderbook(db, str(market.id))
+            await cache_set_orderbook(str(market.id), orderbook_data, ttl=60)
+            await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", orderbook_data)
             await cache_invalidate_market_lists()
         except Exception:
             pass
@@ -644,30 +656,27 @@ class OrderService:
         user: User,
         order_id: str,
     ):
+        # Lock order + wallet together in deterministic order to prevent deadlocks
         result = await db.execute(
-            select(Order).where(
+            select(Order, Wallet)
+            .join(Wallet, Wallet.user_id == Order.user_id)
+            .where(
                 Order.id == order_id,
                 Order.user_id == user.id,
                 Order.status == "pending",
-            ).with_for_update()
+            )
+            .with_for_update()
         )
-        order = result.scalar_one_or_none()
-        if not order:
+        row = result.one_or_none()
+        if not row:
             raise NotFoundError("Pending order not found")
 
-        if order.status != "pending":
-            raise ValidationError(f"Only pending orders can be cancelled (current status: {order.status})")
-
+        order, wallet = row
         order.status = "cancelled"
         order.executed_at = datetime.now(UTC)
 
         if order.side == "buy" and order.amount > 0:
-            wallet = await db.execute(
-                select(Wallet).where(Wallet.user_id == user.id).with_for_update()
-            )
-            wallet = wallet.scalar_one_or_none()
-            if wallet:
-                wallet.locked_balance = max(Decimal(0), wallet.locked_balance - (order.amount - order.remaining_amount))
+            wallet.locked_balance = max(Decimal(0), wallet.locked_balance - (order.amount - order.remaining_amount))
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")

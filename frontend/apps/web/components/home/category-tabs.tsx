@@ -30,10 +30,10 @@ function CategoryTabs({ tag }: CategoryTabsProps) {
             key={cat}
             onClick={() => handleClick(cat)}
             className={cn(
-              "px-4 py-2 text-xs font-medium whitespace-nowrap border-b-2 transition-colors",
+              "relative px-4 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
               isSelected
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
+                ? "text-foreground after:absolute after:inset-x-[-6px] after:bottom-0 after:h-[3px] after:bg-primary after:opacity-100 after:rounded-full after:transition-opacity"
+                : "after:absolute after:inset-x-[-6px] after:bottom-0 after:h-[3px] after:bg-primary after:opacity-0 after:rounded-full after:transition-opacity hover:after:opacity-40"
             )}
           >
             {cat}

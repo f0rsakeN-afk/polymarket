@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 
 from fastapi import HTTPException, Request, status
@@ -9,12 +8,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.exceptions import AppException
 from app.api.responses import error_response
+from app.config import settings
 
 logger = logging.getLogger("polymarket")
 
 # Read once at import time — does not change at runtime, only at startup.
 # Never use for security decisions; only for information exposure.
-_APP_ENV = os.environ.get("APP_ENV", "development")
+_APP_ENV = settings.app_env
 
 
 def _sanitise_for_client(message: str) -> str:

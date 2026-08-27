@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,14 +167,24 @@ class MatchingEngine:
                 ) / total_shares if total_shares > 0 else Decimal(0)
                 buyer_pos.shares_held = total_shares
             else:
-                buyer_pos = Position(
-                    user_id=maker.user_id,
-                    market_id=maker.market_id,
-                    outcome_id=maker.outcome_id,
-                    shares_held=match_shares,
-                    average_price=match_price,
+                avg_price = usdc_value / match_shares if match_shares > 0 else Decimal(0)
+                # Atomic upsert — eliminates SELECT-then-INSERT race
+                await db.execute(
+                    text("""
+                        INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                        VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                        ON CONFLICT (user_id, market_id, outcome_id)
+                        DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                     average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                    """),
+                    {
+                        "user_id": maker.user_id,
+                        "market_id": maker.market_id,
+                        "outcome_id": maker.outcome_id,
+                        "shares_held": match_shares,
+                        "average_price": avg_price,
+                    }
                 )
-                db.add(buyer_pos)
         else:
             buyer_pos = await db.execute(
                 select(Position).where(
@@ -191,14 +201,24 @@ class MatchingEngine:
                 ) / total_shares if total_shares > 0 else Decimal(0)
                 buyer_pos.shares_held = total_shares
             else:
-                buyer_pos = Position(
-                    user_id=taker_user_id,
-                    market_id=maker.market_id,
-                    outcome_id=maker.outcome_id,
-                    shares_held=match_shares,
-                    average_price=match_price,
+                avg_price = usdc_value / match_shares if match_shares > 0 else Decimal(0)
+                # Atomic upsert — eliminates SELECT-then-INSERT race
+                await db.execute(
+                    text("""
+                        INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                        VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                        ON CONFLICT (user_id, market_id, outcome_id)
+                        DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                     average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                    """),
+                    {
+                        "user_id": taker_user_id,
+                        "market_id": maker.market_id,
+                        "outcome_id": maker.outcome_id,
+                        "shares_held": match_shares,
+                        "average_price": avg_price,
+                    }
                 )
-                db.add(buyer_pos)
 
             seller_pos = await db.execute(
                 select(Position).where(

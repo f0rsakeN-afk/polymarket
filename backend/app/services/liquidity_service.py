@@ -216,6 +216,16 @@ class LiquidityService:
             )
             treasury_wallet = treasury_wallet_result.scalar_one_or_none()
 
+        if not treasury_wallet:
+            treasury_wallet = Wallet(
+                user_id=treasury_user.id,
+                balance=Decimal(0),
+                locked_balance=Decimal(0),
+                currency="USDC",
+            )
+            db.add(treasury_wallet)
+            await db.flush()
+
         distributed = []
         total = Decimal(0)
         for pool, market in pools:

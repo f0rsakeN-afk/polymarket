@@ -10,6 +10,11 @@ Usage:
     await cache_invalidate_user(user_id)         # invalidates all user_id scopes
 """
 
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.market import Outcome
+from app.models.order import Order
 from app.redis import get_redis, redis_cb
 
 # ── Market-scoped caches ────────────────────────────────────────────────────────
@@ -122,6 +127,46 @@ async def cache_get_orderbook(market_id: str) -> dict | None:
     r = await get_redis()
     raw = await redis_cb.call(lambda: r.get(f"cache:cm:ob:{market_id}"))
     return _loads(raw) if raw else None
+
+
+async def build_orderbook(db: AsyncSession, market_id: str) -> dict:
+    """Build orderbook dict from pending limit orders. Single source of truth for all orderbook data."""
+    outcomes_result = await db.execute(
+        select(Outcome).where(Outcome.market_id == market_id).order_by(Outcome.outcome_index)
+    )
+    outcomes = outcomes_result.scalars().all()
+    outcome_names = {str(o.id): o.name.lower() for o in outcomes}
+
+    orderbook: dict[str, dict[str, list[dict]]] = {
+        o.name.lower(): {"bids": [], "asks": []} for o in outcomes
+    }
+
+    pending = await db.execute(
+        select(
+            Order.outcome_id,
+            Order.side,
+            Order.price,
+            func.sum(Order.remaining_amount).label("total_size"),
+        )
+        .where(
+            Order.market_id == market_id,
+            Order.status == "pending",
+            Order.order_type.in_(["limit", "fill_or_kill"]),
+        )
+        .group_by(Order.outcome_id, Order.side, Order.price)
+        .order_by(Order.outcome_id, Order.side, Order.price.desc())
+    )
+    for row in pending.all():
+        outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
+        if outcome_name not in orderbook:
+            continue
+        entry = {"price": str(row.price), "size": str(row.total_size)}
+        if row.side == "buy":
+            orderbook[outcome_name]["bids"].append(entry)
+        else:
+            orderbook[outcome_name]["asks"].append(entry)
+
+    return {"outcomes": orderbook}
 
 
 # ── User-scoped caches ─────────────────────────────────────────────────────────

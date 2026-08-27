@@ -131,11 +131,20 @@ async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_
 
 
 def _get_client_ip(request: Request) -> str:
-    """Get real client IP, accounting for X-Forwarded-For."""
+    """Get real client IP, accounting for X-Forwarded-For. Port is always stripped."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        raw = forwarded.split(",")[0].strip()
+    else:
+        raw = request.client.host if request.client else "unknown"
+    # Strip port: handle both "ip:port" and "[ipv6]:port" forms
+    if raw.startswith("["):
+        bracket_end = raw.find("]")
+        if bracket_end != -1:
+            return raw[:bracket_end + 1]
+    elif ":" in raw and raw.count(":") == 1:
+        return raw.rsplit(":", 1)[0]
+    return raw
 
 
 def _ip_matches(stored_ip: str, current_ip: str) -> bool:
@@ -144,6 +153,21 @@ def _ip_matches(stored_ip: str, current_ip: str) -> bool:
     IPv4: compare first three octets (e.g. 1.2.3.x and 1.2.3.y match).
     IPv6: compare first 48 bits (/48).
     """
+    def _strip_port(ip: str) -> str:
+        """Strip port from IP (both IPv4:port and [ipv6]:port forms)."""
+        ip = ip.strip()
+        if ip.startswith("["):
+            # [ipv6]:port
+            bracket_end = ip.find("]")
+            if bracket_end != -1:
+                return ip[:bracket_end + 1]
+            return ip
+        if ":" in ip:
+            # IPv4:port or plain IPv6
+            if ip.count(":") == 1:
+                return ip.rsplit(":", 1)[0]
+        return ip
+
     def _normalized_parts(ip: str) -> tuple[list[str] | None, bool]:
         ip_str = ip.split(",")[0].strip()
         # Handle [ipv6]:port bracket notation
@@ -371,7 +395,7 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     ua = request.headers.get("user-agent", "")[:200]
     token = str(uuid.uuid4())
     r = await get_redis()
-    # Store as "user_id:ip:ua" for IP-binding on verification
+    # Store as "user_id:ip:ua" for IP-binding on verification — ip already stripped of port by _strip_port in _get_client_ip
     await redis_cb.call(lambda: r.set(f"magicurl:{token}", f"{user.id}:{ip}:{ua}", ex=900))
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"

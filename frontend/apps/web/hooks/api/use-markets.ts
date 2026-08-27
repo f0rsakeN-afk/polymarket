@@ -27,9 +27,9 @@ export function useMarkets(params?: { q?: string; category?: string; status?: st
     queryFn: ({ pageParam = 1 }) => listMarkets({ ...params, page: pageParam, page_size: 20 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.has_more ? lastPageParam + 1 : undefined,
+      lastPage?.has_more ? lastPageParam + 1 : undefined,
     select: (data) => ({
-      markets: data.pages.flatMap((p) => p.data) as MarketResponse[],
+      markets: data.pages.flatMap((p) => p.data ?? []) as MarketResponse[],
       hasMore: data.pages[data.pages.length - 1]?.has_more ?? false,
     }),
     staleTime: 30_000,
@@ -69,8 +69,8 @@ export function useMarketTrades(slug: string) {
       lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
     enabled: !!slug,
     select: (data) => ({
-      trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
-      hasMore: data.pages[data.pages.length - 1]?.data.trades.length === 50,
+      trades: data.pages.flatMap((p) => p.data.trades ?? []) as Trade[],
+      hasMore: data.pages[data.pages.length - 1]?.data?.trades?.length === 50,
     }),
     staleTime: 10_000,
   })
@@ -86,8 +86,8 @@ export function useGlobalTrades(params?: { market_slug?: string }) {
     getNextPageParam: (lastPage, _, lastPageParam) =>
       lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
     select: (data) => ({
-      trades: data.pages.flatMap((p) => p.data.trades) as Trade[],
-      hasMore: data.pages[data.pages.length - 1]?.data.trades.length === 50,
+      trades: data.pages.flatMap((p) => p.data.trades ?? []) as Trade[],
+      hasMore: data.pages[data.pages.length - 1]?.data?.trades?.length === 50,
     }),
     staleTime: 10_000,
   })
