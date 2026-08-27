@@ -177,7 +177,7 @@ async function doRefresh(): Promise<string | null> {
 }
 
 // Routes that are publicly accessible — 401 on these means "unauthenticated", not "session expired"
-const PUBLIC_PATHS = ["/markets", "/trades"]
+const PUBLIC_PATHS = ["/", "/markets", "/trades", "/docs", "/faq", "/legal", "/support"]
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))

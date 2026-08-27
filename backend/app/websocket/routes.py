@@ -73,9 +73,7 @@ async def market_websocket(websocket: WebSocket, market_id: str):
     client_ip = _get_real_client_ip(websocket)
     token = _get_token_from_request(websocket)
     user_id = await verify_ws_token(token)
-    if not user_id:
-        await websocket.close(code=4001, reason="Unauthorized")
-        return
+    # user_id may be None — market data is public; only require auth for user-specific features
 
     accepted = await manager.connect(websocket, market_id, client_ip=client_ip, user_id=user_id)
     if not accepted:

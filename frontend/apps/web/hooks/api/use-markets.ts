@@ -65,12 +65,17 @@ export function useMarketTrades(slug: string) {
     queryKey: queryKeys.marketTrades(slug),
     queryFn: ({ pageParam }) => getMarketTrades(slug, { page: pageParam, page_size: 50 }),
     initialPageParam: 1,
-    getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
+    getNextPageParam: (lastPage, _, lastPageParam) => {
+      const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades
+      return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
+    },
     enabled: !!slug,
     select: (data) => ({
-      trades: data.pages.flatMap((p) => p.data.trades ?? []) as Trade[],
-      hasMore: data.pages[data.pages.length - 1]?.data?.trades?.length === 50,
+      trades: data.pages.flatMap((p) => (p as { data?: { trades?: Trade[] } })?.data?.trades ?? []) as Trade[],
+      hasMore: (() => {
+        const last = data.pages[data.pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
+        return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
+      })(),
     }),
     staleTime: 10_000,
   })
@@ -83,11 +88,16 @@ export function useGlobalTrades(params?: { market_slug?: string }) {
     queryKey: queryKeys.globalTrades(params?.market_slug),
     queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
     initialPageParam: 1,
-    getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage?.data?.trades?.length === 50 ? lastPageParam + 1 : undefined,
+    getNextPageParam: (lastPage, _, lastPageParam) => {
+      const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades
+      return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
+    },
     select: (data) => ({
-      trades: data.pages.flatMap((p) => p.data.trades ?? []) as Trade[],
-      hasMore: data.pages[data.pages.length - 1]?.data?.trades?.length === 50,
+      trades: data.pages.flatMap((p) => (p as { data?: { trades?: Trade[] } })?.data?.trades ?? []) as Trade[],
+      hasMore: (() => {
+        const last = data.pages[data.pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
+        return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
+      })(),
     }),
     staleTime: 10_000,
   })

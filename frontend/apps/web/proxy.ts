@@ -86,7 +86,7 @@ function setSecurityHeaders(response: NextResponse) {
   }
 }
 
-export default async function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Static / public paths — no auth needed
@@ -102,7 +102,7 @@ export default async function proxy(request: NextRequest) {
   }
 
   // Auth pages — redirect to portfolio if already logged in
-  if (pathname.startsWith("/login") || pathname.startsWith("/signup")) {
+  if (pathname.startsWith("/login") || pathname.startsWith("/signup") || pathname.startsWith("/forgot-password") || pathname.startsWith("/reset-password")) {
     const { user } = await validateSession(request);
     if (user) {
       const rawNext = request.nextUrl.searchParams.get("next") ?? "/portfolio";

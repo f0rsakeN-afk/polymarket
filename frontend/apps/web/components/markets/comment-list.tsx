@@ -1,7 +1,6 @@
 "use client"
 
 import { memo, useCallback, useState } from "react"
-import Link from "next/link"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -272,7 +271,7 @@ const CommentRow = memo(function CommentRow({
 
             {depth < 3 && (
               <button
-                onClick={() => setShowReplyForm((v) => !v)}
+                onClick={() => { if (!currentUser) { sileo.info({ title: "Sign in to reply" }); return } setShowReplyForm((v) => !v) }}
                 className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
               >
                 Reply
@@ -360,6 +359,10 @@ function CommentForm({ slug }: { slug: string }) {
   })
 
   const onSubmit = useCallback(async (data: CommentInput) => {
+    if (!currentUser) {
+      sileo.info({ title: "Sign in to comment" })
+      return
+    }
     try {
       await postComment({ content: data.content, parent_id: undefined })
       sileo.success({ title: "Comment posted" })
@@ -367,22 +370,14 @@ function CommentForm({ slug }: { slug: string }) {
     } catch (e) {
       sileo.error({ title: "Failed to post", description: e instanceof Error ? e.message : "Unknown error" })
     }
-  }, [postComment, reset])
-
-  if (!currentUser) {
-    return (
-      <p className="text-xs text-muted-foreground py-2">
-        <Link href="/login" className="underline underline-offset-2 hover:text-foreground font-medium">Sign in</Link> to join the discussion
-      </p>
-    )
-  }
+  }, [currentUser, postComment, reset])
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2 items-center" aria-label="Post a comment">
-      <Avatar username={currentUser.username ?? "you"} />
+      <Avatar username={currentUser?.username ?? "you"} />
       <Input
         {...register("content")}
-        placeholder="Add a comment..."
+        placeholder={currentUser ? "Add a comment..." : "Sign in to comment..."}
         className="h-7 text-xs flex-1"
         aria-describedby={errors.content ? "comment-error" : undefined}
       />
@@ -414,18 +409,19 @@ const CommentList = memo(function CommentList({ slug }: { slug: string }) {
     )
   }
 
-  if (!comments || comments.length === 0) {
+  const visibleComments = comments.filter((c) => !c.is_deleted)
+
+  if (!visibleComments || visibleComments.length === 0) {
     return (
       <div className="py-8 text-center space-y-1">
         <p className="text-xs font-medium text-muted-foreground">No comments yet</p>
-        <p className="text-[10px] text-muted-foreground/60">Be the first to share your thoughts</p>
       </div>
     )
   }
 
   return (
     <div role="feed" aria-label="Comments" aria-live="polite">
-      {comments.map((comment) => (
+      {visibleComments.map((comment) => (
         <CommentRow key={comment.id} comment={comment} slug={slug} />
       ))}
     </div>
