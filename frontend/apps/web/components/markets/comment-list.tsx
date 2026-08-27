@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useState, KeyboardEvent } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -75,6 +75,11 @@ function ReplyForm({ onReply, isPending, onCancel }: {
     setValue("")
   }, [value, onReply])
 
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { handleSubmit() }
+    if (e.key === "Escape") onCancel()
+  }, [handleSubmit, onCancel])
+
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
       <Textarea
@@ -82,10 +87,7 @@ function ReplyForm({ onReply, isPending, onCancel }: {
         className="min-h-[64px] resize-none text-xs"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { handleSubmit() }
-          if (e.key === "Escape") onCancel()
-        }}
+        onKeyDown={handleKeyDown}
       />
       <div className="flex items-center justify-end gap-2">
         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onCancel} disabled={isPending}>Cancel</Button>
@@ -112,16 +114,18 @@ function EditForm({ comment, onEdit, isPending, onCancel }: {
     await onEdit(value.trim())
   }, [value, comment.content, onEdit])
 
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { handleSubmit() }
+    if (e.key === "Escape") onCancel()
+  }, [handleSubmit, onCancel])
+
   return (
     <div className="mt-1 flex flex-col gap-2">
       <Textarea
         className="min-h-[64px] resize-none text-xs"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { handleSubmit() }
-          if (e.key === "Escape") onCancel()
-        }}
+        onKeyDown={handleKeyDown}
       />
       <div className="flex items-center justify-end gap-2">
         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onCancel} disabled={isPending}>Cancel</Button>
@@ -209,8 +213,19 @@ const CommentRow = memo(function CommentRow({
 
   const handleLike = useCallback(() => {
     setLiked((v) => !v)
-    setLikeCount((n) => liked ? n - 1 : n + 1)
-  }, [liked])
+    setLikeCount((n) => n === 0 ? 1 : n - 1)
+  }, [])
+
+  const handleReplyClick = useCallback(() => {
+    if (!currentUser) { sileo.info({ title: "Sign in to reply" }); return }
+    setShowReplyForm((v) => !v)
+  }, [currentUser])
+
+  const handleEditClick = useCallback(() => { setEditing(true) }, [])
+
+  const handleCancelEdit = useCallback(() => { setEditing(false) }, [])
+
+  const handleCancelReply = useCallback(() => { setShowReplyForm(false) }, [])
 
   if (comment.is_deleted) {
     return (
@@ -248,7 +263,7 @@ const CommentRow = memo(function CommentRow({
               comment={comment}
               onEdit={handleEdit}
               isPending={false}
-              onCancel={() => setEditing(false)}
+              onCancel={handleCancelEdit}
             />
           ) : (
             <p className="text-xs leading-relaxed text-foreground whitespace-pre-wrap break-words">{comment.content}</p>
@@ -271,7 +286,7 @@ const CommentRow = memo(function CommentRow({
 
             {depth < 3 && (
               <button
-                onClick={() => { if (!currentUser) { sileo.info({ title: "Sign in to reply" }); return } setShowReplyForm((v) => !v) }}
+                onClick={handleReplyClick}
                 className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
               >
                 Reply
@@ -280,7 +295,7 @@ const CommentRow = memo(function CommentRow({
 
             {isOwn && !editing && (
               <button
-                onClick={() => { setEditing(true) }}
+                onClick={handleEditClick}
                 className="text-[10px] text-muted-foreground hover:text-foreground font-medium transition-colors"
               >
                 Edit
@@ -316,7 +331,7 @@ const CommentRow = memo(function CommentRow({
             <ReplyForm
               onReply={handleReply}
               isPending={false}
-              onCancel={() => setShowReplyForm(false)}
+              onCancel={handleCancelReply}
             />
           )}
 

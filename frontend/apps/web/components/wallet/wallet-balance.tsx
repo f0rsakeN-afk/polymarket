@@ -1,5 +1,6 @@
 "use client"
 
+import { memo } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
 import type { Wallet } from "@/hooks/api/types/wallet"
 
@@ -15,7 +16,7 @@ interface WalletBalanceProps {
   loading?: boolean
 }
 
-function WalletBalance({ wallet, loading }: WalletBalanceProps) {
+const WalletBalance = memo(function WalletBalance({ wallet, loading }: WalletBalanceProps) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 text-xs/relaxed">
       <h3 className="mb-3 text-sm font-medium">Wallet</h3>
@@ -43,6 +44,6 @@ function WalletBalance({ wallet, loading }: WalletBalanceProps) {
       )}
     </div>
   )
-}
+})
 
 export { WalletBalance }

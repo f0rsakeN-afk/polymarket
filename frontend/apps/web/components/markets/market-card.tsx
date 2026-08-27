@@ -1,6 +1,6 @@
 "use client"
 
-import { memo } from "react"
+import { memo, useMemo } from "react"
 import Link from "next/link"
 import type { MarketResponse } from "@/hooks/api/types/market"
 
@@ -15,7 +15,7 @@ interface MarketCardProps {
   market: MarketResponse
 }
 
-function ProbabilityBar({ prob, color, label }: { prob: number; color: string; label?: string }) {
+const ProbabilityBar = memo(function ProbabilityBar({ prob, color, label }: { prob: number; color: string; label?: string }) {
   return (
     <div
       role="progressbar"
@@ -34,7 +34,7 @@ function ProbabilityBar({ prob, color, label }: { prob: number; color: string; l
       </span>
     </div>
   )
-}
+})
 
 const MULTI_COLORS = [
   "#22c55e", "#ef4444", "#3b82f6", "#f59e0b", "#a855f7",
@@ -87,15 +87,18 @@ const OutcomeGrid = memo(function OutcomeGrid({
   )
 })
 
-function MarketCard({ market }: MarketCardProps) {
+const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
   const isMulti = market.outcomes && market.outcomes.length > 2
 
-  const displayOutcomes: { id: string; name: string; price: string; outcome_index: number }[] = isMulti
-    ? market.outcomes!.map((o) => ({ id: o.id, name: o.name, price: String(1 / market.outcomes!.length), outcome_index: o.outcome_index }))
-    : [
-        { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
-        { id: "no", name: "No", price: market.no_price, outcome_index: 1 },
-      ]
+  const displayOutcomes = useMemo(() => {
+    if (isMulti) {
+      return market.outcomes!.map((o) => ({ id: o.id, name: o.name, price: String(1 / market.outcomes!.length), outcome_index: o.outcome_index }))
+    }
+    return [
+      { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
+      { id: "no", name: "No", price: market.no_price, outcome_index: 1 },
+    ]
+  }, [isMulti, market.outcomes, market.yes_price, market.no_price])
 
   return (
     <article className="rounded-xl border border-border bg-card overflow-hidden hover:border-primary/30 hover:shadow-md hover:-translate-y-px transition-all duration-200 flex flex-col">
@@ -135,7 +138,7 @@ function MarketCard({ market }: MarketCardProps) {
       </div>
     </article>
   )
-}
+})
 
 export { MarketCard }
 export type { MarketCardProps }

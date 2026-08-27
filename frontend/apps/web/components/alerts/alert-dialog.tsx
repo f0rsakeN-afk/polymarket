@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -19,6 +19,9 @@ import { useCreateAlert } from "@/hooks/api/use-alerts"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
 import Link from "next/link"
+
+const QUICK_FILL_OPTIONS = ["yes", "no"] as const
+const QUICK_FILL_CONDITIONS = ["above", "below"] as const
 
 const alertSchema = z.object({
   outcome: z.enum(["yes", "no"]),
@@ -56,7 +59,21 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
     }
   }, [createAlert, marketId, reset])
 
-  const quickFill = (price: number) => setValue("trigger_price", price)
+  const quickFill = useCallback((price: number) => {
+    setValue("trigger_price", price)
+  }, [setValue])
+
+  const handleOutcomeClick = useCallback((o: typeof QUICK_FILL_OPTIONS[number]) => {
+    setValue("outcome", o)
+  }, [setValue])
+
+  const handleConditionClick = useCallback((c: typeof QUICK_FILL_CONDITIONS[number]) => {
+    setValue("condition", c)
+  }, [setValue])
+
+  const makeOutcomeHandler = useCallback((o: typeof QUICK_FILL_OPTIONS[number]) => () => handleOutcomeClick(o), [handleOutcomeClick])
+  const makeConditionHandler = useCallback((c: typeof QUICK_FILL_CONDITIONS[number]) => () => handleConditionClick(c), [handleConditionClick])
+  const makeQuickFillHandler = useCallback((price: number) => () => quickFill(price), [quickFill])
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -85,11 +102,11 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
           <div>
             <label className="text-xs text-muted-foreground mb-1.5 block">Outcome</label>
             <div className="grid grid-cols-2 gap-2">
-              {(["yes", "no"] as const).map((o) => (
+              {QUICK_FILL_OPTIONS.map((o) => (
                 <button
                   key={o}
                   type="button"
-                  onClick={() => setValue("outcome", o)}
+                  onClick={makeOutcomeHandler(o)}
                   className={cn(
                     "py-2 rounded-lg border text-xs font-semibold uppercase transition-colors",
                     outcome === o
@@ -109,11 +126,11 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
           <div>
             <label className="text-xs text-muted-foreground mb-1.5 block">Alert when price goes</label>
             <div className="grid grid-cols-2 gap-2">
-              {(["above", "below"] as const).map((c) => (
+              {QUICK_FILL_CONDITIONS.map((c) => (
                 <button
                   key={c}
                   type="button"
-                  onClick={() => setValue("condition", c)}
+                  onClick={makeConditionHandler(c)}
                   className={cn(
                     "py-2 rounded-lg border text-xs font-semibold capitalize transition-colors",
                     condition === c
@@ -147,14 +164,14 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => quickFill(currentYesPrice)}
+              onClick={makeQuickFillHandler(currentYesPrice)}
               className="flex-1 py-1.5 rounded border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors"
             >
               YES ${currentYesPrice.toFixed(2)}
             </button>
             <button
               type="button"
-              onClick={() => quickFill(currentNoPrice)}
+              onClick={makeQuickFillHandler(currentNoPrice)}
               className="flex-1 py-1.5 rounded border border-border text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors"
             >
               NO ${currentNoPrice.toFixed(2)}

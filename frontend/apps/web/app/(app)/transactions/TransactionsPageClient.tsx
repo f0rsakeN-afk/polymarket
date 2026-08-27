@@ -77,7 +77,7 @@ export function TransactionsPageClient() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchNextPage()}
+            onClick={fetchNextPage}
             disabled={isFetchingNextPage}
           >
             Load more

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -52,7 +52,7 @@ function PolygonMark({ className }: { className?: string }) {
 
 // ─── Step content with fade animation ─────────────────────────────────────────
 
-function StepContent({ step, children }: { step: string; children: React.ReactNode }) {
+const StepContent = memo(function StepContent({ step, children }: { step: string; children: React.ReactNode }) {
   return (
     <div
       key={step}
@@ -61,7 +61,7 @@ function StepContent({ step, children }: { step: string; children: React.ReactNo
       {children}
     </div>
   );
-}
+});
 
 // ─── Signup form ───────────────────────────────────────────────────────────────
 
@@ -126,6 +126,8 @@ export function SignupForm() {
     }
   }, [email]);
 
+  const handleBackToDetails = useCallback(() => { setStep("details"); setOtp(""); }, []);
+
   useEffect(() => {
     if (resendTimer <= 0) return;
     const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
@@ -135,7 +137,7 @@ export function SignupForm() {
   // Auto-verify on 6 digits
   useEffect(() => {
     if (step === "otp" && otp.length === 6) handleVerifyOtp();
-  }, [otp, step]);
+  }, [otp, step, handleVerifyOtp]);
 
   // Pre-fill referral code from ?ref= URL param
   useEffect(() => {
@@ -264,10 +266,10 @@ export function SignupForm() {
             {/* ── OTP step ── */}
             {step === "otp" && (
               <div className="space-y-4">
-                <OtpInput value={otp} onChange={(v) => setOtp(v)} error={!!otpError} />
+                <OtpInput value={otp} onChange={setOtp} error={!!otpError} />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <button
-                    onClick={() => { setStep("details"); setOtp(""); }}
+                    onClick={handleBackToDetails}
                     className="hover:text-foreground transition-colors"
                   >
                     Use different email

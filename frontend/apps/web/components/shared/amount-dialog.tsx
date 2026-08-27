@@ -37,6 +37,10 @@ export function AmountDialog({ title, description, trigger, onConfirm }: AmountD
     if (!next) reset()
   }, [reset])
 
+  const handleCancelReset = useCallback(() => {
+    reset()
+  }, [reset])
+
   const handleConfirm = useCallback(async (data: AmountInput) => {
     setSubmitting(true)
     try {
@@ -79,7 +83,7 @@ export function AmountDialog({ title, description, trigger, onConfirm }: AmountD
             )}
           </Field>
           <AlertDialogFooter>
-            <AlertDialogCancel type="button" onClick={() => reset()}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel type="button" onClick={handleCancelReset}>Cancel</AlertDialogCancel>
             <AlertDialogAction render={<Button type="submit" disabled={submitting}>
               {submitting ? <Spinner className="size-4" /> : "Confirm"}
             </Button>} />

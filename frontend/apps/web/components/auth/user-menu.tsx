@@ -25,9 +25,11 @@ export function UserMenu() {
     router.push("/")
   }, [logout, router])
 
+  const handleSignIn = useCallback(() => router.push("/login"), [router]);
+
   if (!user) {
     return (
-      <Button variant="outline" onClick={() => router.push("/login")}>
+      <Button variant="outline" onClick={handleSignIn}>
         Sign in
       </Button>
     )

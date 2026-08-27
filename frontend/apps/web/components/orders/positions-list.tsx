@@ -18,7 +18,7 @@ interface PositionsListProps {
   onLoadMore: () => void
 }
 
-function PositionRow({ position }: { position: Position }) {
+const PositionRow = memo(function PositionRow({ position }: { position: Position }) {
   const pnl = Number(position.unrealized_pnl)
   const isProfit = pnl >= 0
 
@@ -46,7 +46,7 @@ function PositionRow({ position }: { position: Position }) {
       </div>
     </div>
   )
-}
+})
 
 function PositionsList({ positions, loading, hasMore, onLoadMore }: PositionsListProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)

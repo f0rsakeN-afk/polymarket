@@ -33,6 +33,9 @@ export function MarketsPageClient() {
     fetchMarketsNextPage()
   }, [fetchMarketsNextPage])
 
+  const handleCategoryClick = useCallback((cat: string) => () => setCategory(cat), [])
+  const handleSearchChange = useCallback((e: { target: { value: string } }) => setSearch(e.target.value), [])
+
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <div>
@@ -48,7 +51,7 @@ export function MarketsPageClient() {
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={handleSearchChange}
           placeholder="Search markets..."
           className="w-full h-9 pl-9 pr-4 rounded-lg border border-border bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         />
@@ -59,7 +62,7 @@ export function MarketsPageClient() {
         {CATEGORIES.map((cat) => (
           <button
             key={cat}
-            onClick={() => setCategory(cat)}
+            onClick={handleCategoryClick(cat)}
             className={cn(
               "px-4 py-2 text-xs font-medium whitespace-nowrap border-b-2 -mb-px transition-colors",
               category === cat

@@ -238,6 +238,9 @@ function TradeForm({
     [setValue]
   )
 
+  // Stable curried handlers — avoid creating new fn per render in lists
+  const makeOutcomeHandler = useCallback((name: string) => () => handleOutcomeClick(name), [handleOutcomeClick])
+
   const handleSideClick = useCallback(
     (s: "buy" | "sell") => {
       setSide(s)
@@ -245,6 +248,8 @@ function TradeForm({
     },
     [setValue]
   )
+
+  const makeSideHandler = useCallback((s: "buy" | "sell") => () => handleSideClick(s), [handleSideClick])
 
   const onValid = useCallback(
     async (data: PlaceOrderInput) => {
@@ -258,6 +263,11 @@ function TradeForm({
     },
     [onSubmit, clientOrderId, quote]
   )
+
+  const handleOrderTypeChange = useCallback((v: string) => {
+    if (v) setValue("order_type", v as "market" | "limit" | "fill_or_kill")
+    if (v !== "limit") setValue("post_only", false)
+  }, [setValue])
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
@@ -282,7 +292,7 @@ function TradeForm({
                 price={i === 0 ? currentYesPrice : i === 1 ? currentNoPrice : 0}
                 selected={outcome === o.name.toLowerCase()}
                 color={i % 2 === 0 ? "green" : "red"}
-                onClick={() => handleOutcomeClick(o.name.toLowerCase())}
+                onClick={makeOutcomeHandler(o.name.toLowerCase())}
               />
             ))}
           </div>
@@ -293,21 +303,21 @@ function TradeForm({
               price={currentYesPrice}
               selected={outcome === "yes"}
               color="green"
-              onClick={() => handleOutcomeClick("yes")}
+              onClick={makeOutcomeHandler("yes")}
             />
             <OutcomeButton
               label="NO"
               price={currentNoPrice}
               selected={outcome === "no"}
               color="red"
-              onClick={() => handleOutcomeClick("no")}
+              onClick={makeOutcomeHandler("no")}
             />
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-2">
           {((["buy", "sell"]) as const).map((s) => (
-            <SideButton key={s} side={s} current={side} onClick={() => handleSideClick(s)} />
+            <SideButton key={s} side={s} current={side} onClick={makeSideHandler(s)} />
           ))}
         </div>
 
@@ -331,10 +341,7 @@ function TradeForm({
           <FieldContent>
             <Select
               value={orderType as string}
-              onValueChange={(v) => {
-                if (v) setValue("order_type", v as "market" | "limit" | "fill_or_kill")
-                if (v !== "limit") setValue("post_only", false)
-              }}
+              onValueChange={handleOrderTypeChange}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Market" />

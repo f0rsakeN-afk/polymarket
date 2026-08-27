@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useCallback } from "react"
 import { authApi } from "@/lib/api/auth"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
@@ -51,7 +52,7 @@ function CurrentBadge() {
 
 function SessionRow({ session, onRevoke, isRevoking }: {
   session: { id: string; ip_address?: string; last_active_at: string; expires_at: string; user_agent?: string; is_current?: boolean }
-  onRevoke: (id: string) => void
+  onRevoke: (id: string) => () => void
   isRevoking: boolean
 }) {
   const { icon: Icon, label, sub } = parseDevice(session.user_agent)
@@ -88,7 +89,7 @@ function SessionRow({ session, onRevoke, isRevoking }: {
       <TableCell className="text-right">
         {!session.is_current && (
           <button
-            onClick={() => onRevoke(session.id)}
+            onClick={onRevoke(session.id)}
             disabled={isRevoking}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50",
@@ -108,7 +109,7 @@ function SessionRow({ session, onRevoke, isRevoking }: {
 function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
   sessions: Array<{ id: string; ip_address?: string; last_active_at: string; expires_at: string; user_agent?: string; is_current?: boolean }>
   isLoading: boolean
-  onRevoke: (id: string) => void
+  onRevoke: (id: string) => () => void
   isRevoking: boolean
 }) {
   if (isLoading) {
@@ -208,6 +209,9 @@ export function SessionsPageClient() {
   const sessionList = sessions ?? []
   const hasOthers = sessionList.length > 1
 
+  const handleRevokeAll = useCallback(() => revokeAllMutation.mutate(), [revokeAllMutation])
+  const handleRevoke = useCallback((id: string) => () => revokeMutation.mutate(id), [revokeMutation])
+
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <SettingsBreadcrumb page="Sessions" />
@@ -221,7 +225,7 @@ export function SessionsPageClient() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => revokeAllMutation.mutate()}
+            onClick={handleRevokeAll}
             disabled={revokeAllMutation.isPending}
             className="text-destructive hover:text-destructive hover:bg-destructive/10"
           >
@@ -234,7 +238,7 @@ export function SessionsPageClient() {
       <SessionsTable
         sessions={sessionList}
         isLoading={isLoading}
-        onRevoke={(id) => revokeMutation.mutate(id)}
+        onRevoke={handleRevoke}
         isRevoking={revokeMutation.isPending}
       />
     </div>

@@ -209,6 +209,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     [onTrade]
   )
 
+  const handleOutcomeSelect = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedOutcomeId(e.target.value),
+    []
+  )
+
   const outcomes = useMemo(
     () => (market as MarketDetailResponse)?.outcomes ?? [],
     [market]
@@ -229,6 +234,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const relatedSlice = useMemo(
     () => relatedMarkets?.slice(0, 5) ?? [],
     [relatedMarkets]
+  )
+
+  const combinedTrades = useMemo(
+    () => [...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200) as Trade[],
+    [realtimeTrades, tradesData?.trades]
   )
 
   const holderOutcomes = useMemo(
@@ -267,7 +277,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             <div className="flex items-center gap-2">
               <select
                 value={selectedOutcomeId}
-                onChange={(e) => setSelectedOutcomeId(e.target.value)}
+                onChange={handleOutcomeSelect}
                 className="flex-1 h-9 rounded-md border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="">Select winning outcome...</option>
@@ -417,7 +427,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </TabsContent>
             <TabsContent value="trades" role="tabpanel" className="max-h-[400px] overflow-y-auto">
               <TradeFeed
-                trades={[...realtimeTrades, ...(tradesData?.trades ?? [])].slice(0, 200) as Trade[]}
+                trades={combinedTrades}
                 loading={tradesLoading}
               />
             </TabsContent>

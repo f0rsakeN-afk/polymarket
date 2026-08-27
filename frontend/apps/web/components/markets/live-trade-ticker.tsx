@@ -52,8 +52,17 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
   const frameRef = useRef<number>(0)
   const mountedRef = useRef(true)
 
+  const animateRef = useRef<() => void>(() => {
+    if (!mountedRef.current) return
+    const now = Date.now()
+    const firstTs = animRef.current.values().next().value
+    const elapsed = firstTs ? now - firstTs : 3000
+    if (elapsed < 3000) {
+      frameRef.current = requestAnimationFrame(animateRef.current)
+    }
+  })
+
   const handleWSMessage = useCallback((data: unknown) => {
-    // Backend publishes flat fields: { type, market_id, outcome, side, price, amount, username }
     const msg = data as { type?: string; outcome?: string; side?: "buy" | "sell"; price?: number; amount?: number; username?: string }
     if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price != null && msg.amount != null) {
       const item: TickerItem = {
@@ -68,20 +77,10 @@ function LiveTradeTicker({ marketId }: { marketId: string }) {
       animRef.current.set(item.id, Date.now())
       if (mountedRef.current) {
         cancelAnimationFrame(frameRef.current)
-        frameRef.current = requestAnimationFrame(animate)
+        frameRef.current = requestAnimationFrame(animateRef.current)
       }
     }
   }, [])
-
-  function animate() {
-    if (!mountedRef.current) return
-    const now = Date.now()
-    const firstTs = animRef.current.values().next().value
-    const elapsed = firstTs ? now - firstTs : 3000
-    if (elapsed < 3000) {
-      frameRef.current = requestAnimationFrame(animate)
-    }
-  }
 
   useMarketSocket({
     marketId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
@@ -66,7 +66,7 @@ type Step = keyof typeof STEP_LABELS;
 
 // ─── Animated step wrapper ────────────────────────────────────────────────────
 
-function StepContent({ step, children }: { step: Step; children: React.ReactNode }) {
+const StepContent = memo(function StepContent({ step, children }: { step: Step; children: React.ReactNode }) {
   return (
     <div
       key={step}
@@ -75,7 +75,7 @@ function StepContent({ step, children }: { step: Step; children: React.ReactNode
       {children}
     </div>
   );
-}
+});
 
 // ─── Login form ────────────────────────────────────────────────────────────────
 
@@ -193,6 +193,12 @@ export function LoginForm() {
     }
   }, [email]);
 
+  // ── Step navigation callbacks ─────────────────────────────────────────
+  const handleGoToPasswordStep = useCallback(() => setStep("password"), []);
+  const handleBackToEmail = useCallback(() => { setStep("email"); setOtp(""); }, []);
+  const handleBackToEmailFromPassword = useCallback(() => setStep("email"), []);
+  const handleBackToOtp = useCallback(() => { setStep("otp"); setTotp2faCode(""); setOtp(""); }, []);
+
   useEffect(() => {
     if (resendTimer <= 0) return;
     const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
@@ -202,12 +208,12 @@ export function LoginForm() {
   // Auto-submit OTP on 6 digits
   useEffect(() => {
     if (step === "otp" && otp.length === 6) handleVerifyOtp();
-  }, [otp, step]);
+  }, [otp, step, handleVerifyOtp]);
 
   // Auto-submit 2FA on 6 digits
   useEffect(() => {
     if (step === "totp2fa" && totp2faCode.length === 6) handleTotp2fa(totp2faCode);
-  }, [totp2faCode, step]);
+  }, [totp2faCode, step, handleTotp2fa]);
 
   const { title, sub } = STEP_LABELS[step];
 
@@ -299,7 +305,7 @@ export function LoginForm() {
 
                 <button
                   type="button"
-                  onClick={() => setStep("password")}
+                  onClick={handleGoToPasswordStep}
                   className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Sign in with password
@@ -310,10 +316,10 @@ export function LoginForm() {
             {/* ── OTP step ── */}
             {step === "otp" && (
               <div className="space-y-4">
-                <OtpInput value={otp} onChange={(v) => setOtp(v)} error={!!globalError} />
+                <OtpInput value={otp} onChange={setOtp} error={!!globalError} />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <button
-                    onClick={() => { setStep("email"); setOtp(""); }}
+                    onClick={handleBackToEmail}
                     className="hover:text-foreground transition-colors"
                   >
                     Use different email
@@ -397,7 +403,7 @@ export function LoginForm() {
                 </Form>
                 <button
                   type="button"
-                  onClick={() => setStep("email")}
+                  onClick={handleBackToEmailFromPassword}
                   className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Sign in with a code instead
@@ -410,13 +416,13 @@ export function LoginForm() {
               <div className="space-y-4">
                 <OtpInput
                   value={totp2faCode}
-                  onChange={(v) => setTotp2faCode(v)}
+                  onChange={setTotp2faCode}
                   error={!!globalError}
                   autoFocus
                 />
                 <button
                   type="button"
-                  onClick={() => { setStep("otp"); setTotp2faCode(""); setOtp(""); }}
+                  onClick={handleBackToOtp}
                   className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Back to login code

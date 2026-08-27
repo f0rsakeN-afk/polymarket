@@ -191,7 +191,7 @@ function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
       </Card>
       {hasMore && (
         <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => fetchNextPage?.()} disabled={isLoading} className="gap-2">
+          <Button variant="outline" size="sm" onClick={fetchNextPage} disabled={isLoading} className="gap-2">
             {isLoading ? <Spinner className="size-3" /> : <ChevronDown className="size-3" />}
             Load more
           </Button>
@@ -266,7 +266,7 @@ function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
       </Card>
       {hasMore && (
         <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => fetchNextPage?.()} disabled={isLoading} className="gap-2">
+          <Button variant="outline" size="sm" onClick={fetchNextPage} disabled={isLoading} className="gap-2">
             {isLoading ? <Spinner className="size-3" /> : <ChevronDown className="size-3" />}
             Load more
           </Button>

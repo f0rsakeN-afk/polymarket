@@ -21,6 +21,11 @@ function CategoryTabs({ tag }: CategoryTabsProps) {
     [router]
   )
 
+  const handleTabClick = useCallback(
+    (cat: string) => () => handleClick(cat),
+    [handleClick]
+  )
+
   return (
     <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide">
       {["All", ...categories].map((cat) => {
@@ -28,7 +33,7 @@ function CategoryTabs({ tag }: CategoryTabsProps) {
         return (
           <button
             key={cat}
-            onClick={() => handleClick(cat)}
+            onClick={handleTabClick(cat)}
             className={cn(
               "relative px-4 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
               isSelected

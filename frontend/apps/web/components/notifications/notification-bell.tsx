@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useMemo, useState } from "react"
+import React, { useCallback, useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import {
   Popover,
@@ -46,7 +46,7 @@ function formatRelativeTime(dateStr: string): string {
   return date.toLocaleDateString()
 }
 
-function NotificationItem({
+const NotificationItem = React.memo(function NotificationItem({
   notif,
   onRead,
 }: {
@@ -61,9 +61,14 @@ function NotificationItem({
   }
   const isUnread = !notif.read_at
 
+  const handleClick = useCallback(() => {
+    if (!isUnread) return
+    onRead(notif.id)
+  }, [isUnread, notif.id, onRead])
+
   return (
     <button
-      onClick={() => !isUnread || onRead(notif.id)}
+      onClick={handleClick}
       className={cn(
         "w-full text-left flex items-start gap-3 px-4 py-3 transition-colors focus-visible:outline-none focus-visible:bg-muted/50",
         isUnread ? "bg-muted/40" : "hover:bg-muted/30"
@@ -92,9 +97,9 @@ function NotificationItem({
       </div>
     </button>
   )
-}
+})
 
-function NotificationSkeleton() {
+const NotificationSkeleton = React.memo(function NotificationSkeleton() {
   return (
     <div className="flex items-start gap-3 px-4 py-3 animate-pulse">
       <div className="size-4 rounded-full bg-muted mt-0.5 shrink-0" />
@@ -105,9 +110,9 @@ function NotificationSkeleton() {
       </div>
     </div>
   )
-}
+})
 
-function EmptyState() {
+const EmptyState = React.memo(function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
       <div className="size-10 rounded-full bg-muted flex items-center justify-center mb-3">
@@ -119,7 +124,7 @@ function EmptyState() {
       </p>
     </div>
   )
-}
+})
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false)
@@ -177,6 +182,10 @@ export function NotificationBell() {
     })
     markAllRead()
   }, [markAllRead, notifications])
+
+  const handleViewAllClick = useCallback(() => {
+    setOpen(false)
+  }, [])
 
   if (!user) return null
 
@@ -241,7 +250,7 @@ export function NotificationBell() {
           <div className="px-4 py-2.5 border-t shrink-0">
             <Link
               href="/notifications"
-              onClick={() => setOpen(false)}
+              onClick={handleViewAllClick}
               className="block w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
             >
               View all notifications

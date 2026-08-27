@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useMarkets } from "@/hooks/api/use-markets"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useSplit, useMerge } from "@/hooks/api/use-split-merge"
@@ -26,7 +26,10 @@ export function SplitMergeForm() {
   const availableBalance = Number(wallet?.available_balance ?? 0)
   const parsedAmount = parseFloat(amount) || 0
 
-  const selectedMarket = marketsData?.markets.find((m) => m.id === marketId)
+  const selectedMarket = useMemo(() =>
+    marketsData?.markets.find((m) => m.id === marketId),
+    [marketsData?.markets, marketId]
+  )
 
   const handleSplit = useCallback(async () => {
     if (!marketId || parsedAmount <= 0) return
@@ -45,6 +48,15 @@ export function SplitMergeForm() {
     else handleMerge()
   }, [mode, handleSplit, handleMerge])
 
+  const handleTabChange = useCallback((v: string) => {
+    setMode(v as "split" | "merge")
+    setAmount("")
+  }, [])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") handleSubmit()
+  }, [handleSubmit])
+
   if (!currentUser) {
     return (
       <div className="py-4 text-center space-y-2">
@@ -61,7 +73,7 @@ export function SplitMergeForm() {
 
   return (
     <div className="space-y-4">
-      <Tabs value={mode} onValueChange={(v) => { setMode(v as "split" | "merge"); setAmount("") }} className="w-full">
+      <Tabs value={mode} onValueChange={handleTabChange} className="w-full">
         <TabsList className="w-full grid grid-cols-2">
           <TabsTrigger value="split" className="text-xs">Split (USDC → Shares)</TabsTrigger>
           <TabsTrigger value="merge" className="text-xs">Merge (Shares → USDC)</TabsTrigger>
@@ -101,7 +113,7 @@ export function SplitMergeForm() {
           className="h-9 text-xs"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          onKeyDown={handleKeyDown}
         />
         {mode === "split" && parsedAmount > availableBalance && (
           <p className="text-[10px] text-red-500 mt-1">Insufficient balance — max ${availableBalance.toFixed(2)}</p>

@@ -95,6 +95,33 @@ export function TwoFactorPageClient() {
     [enableMutation]
   );
 
+  const handleDisableStep = useCallback(() => setStep("enable"), []);
+
+  const handleDisableCancel = useCallback(() => {
+    setStep("status");
+    setCode("");
+    enableForm.reset();
+  }, [enableForm]);
+
+  const handleDisableSubmit = useCallback(
+    (data: EnableInput) => disableMutation.mutate(data),
+    [disableMutation]
+  );
+
+  const handleSetupCancel = useCallback(() => {
+    setStep("status");
+    setCode("");
+    setSetupData(null);
+    enableForm.reset();
+  }, [enableForm]);
+
+  const handleCodeChange = useCallback((v: string) => {
+    setCode(v);
+    enableForm.setValue("code", v, { shouldValidate: true });
+  }, [enableForm]);
+
+  const handleSetup = useCallback(() => setupMutation.mutate(), [setupMutation]);
+
   if (isLoading) {
     return (
       <div className="container mx-auto max-w-md px-4 py-8">
@@ -130,7 +157,7 @@ export function TwoFactorPageClient() {
           <CardContent>
             <Button
               variant="destructive"
-              onClick={() => setStep("enable")}
+              onClick={handleDisableStep}
             >
               Disable 2FA
             </Button>
@@ -150,7 +177,7 @@ export function TwoFactorPageClient() {
           <CardContent>
             <Form {...enableForm}>
               <form
-                onSubmit={enableForm.handleSubmit((data) => disableMutation.mutate(data))}
+                onSubmit={enableForm.handleSubmit(handleDisableSubmit)}
                 className="space-y-4"
               >
                 <FormField
@@ -162,10 +189,7 @@ export function TwoFactorPageClient() {
                       <FormControl>
                         <OtpInput
                           value={code}
-                          onChange={(v) => {
-                            setCode(v);
-                            enableForm.setValue("code", v, { shouldValidate: true });
-                          }}
+                          onChange={handleCodeChange}
                         />
                       </FormControl>
                       <FormMessage />
@@ -196,7 +220,7 @@ export function TwoFactorPageClient() {
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => { setStep("status"); setCode(""); enableForm.reset(); }}
+                    onClick={handleDisableCancel}
                   >
                     Cancel
                   </Button>
@@ -240,10 +264,7 @@ export function TwoFactorPageClient() {
                       <FormControl>
                         <OtpInput
                           value={code}
-                          onChange={(v) => {
-                            setCode(v);
-                            enableForm.setValue("code", v, { shouldValidate: true });
-                          }}
+                          onChange={handleCodeChange}
                           autoFocus
                         />
                       </FormControl>
@@ -274,7 +295,7 @@ export function TwoFactorPageClient() {
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => { setStep("status"); setCode(""); setSetupData(null); enableForm.reset(); }}
+                    onClick={handleSetupCancel}
                   >
                     Cancel
                   </Button>
@@ -299,7 +320,7 @@ export function TwoFactorPageClient() {
           </CardHeader>
           <CardContent>
             <Button
-              onClick={() => setupMutation.mutate()}
+              onClick={handleSetup}
               disabled={setupMutation.isPending}
             >
               {setupMutation.isPending ? "Preparing..." : "Set up 2FA"}

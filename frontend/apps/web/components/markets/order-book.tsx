@@ -102,15 +102,11 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
   )
 })
 
-function OrderBook({ slug }: { slug: string }) {
+const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["orderbook", slug] as const,
     queryFn: () => getOrderBook(slug),
     enabled: !!slug,
-    // No refetchInterval — WS 'orderbook:update' message drives cache invalidation.
-    // Each WS message triggers one fresh fetch, which is the correct push model.
-    // If backend sends full orderbook in the WS message, this can be replaced
-    // with cache.setQueryData for zero-latency update (no extra round-trip).
   })
 
   const outcomes = data?.data?.outcomes ?? {}
@@ -135,35 +131,44 @@ function OrderBook({ slug }: { slug: string }) {
   // Two-column grid for binary markets, single column for multi-outcome
   const isBinary = outcomeNames.length === 2
 
+  const outcomeEntries = useMemo(
+    () => outcomeNames.map((name) => ({
+      name,
+      bids: outcomes[name]?.bids ?? [],
+      asks: outcomes[name]?.asks ?? [],
+    })),
+    [outcomeNames, outcomes]
+  )
+
   return (
     <section aria-label="Order book" className="space-y-4">
       {isBinary ? (
         // Binary: YES and NO side by side
         <div className="grid grid-cols-2 gap-6">
-          {outcomeNames.map((name) => (
+          {outcomeEntries.map(({ name, bids, asks }) => (
             <OutcomeOrderbook
               key={name}
               name={name}
-              bids={outcomes[name]?.bids ?? []}
-              asks={outcomes[name]?.asks ?? []}
+              bids={bids}
+              asks={asks}
             />
           ))}
         </div>
       ) : (
         // Multi-outcome: stacked
         <div className="grid grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
-          {outcomeNames.map((name) => (
+          {outcomeEntries.map(({ name, bids, asks }) => (
             <OutcomeOrderbook
               key={name}
               name={name}
-              bids={outcomes[name]?.bids ?? []}
-              asks={outcomes[name]?.asks ?? []}
+              bids={bids}
+              asks={asks}
             />
           ))}
         </div>
       )}
     </section>
   )
-}
+})
 
 export { OrderBook }

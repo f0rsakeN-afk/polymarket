@@ -124,6 +124,14 @@ export default function NotificationsPage() {
   const notifications = [...realtimePrepend, ...(data?.data ?? [])]
   const unreadCount = (data?.data ?? []).filter((n) => !n.read_at).length + realtimePrepend.filter((n) => !n.read_at).length
 
+  const handleMarkAllRead = useCallback(() => {
+    markAllRead.mutate()
+  }, [markAllRead])
+
+  const handleLoadMore = useCallback(() => {
+    setPage((p) => p + 1)
+  }, [])
+
   if (!user) return null
 
   return (
@@ -138,7 +146,7 @@ export default function NotificationsPage() {
           )}
         </div>
         {unreadCount > 0 && (
-          <Button variant="outline" size="sm" onClick={() => markAllRead()}>
+          <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
             Mark all read
           </Button>
         )}
@@ -174,7 +182,7 @@ export default function NotificationsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage((p) => p + 1)}
+              onClick={handleLoadMore}
               disabled={isFetching}
             >
               {isFetching ? <Spinner className="size-3" /> : "Load more"}

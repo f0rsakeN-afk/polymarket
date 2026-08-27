@@ -14,7 +14,7 @@ interface OrderRowProps {
   isCancelling?: boolean
 }
 
-function OrderRow({ order, onCancel, isCancelling }: OrderRowProps) {
+const OrderRow = memo(function OrderRow({ order, onCancel, isCancelling }: OrderRowProps) {
   const [open, setOpen] = useState(false)
 
   const handleCancelConfirm = useCallback(async () => {
@@ -82,7 +82,7 @@ function OrderRow({ order, onCancel, isCancelling }: OrderRowProps) {
       </div>
     </div>
   )
-}
+})
 
 interface OrdersListProps {
   orders: Order[]

@@ -17,10 +17,15 @@ export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props)
     this.state = { hasError: false }
+    this.handleReset = this.handleReset.bind(this)
   }
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error }
+  }
+
+  handleReset() {
+    this.setState({ hasError: false })
   }
 
   render() {
@@ -34,7 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => this.setState({ hasError: false })}
+            onClick={this.handleReset}
           >
             Try again
           </Button>

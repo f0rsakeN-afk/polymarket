@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
 interface Section {
@@ -20,28 +20,30 @@ export function LegalLayout({ title, lastUpdated, sections, children }: LegalLay
   const [active, setActive] = useState<string>("")
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  useEffect(() => {
-    const onScroll = () => {
-      const sectionEls = sections
-        .map(({ id }) => document.getElementById(id))
-        .filter(Boolean) as HTMLElement[]
+  const handleScroll = useCallback(() => {
+    const sectionEls = sections
+      .map(({ id }) => document.getElementById(id))
+      .filter(Boolean) as HTMLElement[]
 
-      let closest: string | null = null
-      let closestDist = Infinity
-      for (const el of sectionEls) {
-        const dist = Math.abs(el.getBoundingClientRect().top - 80)
-        if (dist < closestDist) {
-          closestDist = dist
-          closest = el.id
-        }
+    let closest: string | null = null
+    let closestDist = Infinity
+    for (const el of sectionEls) {
+      const dist = Math.abs(el.getBoundingClientRect().top - 80)
+      if (dist < closestDist) {
+        closestDist = dist
+        closest = el.id
       }
-      if (closest) setActive(closest)
     }
-
-    window.addEventListener("scroll", onScroll, { passive: true })
-    onScroll()
-    return () => window.removeEventListener("scroll", onScroll)
+    if (closest) setActive(closest)
   }, [sections])
+
+  useEffect(() => {
+    window.addEventListener("scroll", handleScroll, { passive: true })
+    handleScroll()
+    return () => window.removeEventListener("scroll", handleScroll)
+  }, [handleScroll])
+
+  const handleMobileToggle = useCallback(() => setMobileOpen((v) => !v), []);
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
@@ -97,7 +99,7 @@ export function LegalLayout({ title, lastUpdated, sections, children }: LegalLay
       {/* Mobile TOC */}
       <div className="lg:hidden mt-8">
         <button
-          onClick={() => setMobileOpen(!mobileOpen)}
+          onClick={handleMobileToggle}
           className="flex items-center justify-between w-full py-3 px-4 rounded-lg border border-border bg-muted/30 text-xs font-medium"
         >
           <span>On this page</span>

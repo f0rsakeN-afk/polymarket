@@ -22,6 +22,8 @@ export default function HomePageContent() {
   const { data: closingSoonData, isLoading: closingSoonLoading } = useMarkets({ sort: "closing_soon" })
   const { data: tradesData } = useGlobalTrades()
 
+  const recentTrades = tradesData?.trades.slice(0, 15) ?? []
+
   const handleLoadMore = useCallback(() => {
     fetchMarketsNextPage()
   }, [fetchMarketsNextPage])
@@ -78,7 +80,7 @@ export default function HomePageContent() {
             <Link href="/trades" className="text-sm text-muted-foreground hover:text-foreground transition-colors">View all</Link>
           </div>
           <Suspense fallback={<SkeletonTradeFeed />}>
-            <LazyTradeFeed title="" trades={tradesData?.trades.slice(0, 15) ?? []} />
+            <LazyTradeFeed title="" trades={recentTrades} />
           </Suspense>
         </section>
       )}

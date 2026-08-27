@@ -241,6 +241,12 @@ export function OrdersPageClient() {
     }
   }, [qc])
 
+  const handleFilterClick = useCallback((filter: StatusFilter) => {
+    setStatusFilter(filter)
+  }, [])
+
+  const makeFilterHandler = useCallback((f: StatusFilter) => () => handleFilterClick(f), [handleFilterClick])
+
   useUserSocket({ userId: user?.id ?? "", onMessage: handleWsMessage, enabled: Boolean(user?.id) })
 
   return (
@@ -260,7 +266,7 @@ export function OrdersPageClient() {
             key={f.value}
             variant={statusFilter === f.value ? "default" : "ghost"}
             size="sm"
-            onClick={() => setStatusFilter(f.value)}
+            onClick={makeFilterHandler(f.value)}
             className="text-xs"
           >
             {f.label}

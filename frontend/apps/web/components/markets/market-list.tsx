@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, memo } from "react"
+import { useEffect, useRef, memo, useCallback } from "react"
 import { MarketCard } from "./market-card"
 import { SkeletonMarketGrid } from "@/components/shared/skeletons"
 import type { MarketResponse } from "@/hooks/api/types/market"
@@ -12,8 +12,14 @@ interface MarketListProps {
   onLoadMore: () => void
 }
 
-function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) {
+const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)
+
+  const handleIntersect = useCallback((entry: IntersectionObserverEntry) => {
+    if (entry?.isIntersecting && hasMore && !loading) {
+      onLoadMore()
+    }
+  }, [hasMore, loading, onLoadMore])
 
   useEffect(() => {
     const el = sentinelRef.current
@@ -21,17 +27,14 @@ function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) 
 
     const observer = new IntersectionObserver(
       (entries) => {
-        const entry = entries[0]
-        if (entry?.isIntersecting && hasMore && !loading) {
-          onLoadMore()
-        }
+        handleIntersect(entries[0])
       },
       { threshold: 0.1 }
     )
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [hasMore, loading, onLoadMore])
+  }, [handleIntersect])
 
   if (loading && markets.length === 0) {
     return <SkeletonMarketGrid />
@@ -60,7 +63,7 @@ function MarketList({ markets, loading, hasMore, onLoadMore }: MarketListProps) 
       </div>
     </div>
   )
-}
+})
 
 export { MarketList }
-export default memo(MarketList)
+export default MarketList

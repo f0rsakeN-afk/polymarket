@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useMemo } from "react"
 import { useForm, useFieldArray } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -57,6 +57,11 @@ export function CreateMarketForm() {
   })
 
   const createMarket = useCreateMarket()
+
+  const handleRemoveOutcome = useCallback((index: number) => remove(index), [remove])
+
+  const handleAddOutcome = useCallback(() => append({ name: "" }), [append])
+  const makeRemoveHandler = useCallback((index: number) => () => handleRemoveOutcome(index), [handleRemoveOutcome])
 
   const onSubmit = useCallback(async (data: CreateMarketInput) => {
     setServerError(null)
@@ -205,7 +210,7 @@ export function CreateMarketForm() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => remove(index)}
+                    onClick={makeRemoveHandler(index)}
                     className="text-destructive hover:text-destructive"
                   >
                     Remove
@@ -221,7 +226,7 @@ export function CreateMarketForm() {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => append({ name: "" })}
+            onClick={handleAddOutcome}
             className="mt-2"
           >
             Add Outcome

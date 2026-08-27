@@ -43,11 +43,11 @@ export function TradesPageClient() {
 
   const mergedTrades = [...wsTrades, ...(data?.trades ?? [])].slice(0, MAX_TRADES)
 
-  const scrollToTop = () => {
+  const scrollToTop = useCallback(() => {
     listRef.current?.scrollTo({ top: 0, behavior: "smooth" })
     setWsTrades([])
     setPendingCount(0)
-  }
+  }, [])
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
