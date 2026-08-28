@@ -3,21 +3,28 @@ import { z } from "zod"
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
+  email: z.string().email("Please enter a valid email"),
+  password: z.string().min(1, "Password is required"),
   totp_code: z.string().regex(/^\d{6}$/).optional(),
 })
 
 export const registerSchema = z.object({
-  email: z.string().email(),
-  username: z.string().min(3).max(30).regex(/^[a-zA-Z0-9_-]+$/),
-  password: z.string().min(8).max(128),
+  email: z.string().email("Please enter a valid email"),
+  username: z
+    .string()
+    .min(3, "Username must be at least 3 characters")
+    .max(30, "Username must be at most 30 characters")
+    .regex(/^[a-zA-Z0-9_-]+$/, "Only letters, numbers, _ and - allowed"),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128, "Password must be at most 128 characters"),
   referral_code: z.string().optional(),
 })
 
 export const verifyEmailSchema = z.object({
   email: z.string().email(),
-  code: z.string().length(8).regex(/^\d{8}$/),
+  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
 })
 
 export const resendVerificationSchema = z.object({
@@ -35,13 +42,13 @@ export const changePasswordSchema = z.object({
 })
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email("Please enter a valid email"),
 })
 
 export const resetPasswordSchema = z.object({
   email: z.string().email(),
-  code: z.string().length(8).regex(/^\d{8}$/),
-  newPassword: z.string().min(8).max(128),
+  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+  newPassword: z.string().min(8, "Password must be at least 8 characters").max(128),
   confirmPassword: z.string(),
 }).refine((d) => d.newPassword === d.confirmPassword, {
   message: "Passwords do not match",
@@ -49,12 +56,12 @@ export const resetPasswordSchema = z.object({
 })
 
 export const magicLinkRequestSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email("Please enter a valid email"),
 })
 
 export const verifyMagicSchema = z.object({
   email: z.string().email(),
-  code: z.string().length(8).regex(/^\d{8}$/),
+  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
   totp_code: z.string().regex(/^\d{6}$/).optional(),
 })
 
@@ -70,11 +77,11 @@ export const magicUrl2FASchema = z.object({
 export const refreshSchema = z.object({})
 
 export const totpCodeSchema = z.object({
-  code: z.string().length(6).regex(/^\d{6}$/),
+  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
 })
 
 export const totpDisableSchema = z.object({
-  code: z.string().length(6).regex(/^\d{6}$/),
+  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
   password: z.string().min(1),
 })
 

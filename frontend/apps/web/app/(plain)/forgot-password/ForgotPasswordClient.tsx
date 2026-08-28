@@ -41,8 +41,8 @@ export function ForgotPasswordClient() {
     defaultValues: { email: emailParam },
   })
 
-  const mutation = useMutation({
-    mutationFn: (data: ForgotPasswordInput) => passwordApi.forgotPassword(data.email),
+  const { mutate: sendReset, isPending: isSending } = useMutation({
+    mutationFn: (email: string) => passwordApi.forgotPassword(email),
     onSuccess: () => {
       setSent(true)
       setSubmittedEmail(form.getValues("email"))
@@ -53,8 +53,8 @@ export function ForgotPasswordClient() {
   })
 
   const onSubmit = useCallback(
-    (data: ForgotPasswordInput) => mutation.mutate(data),
-    [mutation]
+    (data: ForgotPasswordInput) => sendReset(data.email),
+    [sendReset]
   )
 
   return (
@@ -78,19 +78,21 @@ export function ForgotPasswordClient() {
           </div>
 
           {sent ? (
-            <div className="space-y-4 text-center">
-              <div className="rounded-md border border-border/60 bg-muted/50 px-4 py-6 text-sm text-muted-foreground">
+            <div className="space-y-4">
+              <div className="rounded-md border border-border/60 bg-muted/50 px-4 py-6 text-sm text-muted-foreground text-center">
                 Check your inbox — we sent a password reset code to{" "}
                 <strong className="text-foreground">{submittedEmail}</strong>.
                 <br />
                 Didn&apos;t receive it? Check your spam folder.
               </div>
-              <button
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => setSent(false)}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                className="w-full"
               >
                 Try a different email
-              </button>
+              </Button>
             </div>
           ) : (
             <>
@@ -117,15 +119,15 @@ export function ForgotPasswordClient() {
                       </FormItem>
                     )}
                   />
-                  <Button type="submit" disabled={mutation.isPending} className="w-full">
-                    {mutation.isPending ? "Sending..." : "Send reset code"}
+                  <Button type="submit" disabled={isSending} className="w-full">
+                    {isSending ? "Sending..." : "Send reset code"}
                   </Button>
                 </form>
               </Form>
-              <p className="mt-4 text-center">
+              <p className="mt-4 text-center text-xs text-muted-foreground">
                 <Link
                   href="/login"
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  className="hover:text-foreground transition-colors"
                 >
                   Back to sign in
                 </Link>

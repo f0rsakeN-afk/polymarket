@@ -1,0 +1,142 @@
+/* Polymarket design overrides — scoped to apps/web only */
+@import "@workspace/ui/globals.css";
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+:root {
+  /* Primary: deep blue-slate — premium enterprise SaaS, pairs with green/red for YES/NO */
+  --primary: oklch(0.42 0.08 245);
+  --primary-foreground: oklch(1 0 0);
+  --ring: oklch(0.42 0.08 245);
+  --chart-1: oklch(0.42 0.08 245);
+  --chart-line-primary: var(--chart-1);
+  --sidebar-primary: oklch(0.42 0.08 245);
+  --sidebar-ring: oklch(0.42 0.08 245);
+
+  /* Warmer, cleaner background */
+  --background: oklch(0.984 0.002 286);
+  --foreground: oklch(0.14 0.012 285);
+
+  /* Softer card — minimal shadow, no harsh white */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.14 0.012 285);
+
+  /* Higher-contrast muted for accessibility */
+  --muted-foreground: oklch(0.5 0.012 285);
+  --muted: oklch(0.965 0.002 286);
+  --secondary: oklch(0.965 0.002 286);
+
+  /* Subtle border */
+  --border: oklch(0.91 0.004 286);
+  --input: oklch(0.91 0.004 286);
+
+  /* Accent uses primary */
+  --accent: oklch(0.96 0.003 286);
+  --accent-foreground: oklch(0.14 0.012 285);
+
+  /* Chart: blue-slate + cyan/violet for multi-outcome */
+  --chart-1: oklch(0.42 0.08 245);
+  --chart-2: oklch(0.58 0.1 280);
+  --chart-3: oklch(0.70 0.14 158);
+  --chart-4: oklch(0.72 0.10 60);
+  --chart-5: oklch(0.62 0.12 300);
+  --chart-grid: oklch(0.91 0.003 286);
+  --chart-crosshair: oklch(0.5 0.08 245);
+  --chart-tooltip-background: oklch(0.14 0.01 285 / 0.95);
+
+  /* Subtle shadow system — enterprise minimal */
+  --shadow-color: hsl(220 30% 4%);
+  --shadow-opacity: 0.06;
+  --shadow-sm: 0 1px 4px hsl(220 30% 4% / 0.06), 0 1px 2px hsl(220 30% 4% / 0.04);
+  --shadow: 0 2px 8px hsl(220 30% 4% / 0.07), 0 1px 3px hsl(220 30% 4% / 0.04);
+  --shadow-md: 0 4px 12px hsl(220 30% 4% / 0.08), 0 2px 4px hsl(220 30% 4% / 0.05);
+  --shadow-lg: 0 8px 24px hsl(220 30% 4% / 0.09), 0 4px 8px hsl(220 30% 4% / 0.05);
+  --shadow-xl: 0 16px 48px hsl(220 30% 4% / 0.10), 0 6px 16px hsl(220 30% 4% / 0.06);
+  --shadow-2xl: 0 24px 64px hsl(220 30% 4% / 0.12);
+
+  /* Sidebar inherits primary */
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.14 0.012 285);
+  --sidebar-primary: oklch(0.42 0.08 245);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.96 0.003 286);
+  --sidebar-accent-foreground: oklch(0.14 0.012 285);
+  --sidebar-border: oklch(0.91 0.004 286);
+}
+
+.dark {
+  --primary: oklch(0.72 0.10 245);
+  --primary-foreground: oklch(0.14 0.008 275);
+  --ring: oklch(0.72 0.10 245);
+  --chart-1: oklch(0.72 0.10 245);
+  --chart-line-primary: var(--chart-1);
+  --sidebar-primary: oklch(0.72 0.10 245);
+  --sidebar-ring: oklch(0.72 0.10 245);
+
+  --background: oklch(0.13 0.007 275);
+  --foreground: oklch(0.975 0.003 286);
+  --card: oklch(0.17 0.010 275);
+  --card-foreground: oklch(0.975 0.003 286);
+
+  --muted: oklch(0.22 0.007 275);
+  --muted-foreground: oklch(0.65 0.010 286);
+  --secondary: oklch(0.22 0.007 275);
+
+  --border: oklch(0.26 0.007 275);
+  --input: oklch(0.26 0.007 275);
+  --accent: oklch(0.22 0.007 275);
+  --accent-foreground: oklch(0.975 0.003 286);
+
+  --chart-1: oklch(0.72 0.10 245);
+  --chart-2: oklch(0.62 0.10 280);
+  --chart-3: oklch(0.65 0.13 160);
+  --chart-4: oklch(0.68 0.09 60);
+  --chart-5: oklch(0.65 0.11 300);
+  --chart-grid: oklch(0.26 0.007 275);
+  --chart-crosshair: oklch(0.5 0.08 245);
+  --chart-tooltip-background: oklch(0.13 0.007 275 / 0.95);
+
+  --shadow-color: hsl(220 20% 2%);
+  --shadow-opacity: 0.5;
+  --shadow-sm: 0 1px 4px hsl(220 20% 2% / 0.30), 0 1px 2px hsl(220 20% 2% / 0.20);
+  --shadow: 0 2px 8px hsl(220 20% 2% / 0.35), 0 1px 3px hsl(220 20% 2% / 0.22);
+  --shadow-md: 0 4px 12px hsl(220 20% 2% / 0.40), 0 2px 4px hsl(220 20% 2% / 0.25);
+  --shadow-lg: 0 8px 24px hsl(220 20% 2% / 0.45), 0 4px 8px hsl(220 20% 2% / 0.28);
+  --shadow-xl: 0 16px 48px hsl(220 20% 2% / 0.55), 0 6px 16px hsl(220 20% 2% / 0.35);
+  --shadow-2xl: 0 24px 64px hsl(220 20% 2% / 0.70);
+
+  --sidebar: oklch(0.13 0.007 275);
+  --sidebar-foreground: oklch(0.65 0.010 286);
+  --sidebar-primary: oklch(0.72 0.10 245);
+  --sidebar-primary-foreground: oklch(0.14 0.008 275);
+  --sidebar-accent: oklch(0.20 0.010 275);
+  --sidebar-accent-foreground: oklch(0.975 0.003 286);
+  --sidebar-border: oklch(0.26 0.007 275);
+}
+
+/* Shimmer utility for skeletons */
+@layer utilities {
+  .animate-shimmer {
+    background: linear-gradient(
+      90deg,
+      oklch(0.965 0.002 286) 0%,
+      oklch(0.91 0.004 286) 50%,
+      oklch(0.965 0.002 286) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .dark .animate-shimmer {
+    background: linear-gradient(
+      90deg,
+      oklch(0.22 0.007 275) 0%,
+      oklch(0.30 0.008 275) 50%,
+      oklch(0.22 0.007 275) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+}

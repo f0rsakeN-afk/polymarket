@@ -8,6 +8,9 @@ import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
 import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { Button } from "@workspace/ui/components/button"
+import { Badge } from "@workspace/ui/components/badge"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
@@ -210,7 +213,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   )
 
   const handleOutcomeSelect = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedOutcomeId(e.target.value),
+    (val: string | null) => setSelectedOutcomeId(val ?? ""),
     []
   )
 
@@ -275,23 +278,24 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="text-xs font-semibold text-blue-500 mb-3 uppercase tracking-wider">Admin: Resolve Market</div>
             <div className="flex items-center gap-2">
-              <select
-                value={selectedOutcomeId}
-                onChange={handleOutcomeSelect}
-                className="flex-1 h-9 rounded-md border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">Select winning outcome...</option>
-                {(market as MarketDetailResponse).outcomes.map((o) => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
-              </select>
-              <button
+              <Select value={selectedOutcomeId} onValueChange={handleOutcomeSelect}>
+                <SelectTrigger className="flex-1 h-9">
+                  <SelectValue placeholder="Select winning outcome..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(market as MarketDetailResponse).outcomes.map((o) => (
+                    <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
                 onClick={handleResolve}
                 disabled={!selectedOutcomeId || isResolving}
-                className="h-9 rounded-md bg-blue-500 px-4 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                variant="default"
+                size="sm"
               >
                 {isResolving ? "Resolving..." : "Resolve"}
-              </button>
+              </Button>
             </div>
           </div>
         )}

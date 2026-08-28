@@ -1,7 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, lazy, Suspense } from "react"
+import { useCallback, Suspense } from "react"
+import dynamic from "next/dynamic"
 import { useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
 import { MarketList } from "@/components/markets/market-list"
@@ -9,8 +10,9 @@ import { useMarkets } from "@/hooks/api/use-markets"
 import { useGlobalTrades } from "@/hooks/api/use-markets"
 import { SkeletonTrendingCarousel, SkeletonTradeFeed } from "@/components/shared/skeletons"
 
-const LazyTradeFeed = lazy(() =>
-  import("@/components/trades/trade-feed").then((m) => ({ default: m.TradeFeed }))
+const LazyTradeFeed = dynamic(
+  () => import("@/components/trades/trade-feed").then((m) => ({ default: m.TradeFeed })),
+  { ssr: false, loading: () => <SkeletonTradeFeed /> }
 )
 
 export default function HomePageContent() {

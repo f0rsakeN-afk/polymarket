@@ -238,6 +238,55 @@ const SkeletonTable = memo(function SkeletonTable({ rows = 5, cols = 4 }: { rows
   )
 })
 
+const SkeletonOrderBook = memo(function SkeletonOrderBook({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-center justify-between px-1">
+        <Skeleton className="h-2.5 w-12" />
+        <Skeleton className="h-2 w-16" />
+      </div>
+      {/* Column headers */}
+      <div className="flex items-center justify-between px-1">
+        <Skeleton className="h-2 w-6" />
+        <Skeleton className="h-2 w-10" />
+        <Skeleton className="h-2 w-6" />
+      </div>
+      {/* Rows */}
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center justify-between px-1.5">
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      ))}
+      {/* Spread divider */}
+      <div className="flex items-center justify-center py-1 rounded bg-muted/30">
+        <Skeleton className="h-2 w-20" />
+      </div>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={`bid-${i}`} className="flex items-center justify-between px-1.5">
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      ))}
+    </div>
+  )
+})
+
+const SkeletonOrderBookPanel = memo(function SkeletonOrderBookPanel() {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <Skeleton className="h-4 w-20" />
+        <Skeleton className="h-3 w-12" />
+      </div>
+      <SkeletonOrderBook />
+    </div>
+  )
+})
+
 export {
   Skeleton,
   SkeletonMarketCard,
@@ -249,4 +298,6 @@ export {
   SkeletonPositionsList,
   SkeletonMarketDetail,
   SkeletonTable,
+  SkeletonOrderBook,
+  SkeletonOrderBookPanel,
 }

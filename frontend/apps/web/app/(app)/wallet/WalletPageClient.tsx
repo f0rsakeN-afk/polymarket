@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { useWallet, useDeposit, useWithdraw } from "@/hooks/api/use-wallet"
 import { WalletBalance } from "@/components/wallet/wallet-balance"
 import { Button } from "@workspace/ui/components/button"
@@ -70,7 +70,7 @@ export function WalletPageClient() {
   const [depositOpen, setDepositOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
 
-  const handleDeposit = (data: DepositInput) => {
+  const handleDeposit = useCallback((data: DepositInput) => {
     deposit.mutate(data, {
       onSuccess: () => {
         sileo.success({ title: "Deposit initiated" })
@@ -78,9 +78,9 @@ export function WalletPageClient() {
       },
       onError: () => sileo.error({ title: "Deposit failed" }),
     })
-  }
+  }, [deposit])
 
-  const handleWithdraw = (data: WithdrawInput) => {
+  const handleWithdraw = useCallback((data: WithdrawInput) => {
     withdraw.mutate(data, {
       onSuccess: () => {
         sileo.success({ title: "Withdrawal initiated" })
@@ -88,7 +88,10 @@ export function WalletPageClient() {
       },
       onError: () => sileo.error({ title: "Withdrawal failed" }),
     })
-  }
+  }, [withdraw])
+
+  const openDeposit = useCallback(() => setDepositOpen(true), [])
+  const openWithdraw = useCallback(() => setWithdrawOpen(true), [])
 
   return (
     <div className="p-8 max-w-md space-y-6">
@@ -97,8 +100,8 @@ export function WalletPageClient() {
       <WalletBalance wallet={wallet ?? null} loading={isLoading} />
 
       <div className="flex gap-3">
-        <Button onClick={() => setDepositOpen(true)}>Deposit</Button>
-        <Button variant="outline" onClick={() => setWithdrawOpen(true)}>
+        <Button onClick={openDeposit}>Deposit</Button>
+        <Button variant="outline" onClick={openWithdraw}>
           Withdraw
         </Button>
       </div>

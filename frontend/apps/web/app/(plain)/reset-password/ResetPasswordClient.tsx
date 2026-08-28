@@ -43,7 +43,7 @@ export function ResetPasswordClient() {
     defaultValues: { email: emailParam, code: codeParam, newPassword: "", confirmPassword: "" },
   })
 
-  const mutation = useMutation({
+  const { mutate: resetPw, isPending: isResetting } = useMutation({
     mutationFn: (data: ResetPasswordInput) => passwordApi.resetPassword({ email: data.email, code: data.code, newPassword: data.newPassword }),
     onSuccess: () => {
       sileo.success({ title: "Password reset!" })
@@ -55,8 +55,8 @@ export function ResetPasswordClient() {
   })
 
   const onSubmit = useCallback(
-    (data: ResetPasswordInput) => mutation.mutate(data),
-    [mutation]
+    (data: ResetPasswordInput) => resetPw(data),
+    [resetPw]
   )
 
   return (
@@ -86,7 +86,14 @@ export function ResetPasswordClient() {
                       Email
                     </FormLabel>
                     <FormControl>
-                      <Input type="email" placeholder="you@example.com" autoComplete="email" {...field} />
+                      <Input
+                        type="email"
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                        {...field}
+                        disabled
+                        className="opacity-60 cursor-not-allowed"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -148,16 +155,16 @@ export function ResetPasswordClient() {
                 )}
               />
 
-              <Button type="submit" disabled={mutation.isPending} className="w-full">
-                {mutation.isPending ? "Resetting..." : "Reset password"}
+              <Button type="submit" disabled={isResetting} className="w-full">
+                {isResetting ? "Resetting..." : "Reset password"}
               </Button>
             </form>
           </Form>
 
-          <p className="mt-4 text-center">
+          <p className="mt-4 text-center text-xs text-muted-foreground">
             <Link
               href="/login"
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="hover:text-foreground transition-colors"
             >
               Back to sign in
             </Link>

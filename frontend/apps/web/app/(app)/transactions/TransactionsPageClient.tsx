@@ -1,5 +1,6 @@
 "use client"
 
+import { useCallback } from "react"
 import { useTransactions } from "@/hooks/api/use-wallet"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
@@ -35,6 +36,8 @@ const statusColors: Record<string, string> = {
 
 export function TransactionsPageClient() {
   const { data, isLoading, fetchNextPage, hasMore, isFetchingNextPage } = useTransactions() as ReturnType<typeof useTransactions> & { hasMore?: boolean }
+
+  const loadMore = useCallback((_e: unknown) => { void fetchNextPage() }, [fetchNextPage])
 
   if (isLoading) {
     return (
@@ -77,7 +80,7 @@ export function TransactionsPageClient() {
           <Button
             variant="outline"
             size="sm"
-            onClick={fetchNextPage}
+            onClick={loadMore}
             disabled={isFetchingNextPage}
           >
             Load more

@@ -125,7 +125,7 @@ export default function NotificationsPage() {
   const unreadCount = (data?.data ?? []).filter((n) => !n.read_at).length + realtimePrepend.filter((n) => !n.read_at).length
 
   const handleMarkAllRead = useCallback(() => {
-    markAllRead.mutate()
+    markAllRead()
   }, [markAllRead])
 
   const handleLoadMore = useCallback(() => {

@@ -1,6 +1,8 @@
 "use client"
 
+import { useCallback } from "react"
 import { Spinner } from "@workspace/ui/components/spinner"
+import { Button } from "@workspace/ui/components/button"
 import { useLPAnalytics } from "@/hooks/api/use-liquidity"
 
 function formatCurrency(n: string | number) {
@@ -12,7 +14,8 @@ function formatPct(n: string | number) {
 }
 
 export function LPDashboard() {
-  const { data, isLoading } = useLPAnalytics()
+  const { data, isLoading, error, refetch } = useLPAnalytics()
+  const handleRetry = useCallback((_e: unknown) => { void refetch() }, [refetch])
 
   if (isLoading) {
     return (
@@ -20,6 +23,13 @@ export function LPDashboard() {
         <Spinner className="size-5" />
       </div>
     )
+  }
+
+  if (error) {
+    return <div className="py-12 text-center">
+      <p className="text-destructive mb-3">Failed to load liquidity positions</p>
+      <Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>
+    </div>
   }
 
   if (!data || data.positions.length === 0) {

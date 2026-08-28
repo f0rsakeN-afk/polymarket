@@ -9,6 +9,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@workspace/ui/components/select"
 import Link from "next/link"
 
 export function SplitMergeForm() {
@@ -84,16 +85,16 @@ export function SplitMergeForm() {
         <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
           Market
         </label>
-        <select
-          value={marketId}
-          onChange={(e) => setMarketId(e.target.value)}
-          className="w-full h-9 rounded-md border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-        >
-          <option value="">Select market...</option>
-          {marketsData?.markets.map((m) => (
-            <option key={m.id} value={m.id}>{m.question.slice(0, 60)}{m.question.length > 60 ? "…" : ""}</option>
-          ))}
-        </select>
+        <Select value={marketId} onValueChange={(v) => { if (v) setMarketId(v) }}>
+          <SelectTrigger>
+            <SelectValue placeholder="Select market" />
+          </SelectTrigger>
+          <SelectContent>
+            {marketsData?.markets.map((m) => (
+              <SelectItem key={m.id} value={m.id}>{m.question.slice(0, 60)}{m.question.length > 60 ? "…" : ""}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {selectedMarket && (
           <p className="text-[10px] text-muted-foreground mt-1">
             YES ${Number(selectedMarket.yes_price).toFixed(2)} · NO ${Number(selectedMarket.no_price).toFixed(2)}

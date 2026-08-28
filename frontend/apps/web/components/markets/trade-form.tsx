@@ -264,9 +264,11 @@ function TradeForm({
     [onSubmit, clientOrderId, quote]
   )
 
-  const handleOrderTypeChange = useCallback((v: string) => {
-    if (v) setValue("order_type", v as "market" | "limit" | "fill_or_kill")
-    if (v !== "limit") setValue("post_only", false)
+  const handleOrderTypeChange = useCallback((v: string | null) => {
+    if (v) {
+      setValue("order_type", v as "market" | "limit" | "fill_or_kill")
+      if (v !== "limit") setValue("post_only", false)
+    }
   }, [setValue])
 
   // ── Guards ────────────────────────────────────────────────────────────────

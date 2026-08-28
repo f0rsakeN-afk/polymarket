@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, memo } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -68,6 +68,7 @@ const StepContent = memo(function StepContent({ step, children }: { step: string
 const RESEND_COOLDOWN = 60;
 
 export function SignupForm() {
+  const router = useRouter()
   const [step, setStep] = useState<"details" | "otp">("details");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -92,7 +93,6 @@ export function SignupForm() {
         setResendTimer(RESEND_COOLDOWN);
       } catch (err) {
         sileo.error({ title: err instanceof Error ? err.message : "Registration failed" });
-      } finally {
         setIsLoading(false);
       }
     },
@@ -105,7 +105,7 @@ export function SignupForm() {
     try {
       await registerApi.verifyEmail(email, otp);
       sileo.success({ title: "Email verified!" });
-      window.location.href = "/login";
+      router.push("/login");
     } catch (err) {
       sileo.error({ title: err instanceof Error ? err.message : "Invalid or expired code" });
       setOtpError(err instanceof Error ? err.message : "Invalid or expired code");
@@ -290,9 +290,15 @@ export function SignupForm() {
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
         Already have an account?{" "}
-        <Link href="/login" className="text-foreground underline-offset-4 hover:underline">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push("/login")}
+          className="text-xs text-foreground h-auto p-0"
+        >
           Sign in
-        </Link>
+        </Button>
       </p>
     </div>
   );

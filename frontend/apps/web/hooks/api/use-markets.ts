@@ -70,13 +70,16 @@ export function useMarketTrades(slug: string) {
       return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
     },
     enabled: !!slug,
-    select: (data) => ({
-      trades: data.pages.flatMap((p) => (p as { data?: { trades?: Trade[] } })?.data?.trades ?? []) as Trade[],
-      hasMore: (() => {
-        const last = data.pages[data.pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
-        return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
-      })(),
-    }),
+    select: (data) => {
+      const pages = data?.pages ?? []
+      return {
+        trades: pages.flatMap((p) => (p as { data?: { trades?: Trade[] } } | undefined)?.data?.trades ?? []) as Trade[],
+        hasMore: (() => {
+          const last = pages[pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
+          return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
+        })(),
+      }
+    },
     staleTime: 10_000,
   })
 }
@@ -85,20 +88,23 @@ export function useMarketTrades(slug: string) {
 
 export function useGlobalTrades(params?: { market_slug?: string }) {
   return useInfiniteQuery({
-    queryKey: queryKeys.globalTrades(params?.market_slug),
+    queryKey: queryKeys.globalTrades(params?.market_slug ?? undefined),
     queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) => {
       const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades
       return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
     },
-    select: (data) => ({
-      trades: data.pages.flatMap((p) => (p as { data?: { trades?: Trade[] } })?.data?.trades ?? []) as Trade[],
-      hasMore: (() => {
-        const last = data.pages[data.pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
-        return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
-      })(),
-    }),
+    select: (data) => {
+      const pages = data?.pages ?? []
+      return {
+        trades: pages.flatMap((p) => (p as { data?: { trades?: Trade[] } } | undefined)?.data?.trades ?? []) as Trade[],
+        hasMore: (() => {
+          const last = pages[pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
+          return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
+        })(),
+      }
+    },
     staleTime: 10_000,
   })
 }
@@ -142,7 +148,10 @@ export function usePriceHistory(slug: string, interval = "5m") {
 export function useOrderBook(slug: string) {
   return useQuery({
     queryKey: queryKeys.orderBook(slug),
-    queryFn: () => getOrderBook(slug).then((r) => r.data),
+    queryFn: () => getOrderBook(slug).then((r) => {
+      if (!r.success || !r.data) throw new Error("Failed to load order book")
+      return r.data
+    }),
     enabled: !!slug,
     staleTime: 5_000,
   })

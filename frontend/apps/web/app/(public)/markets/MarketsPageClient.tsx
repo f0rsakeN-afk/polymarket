@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { MarketList } from "@/components/markets/market-list"
 import { useMarkets } from "@/hooks/api/use-markets"
 import { cn } from "@workspace/ui/lib/utils"
+import { Input } from "@workspace/ui/components/input"
 import { SearchIcon } from "lucide-react"
 
 const CATEGORIES = ["All", "Crypto", "Politics", "Finance", "Science", "Sports", "Other"]
@@ -47,13 +48,14 @@ export function MarketsPageClient() {
 
       {/* Search */}
       <div className="relative">
-        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-        <input
+        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+        <Input
           type="text"
           value={search}
           onChange={handleSearchChange}
           placeholder="Search markets..."
-          className="w-full h-9 pl-9 pr-4 rounded-lg border border-border bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          aria-label="Search markets"
+          className="w-full h-9 pl-9 pr-4"
         />
       </div>
 

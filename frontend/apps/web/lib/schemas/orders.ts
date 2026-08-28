@@ -21,7 +21,7 @@ export const getQuoteSchema = z.object({
   market_id: z.string(),
   outcome: z.string(),
   side: z.enum(["buy", "sell"]),
-  amount: positiveMoney,
+  amount: z.string().min(1, "Amount must be greater than 0"),
 })
 
 export const quoteResponseSchema = z.object({

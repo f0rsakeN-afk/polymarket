@@ -153,8 +153,6 @@ const CommentRow = memo(function CommentRow({
   const [loadingReplies, setLoadingReplies] = useState(false)
   const [showReplyForm, setShowReplyForm] = useState(false)
   const [editing, setEditing] = useState(false)
-  const [liked, setLiked] = useState(false)
-  const [likeCount, setLikeCount] = useState(0)
   const { mutateAsync: postReply } = usePostComment(slug)
   const { mutateAsync: editComment } = useEditComment(slug)
   const { mutateAsync: removeComment, isPending: isDeleting } = useDeleteComment(slug)
@@ -211,11 +209,6 @@ const CommentRow = memo(function CommentRow({
     }
   }, [comment.id, removeComment])
 
-  const handleLike = useCallback(() => {
-    setLiked((v) => !v)
-    setLikeCount((n) => n === 0 ? 1 : n - 1)
-  }, [])
-
   const handleReplyClick = useCallback(() => {
     if (!currentUser) { sileo.info({ title: "Sign in to reply" }); return }
     setShowReplyForm((v) => !v)
@@ -271,19 +264,6 @@ const CommentRow = memo(function CommentRow({
 
           {/* Actions row */}
           <div className="mt-1.5 flex items-center gap-3">
-            <button
-              onClick={handleLike}
-              aria-label={liked ? "Unlike" : "Like"}
-              aria-pressed={liked}
-              className={cn(
-                "flex items-center gap-1 text-[10px] font-medium transition-colors",
-                liked ? "text-red-500" : "text-muted-foreground hover:text-red-400"
-              )}
-            >
-              <HeartIcon filled={liked} className="size-3" />
-              {likeCount > 0 && <span>{likeCount}</span>}
-            </button>
-
             {depth < 3 && (
               <button
                 onClick={handleReplyClick}
@@ -346,14 +326,6 @@ const CommentRow = memo(function CommentRow({
 })
 
 // ── Small inline icons ─────────────────────────────────────────────────────────
-
-function HeartIcon({ filled, className }: { filled: boolean; className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5">
-      <path d="M8 13.5s-5.5-3.5-5.5-7A3.5 3.5 0 0 1 8 3a3.5 3.5 0 0 1 5.5 3.5c0 3.5-5.5 7-5.5 7z" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
 
 function ChevronIcon({ expanded, className }: { expanded: boolean; className?: string }) {
   return (
@@ -424,7 +396,7 @@ const CommentList = memo(function CommentList({ slug }: { slug: string }) {
     )
   }
 
-  const visibleComments = comments.filter((c) => !c.is_deleted)
+  const visibleComments = (comments ?? []).filter((c) => !c.is_deleted)
 
   if (!visibleComments || visibleComments.length === 0) {
     return (

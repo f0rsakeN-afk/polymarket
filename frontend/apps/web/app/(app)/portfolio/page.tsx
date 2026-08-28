@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback } from "react"
+import { memo, useCallback } from "react"
 import { sileo } from "sileo"
 import { useQueryClient } from "@tanstack/react-query"
 import { usePositions } from "@/hooks/api/use-positions"
@@ -66,7 +66,7 @@ function SideBadge({ side }: { side: string }) {
 
 // ── Wallet Hero ────────────────────────────────────────────────────────────────
 
-function WalletHero({ wallet, username, positions }: {
+const WalletHero = memo(function WalletHero({ wallet, username, positions }: {
   wallet: NonNullable<ReturnType<typeof useWallet>["data"]>
   username: string
   positions: Position[]
@@ -131,11 +131,11 @@ function WalletHero({ wallet, username, positions }: {
       </CardContent>
     </Card>
   )
-}
+})
 
 // ── Positions ─────────────────────────────────────────────────────────────────
 
-function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
+const PositionsSection = memo(function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
   positions: Position[]
   isLoading: boolean
   hasMore?: boolean
@@ -199,11 +199,11 @@ function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
       )}
     </div>
   )
-}
+})
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 
-function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
+const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
   orders: Order[]
   isLoading: boolean
   hasMore?: boolean
@@ -274,7 +274,7 @@ function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
       )}
     </div>
   )
-}
+})
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 

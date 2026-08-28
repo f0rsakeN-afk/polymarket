@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { cn } from "@workspace/ui/lib/utils"
 
 const faqs = [
@@ -142,11 +142,12 @@ const faqs = [
 
 function FAQItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false)
+  const toggle = useCallback(() => setOpen(o => !o), [])
 
   return (
     <div className="border-b border-border last:border-0">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
       >
         <span className="text-sm font-medium text-foreground/90">{q}</span>

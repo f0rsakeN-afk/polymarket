@@ -47,50 +47,72 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
   }, [market.yes_price])
 
   const prob = Math.round(Number(market.yes_price) * 100)
-  const statusColor = status === "connected" ? "bg-green-500" : status === "connecting" ? "bg-yellow-500 animate-pulse" : "bg-muted"
+  const wsColor = status === "connected" ? "oklch(0.72 0.19 145)" : status === "connecting" ? "oklch(0.79 0.18 85)" : "oklch(0.7 0.0 0)"
+  const yesColor = "oklch(0.63 0.15 145)"
+  const noColor = "oklch(0.63 0.24 27)"
 
   return (
     <Link
       href={`/markets/${market.slug}`}
       role="listitem"
       aria-label={`${market.question} — YES ${prob}%, NO ${100 - prob}%`}
-      className="flex-shrink-0 w-[320px] rounded-xl border border-border bg-card p-4 hover:border-primary/30 transition-colors"
+      className="flex-shrink-0 w-[280px] rounded-xl border border-border bg-card p-4 hover:border-primary/30 transition-colors flex flex-col gap-3"
     >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[9px] font-bold tracking-widest text-muted-foreground">POLYMARKET</span>
+      {/* Header row */}
+      <div className="flex items-center gap-2">
+        <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground">POLYMARKET</span>
         {market.category && (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.5rem] text-muted-foreground">
             {market.category}
           </span>
         )}
-        <span className={cn("ml-auto size-1.5 rounded-full shrink-0", statusColor)} role="status" aria-label={`WebSocket ${status}`} />
+        <span
+          className="ml-auto size-1.5 rounded-full shrink-0"
+          style={{ backgroundColor: wsColor }}
+          role="status"
+          aria-label={`WebSocket ${status}`}
+        />
       </div>
-      <h3 className="text-xs font-medium leading-snug line-clamp-2 mb-3">{market.question}</h3>
-      <div className="h-28 mb-3 overflow-hidden rounded-md" aria-hidden="true">
+
+      {/* Question */}
+      <h3 className="text-xs font-medium text-foreground leading-snug line-clamp-2 flex-1">
+        {market.question}
+      </h3>
+
+      {/* Mini chart */}
+      <div className="h-24 rounded-md overflow-hidden" aria-hidden="true">
         <LiveLineChart
           data={priceHistory}
           value={priceHistory.at(-1)?.value ?? Number(market.yes_price)}
           window={300}
           numXTicks={3}
-          height={112}
+          height={96}
         >
-          <LiveLine dataKey="value" stroke="var(--chart-1)" fill />
+          <LiveLine dataKey="value" stroke="var(--primary)" fill />
         </LiveLineChart>
       </div>
+
+      {/* YES/NO prices + volume */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <div>
-            <div className="text-[9px] text-muted-foreground">YES</div>
-            <div className="text-sm font-bold text-green-500">{prob}%</div>
+            <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
+            <div className="text-sm font-bold tabular-nums" style={{ color: yesColor }}>{prob}%</div>
           </div>
           <div>
-            <div className="text-[9px] text-muted-foreground">NO</div>
-            <div className="text-sm font-bold text-red-500">{100 - prob}%</div>
+            <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
+            <div className="text-sm font-bold tabular-nums" style={{ color: noColor }}>{100 - prob}%</div>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[9px] text-muted-foreground">Volume</div>
-          <div className="text-xs font-medium">${(Number(market.total_volume) / 1_000_000).toFixed(1)}M</div>
+          <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">Volume</div>
+          <div className="text-xs font-medium tabular-nums text-foreground">
+            ${Number(market.total_volume) >= 1_000_000
+              ? `${(Number(market.total_volume) / 1_000_000).toFixed(1)}M`
+              : Number(market.total_volume) >= 1_000
+              ? `${(Number(market.total_volume) / 1_000).toFixed(1)}K`
+              : `$${Number(market.total_volume).toFixed(0)}`}
+          </div>
         </div>
       </div>
     </Link>

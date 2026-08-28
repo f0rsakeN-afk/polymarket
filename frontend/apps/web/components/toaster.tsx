@@ -1,26 +1,23 @@
 "use client"
 
-import { useTheme } from "next-themes"
-import { useMemo, useSyncExternalStore } from "react"
 import { Toaster as SileoToaster } from "sileo"
+import "sileo/styles.css"
 
-export function Toaster() {
-  const { resolvedTheme } = useTheme()
-  const mounted = useSyncExternalStore(
-    () => () => {},
-    () => false,
-    () => true,
-  )
-
-  const options = useMemo(() => ({ duration: 4000 }), [])
-
-  if (!mounted) return null
-
+function Toaster({
+  position = "top-center",
+}: {
+  position?: "top-left" | "top-center" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right"
+}) {
   return (
     <SileoToaster
-      position="bottom-right"
-      theme={resolvedTheme as "light" | "dark" | "system"}
-      options={options}
+      position={position}
+      offset={12}
+      options={{
+        fill: "var(--foreground)",
+        duration: 2500,
+      }}
     />
   )
 }
+
+export { Toaster }
