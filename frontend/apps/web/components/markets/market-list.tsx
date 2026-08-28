@@ -66,7 +66,7 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
     <div className="space-y-4">
       <div
         ref={containerRef}
-        className="overflow-auto pt-1"
+        className="overflow-auto pt-1 hide-scrollbar"
         style={{ maxHeight: "800px" }}
       >
         <div

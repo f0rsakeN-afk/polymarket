@@ -13,10 +13,28 @@ const dummyMarket = {
   volume: "$9.8M",
   activities: [
     { type: "buy", amount: "250", price: "₿0.58", prob: "58%", time: "2m ago" },
-    { type: "sell", amount: "100", price: "₿0.57", prob: "57%", time: "5m ago" },
+    {
+      type: "sell",
+      amount: "100",
+      price: "₿0.57",
+      prob: "57%",
+      time: "5m ago",
+    },
     { type: "buy", amount: "500", price: "₿0.59", prob: "59%", time: "8m ago" },
-    { type: "sell", amount: "150", price: "₿0.56", prob: "56%", time: "12m ago" },
-    { type: "buy", amount: "300", price: "₿0.58", prob: "58%", time: "15m ago" },
+    {
+      type: "sell",
+      amount: "150",
+      price: "₿0.56",
+      prob: "56%",
+      time: "12m ago",
+    },
+    {
+      type: "buy",
+      amount: "300",
+      price: "₿0.58",
+      prob: "58%",
+      time: "15m ago",
+    },
   ],
 }
 
@@ -36,16 +54,16 @@ function MarketCard({ className }: { className?: string }) {
     >
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-[10px] font-bold tracking-widest text-muted-foreground">
+        {/*<span className="text-[10px] font-bold tracking-widest text-muted-foreground">
           POLYMARKET
-        </span>
+        </span>*/}
         <div className="flex rounded-md border border-border p-0.5">
           {(["shares", "bought", "activity"] as Tab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                "rounded-sm px-2 py-0.5 text-[10px] uppercase tracking-wide transition-colors",
+                "rounded-sm px-2 py-0.5 text-[10px] tracking-wide uppercase transition-colors",
                 activeTab === tab
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-muted"
@@ -58,7 +76,7 @@ function MarketCard({ className }: { className?: string }) {
       </div>
 
       {/* Question */}
-      <h2 className="mb-3 text-sm font-medium leading-snug">
+      <h2 className="mb-3 text-sm leading-snug font-medium">
         {dummyMarket.question}
       </h2>
 
@@ -66,7 +84,7 @@ function MarketCard({ className }: { className?: string }) {
       <div className="mb-3 grid grid-cols-2 gap-2">
         <button className="flex flex-col items-start rounded-lg border border-green-500/30 bg-green-500/5 p-2.5 text-left transition-colors hover:bg-green-500/10">
           <div className="mb-1 flex w-full items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase text-green-500">
+            <span className="text-[10px] font-semibold text-green-500 uppercase">
               Yes
             </span>
             <span className="text-lg font-bold text-green-500">
@@ -77,7 +95,7 @@ function MarketCard({ className }: { className?: string }) {
         </button>
         <button className="flex flex-col items-start rounded-lg border border-red-500/30 bg-red-500/5 p-2.5 text-left transition-colors hover:bg-red-500/10">
           <div className="mb-1 flex w-full items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase text-red-500">
+            <span className="text-[10px] font-semibold text-red-500 uppercase">
               No
             </span>
             <span className="text-lg font-bold text-red-500">
@@ -103,7 +121,7 @@ function MarketCard({ className }: { className?: string }) {
             key={tab}
             onClick={() => setPositionTab(tab)}
             className={cn(
-              "pb-2 text-[10px] uppercase tracking-wide transition-colors",
+              "pb-2 text-[10px] tracking-wide uppercase transition-colors",
               positionTab === tab
                 ? "border-b-2 border-primary font-medium text-foreground"
                 : "text-muted-foreground hover:text-foreground"
@@ -120,10 +138,7 @@ function MarketCard({ className }: { className?: string }) {
       {/* Activity List */}
       <div className="space-y-2">
         {dummyMarket.activities.map((activity, i) => (
-          <div
-            key={i}
-            className="flex items-center justify-between py-1.5"
-          >
+          <div key={i} className="flex items-center justify-between py-1.5">
             <div className="flex items-center gap-2">
               <span
                 className={cn(

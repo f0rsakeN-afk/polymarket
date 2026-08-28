@@ -27,7 +27,7 @@ function CategoryTabs({ tag }: CategoryTabsProps) {
   )
 
   return (
-    <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide">
+    <div className="flex items-center gap-1 overflow-x-auto hide-scrollbar">
       {["All", ...categories].map((cat) => {
         const isSelected = tag.toLowerCase() === cat.toLowerCase()
         return (

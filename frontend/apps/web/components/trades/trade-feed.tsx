@@ -94,7 +94,7 @@ const TradeFeed = memo(function TradeFeed({ trades, loading, title, listRef }: T
     <section aria-label={title ?? "Trade feed"}>
       {title && <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>}
       <Card className="overflow-hidden pt-0">
-        <div ref={parentRef} className="overflow-auto" style={{ maxHeight: "500px", minHeight: "200px" }}>
+        <div ref={parentRef} className="overflow-auto hide-scrollbar" style={{ maxHeight: "500px", minHeight: "200px" }}>
           {/* Header */}
           <div
             className="sticky top-0 z-20 bg-muted grid border-b border-border text-[13px] font-medium text-muted-foreground"

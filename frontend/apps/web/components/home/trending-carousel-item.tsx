@@ -7,7 +7,6 @@ import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
 import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { MarketResponse } from "@/hooks/api/types/market"
-import { cn } from "@workspace/ui/lib/utils"
 
 interface TrendingCarouselItemProps {
   market: MarketResponse
@@ -21,7 +20,10 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
     if (msg.type === "market:price_update" && msg.yes_price != null) {
       const now = Math.floor(Date.now() / 1000)
       setPriceHistory((prev) => {
-        const next = [...prev, { time: now, value: msg.yes_price ?? prev.at(-1)?.value ?? 0 }]
+        const next = [
+          ...prev,
+          { time: now, value: msg.yes_price ?? prev.at(-1)?.value ?? 0 },
+        ]
         return next.slice(-60)
       })
     }
@@ -47,7 +49,12 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
   }, [market.yes_price])
 
   const prob = Math.round(Number(market.yes_price) * 100)
-  const wsColor = status === "connected" ? "oklch(0.72 0.19 145)" : status === "connecting" ? "oklch(0.79 0.18 85)" : "oklch(0.7 0.0 0)"
+  const wsColor =
+    status === "connected"
+      ? "oklch(0.72 0.19 145)"
+      : status === "connecting"
+        ? "oklch(0.79 0.18 85)"
+        : "oklch(0.7 0.0 0)"
   const yesColor = "oklch(0.63 0.15 145)"
   const noColor = "oklch(0.63 0.24 27)"
 
@@ -56,18 +63,20 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       href={`/markets/${market.slug}`}
       role="listitem"
       aria-label={`${market.question} — YES ${prob}%, NO ${100 - prob}%`}
-      className="flex-shrink-0 w-[280px] rounded-xl border border-border bg-card p-4 hover:border-primary/30 transition-colors flex flex-col gap-3"
+      className="flex w-[280px] shrink-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30"
     >
       {/* Header row */}
       <div className="flex items-center gap-2">
-        <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground">POLYMARKET</span>
+        <span className="text-[0.5rem] font-semibold tracking-widest text-muted-foreground uppercase">
+          POLYMARKET
+        </span>
         {market.category && (
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.5rem] text-muted-foreground">
             {market.category}
           </span>
         )}
         <span
-          className="ml-auto size-1.5 rounded-full shrink-0"
+          className="ml-auto size-1.5 shrink-0 rounded-full"
           style={{ backgroundColor: wsColor }}
           role="status"
           aria-label={`WebSocket ${status}`}
@@ -75,12 +84,12 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       </div>
 
       {/* Question */}
-      <h3 className="text-xs font-medium text-foreground leading-snug line-clamp-2 flex-1">
+      <h3 className="line-clamp-2 flex-1 text-xs leading-snug font-medium text-foreground">
         {market.question}
       </h3>
 
       {/* Mini chart */}
-      <div className="h-24 rounded-md overflow-hidden" aria-hidden="true">
+      <div className="h-24 overflow-hidden rounded-md" aria-hidden="true">
         <LiveLineChart
           data={priceHistory}
           value={priceHistory.at(-1)?.value ?? Number(market.yes_price)}
@@ -96,22 +105,39 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div>
-            <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
-            <div className="text-sm font-bold tabular-nums" style={{ color: yesColor }}>{prob}%</div>
+            <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
+              YES
+            </div>
+            <div
+              className="text-sm font-bold tabular-nums"
+              style={{ color: yesColor }}
+            >
+              {prob}%
+            </div>
           </div>
           <div>
-            <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
-            <div className="text-sm font-bold tabular-nums" style={{ color: noColor }}>{100 - prob}%</div>
+            <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
+              NO
+            </div>
+            <div
+              className="text-sm font-bold tabular-nums"
+              style={{ color: noColor }}
+            >
+              {100 - prob}%
+            </div>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[0.5rem] uppercase tracking-wider text-muted-foreground mb-0.5">Volume</div>
-          <div className="text-xs font-medium tabular-nums text-foreground">
-            ${Number(market.total_volume) >= 1_000_000
+          <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
+            Volume
+          </div>
+          <div className="text-xs font-medium text-foreground tabular-nums">
+            $
+            {Number(market.total_volume) >= 1_000_000
               ? `${(Number(market.total_volume) / 1_000_000).toFixed(1)}M`
               : Number(market.total_volume) >= 1_000
-              ? `${(Number(market.total_volume) / 1_000).toFixed(1)}K`
-              : `$${Number(market.total_volume).toFixed(0)}`}
+                ? `${(Number(market.total_volume) / 1_000).toFixed(1)}K`
+                : `$${Number(market.total_volume).toFixed(0)}`}
           </div>
         </div>
       </div>

@@ -1,7 +1,8 @@
 import { Geist_Mono, Inter } from "next/font/google"
 import type { Metadata } from "next"
 
-import "@workspace/ui/globals.css"
+import"../styles/hideScrollbar.css"
+import "./globals.css"
 import "sileo/styles.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Providers } from "@/components/providers"

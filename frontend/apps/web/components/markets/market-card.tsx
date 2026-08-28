@@ -30,13 +30,15 @@ function TradePill({
 }) {
   const isYes = variant === "yes"
   // oklch matches our design system green/red — using CSS variables for consistency
-  const bg = isYes ? "oklch(0.72 0.19 145 / 0.12)" : "oklch(0.63 0.24 27 / 0.10)"
+  const bg = isYes
+    ? "oklch(0.72 0.19 145 / 0.12)"
+    : "oklch(0.63 0.24 27 / 0.10)"
   const textColor = isYes ? "oklch(0.63 0.15 145)" : "oklch(0.63 0.24 27)"
 
   return (
     <Link
       href={href}
-      className="h-7 w-11 !rounded-xs flex items-center justify-center text-xs font-semibold transition-colors duration-150 hover:opacity-80"
+      className="flex h-7 w-11 items-center justify-center !rounded-xs text-xs font-semibold transition-colors duration-150 hover:opacity-80"
       style={{ backgroundColor: bg, color: textColor }}
     >
       {label}
@@ -54,17 +56,30 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
   isLast: boolean
 }) {
   const pct = Math.round(Number(outcome.price) * 100)
-  const isYes = outcome.name === "Yes" || outcome.name === "yes" || outcome.outcome_index === 0
+  const isYes =
+    outcome.name === "Yes" ||
+    outcome.name === "yes" ||
+    outcome.outcome_index === 0
   const color = isYes ? "#22c55e" : "#ef4444"
 
   return (
-    <div className={cn("flex items-center gap-3 py-2", !isLast && "border-b border-border/50")}>
+    <div
+      className={cn(
+        "flex items-center gap-3 py-2",
+        !isLast && "border-b border-border/50"
+      )}
+    >
       {/* Name + % */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate">{outcome.name}</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">
+          {outcome.name}
+        </p>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-base font-semibold tabular-nums" style={{ color }}>
+      <div className="flex shrink-0 items-center gap-2">
+        <span
+          className="text-base font-semibold tabular-nums"
+          style={{ color }}
+        >
           {pct}%
         </span>
         <TradePill
@@ -85,8 +100,16 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
 // ─── Multi-outcome layout: compact 2-column grid ───────────────────────────────
 
 const MULTI_COLORS = [
-  "#22c55e", "#ef4444", "#3b82f6", "#f59e0b", "#a855f7",
-  "#06b6d4", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6",
+  "#22c55e",
+  "#ef4444",
+  "#3b82f6",
+  "#f59e0b",
+  "#a855f7",
+  "#06b6d4",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+  "#8b5cf6",
 ]
 
 function MultiOutcomeCell({
@@ -103,18 +126,21 @@ function MultiOutcomeCell({
   return (
     <Link
       href={`/markets/${marketSlug}?outcomeIndex=${outcome.outcome_index}`}
-      className="group flex flex-col gap-1 p-2 rounded-md border border-border/60 bg-card/50 hover:bg-accent hover:border-primary/40 transition-all"
+      className="group flex flex-col gap-1 rounded-md border border-border/60 bg-card/50 p-2 transition-all hover:border-primary/40 hover:bg-accent"
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-foreground truncate max-w-20 group-hover:underline">
+        <span className="max-w-20 truncate text-xs font-medium text-foreground group-hover:underline">
           {outcome.name}
         </span>
-        <span className="text-xs font-semibold tabular-nums shrink-0" style={{ color }}>
+        <span
+          className="shrink-0 text-xs font-semibold tabular-nums"
+          style={{ color }}
+        >
           {pct}%
         </span>
       </div>
       {/* Mini bar */}
-      <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full transition-all duration-300"
           style={{ width: `${pct}%`, backgroundColor: color }}
@@ -147,7 +173,7 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
       {overflow > 0 && (
         <Link
           href={`/markets/${marketSlug}`}
-          className="flex items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all col-span-2"
+          className="col-span-2 flex items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground transition-all hover:border-primary/40 hover:text-foreground"
         >
           +{overflow} more
         </Link>
@@ -178,31 +204,34 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
   }, [isMulti, market.outcomes, market.yes_price, market.no_price])
 
   return (
-    <article className="rounded-xl border border-border bg-card overflow-hidden hover:border-primary/30 hover:shadow-md hover:-translate-y-px transition-all duration-200 flex flex-col mb-4">
+    <article className="mb-4 flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:shadow-md">
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-3 pb-2">
-        {market.status === "resolved" ? (
-          <span className="shrink-0 rounded-full bg-yellow-500/10 px-2 py-0.5 text-[0.5rem] font-medium text-yellow-600 uppercase tracking-wider">
+        {market.status === "resolved" && (
+          <span className="shrink-0 rounded-full bg-yellow-500/10 px-2 py-0.5 text-[0.5rem] font-medium tracking-wider text-yellow-600 uppercase">
             RESOLVED
           </span>
-        ) : market.category ? (
-          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.5rem] font-medium text-primary uppercase tracking-wider">
-            {market.category}
-          </span>
-        ) : null}
-        <Link href={`/markets/${market.slug}`} className="flex-1 min-w-0" aria-label={`View ${market.question}`}>
-          <h3 className="text-sm font-semibold text-foreground leading-snug line-clamp-2 hover:underline decoration-2">
+        )}
+        <Link
+          href={`/markets/${market.slug}`}
+          className="min-w-0 flex-1"
+          aria-label={`View ${market.question}`}
+        >
+          <h3 className="line-clamp-2 text-sm leading-snug font-semibold text-foreground decoration-2 hover:underline">
             {market.question}
           </h3>
         </Link>
       </div>
 
-      <div className="border-t border-border/50 mx-4" />
+      <div className="mx-4 border-t border-border/50" />
 
       {/* Outcomes */}
-      <div className="px-4 py-2 flex-1">
+      <div className="flex-1 px-4 py-2">
         {isMulti ? (
-          <MultiOutcomeGrid outcomes={displayOutcomes} marketSlug={market.slug} />
+          <MultiOutcomeGrid
+            outcomes={displayOutcomes}
+            marketSlug={market.slug}
+          />
         ) : (
           displayOutcomes.map((o, i) => (
             <BinaryOutcomeRow
@@ -216,12 +245,15 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-border/50 mt-auto">
-        <span className="text-xs text-muted-foreground uppercase font-semibold">
+      <div className="mt-auto flex items-center justify-between border-t border-border/50 px-4 py-2">
+        <span className="text-xs font-semibold text-muted-foreground uppercase">
           ${formatVolume(market.total_volume)} Vol
         </span>
         <span className="text-xs text-muted-foreground">
-          {new Date(market.closes_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          {new Date(market.closes_at).toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          })}
         </span>
       </div>
     </article>
@@ -232,29 +264,32 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
 
 export function MarketCardSkeleton() {
   return (
-    <article className="rounded-xl border border-border bg-card overflow-hidden mb-4">
+    <article className="mb-4 overflow-hidden rounded-xl border border-border bg-card">
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-3 pb-2">
-        <Skeleton className="h-5 w-14 rounded-full shrink-0" />
+        <Skeleton className="h-5 w-14 shrink-0 rounded-full" />
         <div className="flex-1 space-y-2">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-3/4" />
         </div>
       </div>
-      <div className="border-t border-border/50 mx-4" />
+      <div className="mx-4 border-t border-border/50" />
       {/* Outcome rows */}
-      <div className="px-4 py-2 space-y-0">
+      <div className="space-y-0 px-4 py-2">
         {[1, 2].map((i) => (
-          <div key={i} className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0">
+          <div
+            key={i}
+            className="flex items-center gap-3 border-b border-border/50 py-2 last:border-0"
+          >
             <Skeleton className="h-4 flex-1" />
             <Skeleton className="h-4 w-10 rounded" />
-            <Skeleton className="h-7 w-11 !rounded-xs shrink-0" />
-            <Skeleton className="h-7 w-11 !rounded-xs shrink-0" />
+            <Skeleton className="h-7 w-11 shrink-0 !rounded-xs" />
+            <Skeleton className="h-7 w-11 shrink-0 !rounded-xs" />
           </div>
         ))}
       </div>
       {/* Footer */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-border/50">
+      <div className="flex items-center justify-between border-t border-border/50 px-4 py-2">
         <Skeleton className="h-3 w-20" />
         <Skeleton className="h-3 w-16" />
       </div>
