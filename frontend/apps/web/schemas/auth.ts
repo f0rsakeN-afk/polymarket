@@ -1,15 +1,26 @@
 import { z } from "zod"
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
+export const emailSchema = z.object({
+  email: z.email("Please enter a valid email"),
+})
+
+export const passwordSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1, "Password is required"),
+  totp_code: z.string().optional(),
+})
 
 export const loginSchema = z.object({
-  email: z.string().email("Please enter a valid email"),
+  email: z.email("Please enter a valid email"),
   password: z.string().min(1, "Password is required"),
-  totp_code: z.string().regex(/^\d{6}$/).optional(),
+  totp_code: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
 })
 
 export const registerSchema = z.object({
-  email: z.string().email("Please enter a valid email"),
+  email: z.email("Please enter a valid email"),
   username: z
     .string()
     .min(3, "Username must be at least 3 characters")
@@ -23,8 +34,11 @@ export const registerSchema = z.object({
 })
 
 export const verifyEmailSchema = z.object({
-  email: z.string().email(),
-  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+  email: z.email(),
+  code: z
+    .string()
+    .length(6, "Code must be 6 digits")
+    .regex(/^\d{6}$/, "Code must be 6 digits"),
 })
 
 export const resendVerificationSchema = z.object({
@@ -38,31 +52,48 @@ export const setPasswordSchema = z.object({
 export const changePasswordSchema = z.object({
   old_password: z.string().min(1),
   new_password: z.string().min(8).max(128),
-  totp_code: z.string().regex(/^\d{6}$/).optional(),
+  totp_code: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
 })
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email("Please enter a valid email"),
+  email: z.email("Please enter a valid email"),
 })
 
-export const resetPasswordSchema = z.object({
-  email: z.string().email(),
-  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
-  newPassword: z.string().min(8, "Password must be at least 8 characters").max(128),
-  confirmPassword: z.string(),
-}).refine((d) => d.newPassword === d.confirmPassword, {
-  message: "Passwords do not match",
-  path: ["confirmPassword"],
-})
+export const resetPasswordSchema = z
+  .object({
+    email: z.email(),
+    code: z
+      .string()
+      .length(6, "Code must be 6 digits")
+      .regex(/^\d{6}$/, "Code must be 6 digits"),
+    newPassword: z
+      .string()
+      .min(8, "Password must be at least 8 characters")
+      .max(128),
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.newPassword === d.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  })
 
 export const magicLinkRequestSchema = z.object({
-  email: z.string().email("Please enter a valid email"),
+  email: z.email("Please enter a valid email"),
 })
 
 export const verifyMagicSchema = z.object({
-  email: z.string().email(),
-  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
-  totp_code: z.string().regex(/^\d{6}$/).optional(),
+  email: z.email("Please enter a valid email"),
+  code: z
+    .string()
+    .length(6, "Code must be 6 digits")
+    .regex(/^\d{6}$/, "Code must be 6 digits"),
+  totp_code: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
 })
 
 export const verifyMagicUrlSchema = z.object({
@@ -71,17 +102,26 @@ export const verifyMagicUrlSchema = z.object({
 
 export const magicUrl2FASchema = z.object({
   partial_token: z.string().min(1),
-  totp_code: z.string().length(6).regex(/^\d{6}$/),
+  totp_code: z
+    .string()
+    .length(6)
+    .regex(/^\d{6}$/),
 })
 
 export const refreshSchema = z.object({})
 
 export const totpCodeSchema = z.object({
-  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+  code: z
+    .string()
+    .length(6, "Code must be 6 digits")
+    .regex(/^\d{6}$/, "Code must be 6 digits"),
 })
 
 export const totpDisableSchema = z.object({
-  code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
+  code: z
+    .string()
+    .length(6, "Code must be 6 digits")
+    .regex(/^\d{6}$/, "Code must be 6 digits"),
   password: z.string().min(1),
 })
 
@@ -93,8 +133,6 @@ export const twoFactorStatusResponseSchema = z.object({
   is_2fa_enabled: z.boolean(),
   is_2fa_pending: z.boolean(),
 })
-
-// ─── Types ─────────────────────────────────────────────────────────────────────
 
 export type LoginInput = z.infer<typeof loginSchema>
 export type RegisterInput = z.infer<typeof registerSchema>

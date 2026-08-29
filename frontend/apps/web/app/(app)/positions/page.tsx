@@ -1,4 +1,4 @@
-import { PositionsPageClient } from "./PositionsPageClient"
+import { PositionsPageClient } from "../../../components/positions/PositionsPageClient"
 
 export const metadata = {
   title: "Positions",

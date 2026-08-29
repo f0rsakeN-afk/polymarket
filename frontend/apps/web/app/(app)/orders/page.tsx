@@ -1,4 +1,4 @@
-import { OrdersPageClient } from "./OrdersPageClient"
+import { OrdersPageClient } from "../../../components/orders/OrdersPageClient"
 
 export const metadata = {
   title: "Orders",

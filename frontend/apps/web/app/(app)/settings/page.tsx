@@ -8,7 +8,8 @@ const sections = [
     href: "/settings/sessions",
     icon: Users,
     title: "Active Sessions",
-    description: "Manage your active sessions and revoke devices you don't recognize.",
+    description:
+      "Manage your active sessions and revoke devices you don't recognize.",
   },
   {
     href: "/settings/referrals",
@@ -32,32 +33,45 @@ const sections = [
 
 export default function SettingsPage() {
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="container mx-auto max-w-7xl space-y-6 px-4 py-8">
       <SettingsBreadcrumb page="Overview" />
 
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="mt-0.5 text-sm text-muted-foreground">
           Manage your account and preferences.
         </p>
       </div>
 
       <div className="grid gap-4">
         {sections.map(({ href, icon: Icon, title, description }) => (
-          <Link key={href} href={href} className="block group">
-            <Card className="overflow-hidden group-hover:bg-accent/40 transition-colors">
-              <CardContent className="py-5 px-6">
+          <Link key={href} href={href} className="group block">
+            <Card className="overflow-hidden transition-colors group-hover:bg-accent/40">
+              <CardContent className="px-6 py-5">
                 <div className="flex items-center gap-4">
-                  <div className="size-9 rounded-lg bg-accent flex items-center justify-center shrink-0">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent">
                     <Icon className="size-4 text-muted-foreground" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium group-hover:text-foreground">{title}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium group-hover:text-foreground">
+                      {title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {description}
+                    </p>
                   </div>
-                  <div className="size-4 text-muted-foreground/40 shrink-0">
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M6 3l5 5-5 5" strokeLinecap="round" strokeLinejoin="round" />
+                  <div className="size-4 shrink-0 text-muted-foreground/40">
+                    <svg
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    >
+                      <path
+                        d="M6 3l5 5-5 5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </div>
                 </div>

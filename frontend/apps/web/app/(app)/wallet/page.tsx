@@ -1,4 +1,4 @@
-import { WalletPageClient } from "./WalletPageClient"
+import { WalletPageClient } from "../../../components/wallet/WalletPageClient"
 
 export const metadata = {
   title: "Wallet",

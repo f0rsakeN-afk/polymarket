@@ -19,24 +19,18 @@ import {
 } from "@workspace/ui/components/form"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { sileo } from "sileo"
-
-// ─── Schema ───────────────────────────────────────────────────────────────────
-
-const emailSchema = z.object({
-  email: z.string().email("Please enter a valid email"),
-})
-
-const passwordSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1, "Password is required"),
-  totp_code: z.string().optional(),
-})
-
-// ─── Polygon Logo ───────────────────────────────────────────────────────────────
+import { emailSchema, passwordSchema } from "@/schemas/auth"
 
 function PolygonMark({ className }: { className?: string }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+    <svg
+      width="28"
+      height="28"
+      viewBox="0 0 20 20"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
       <path
         d="M10 1L18.5 6.5V15.5L10 21L1.5 15.5V6.5L10 1Z"
         stroke="currentColor"
@@ -106,7 +100,7 @@ function EmailStep({
             name="email"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                <FormLabel className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   Email
                 </FormLabel>
                 <FormControl>
@@ -128,11 +122,9 @@ function EmailStep({
         </form>
       </Form>
 
-      {error && (
-        <p className="text-xs text-destructive text-center">{error}</p>
-      )}
+      {error && <p className="text-center text-xs text-destructive">{error}</p>}
 
-      <div className="mt-4 mb-4 relative">
+      <div className="relative mt-4 mb-4">
         <div className="absolute inset-0 flex items-center">
           <span className="w-full border-t border-border/60" />
         </div>
@@ -157,7 +149,7 @@ function EmailStep({
           variant="ghost"
           size="sm"
           onClick={() => onForgotPassword(form.getValues("email"))}
-          className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
         >
           Forgot password?
         </Button>
@@ -166,7 +158,7 @@ function EmailStep({
           variant="ghost"
           size="sm"
           onClick={onSignup}
-          className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
         >
           Create account
         </Button>
@@ -187,7 +179,10 @@ function PasswordStep({
   const router = useRouter()
   const searchParams = useSearchParams()
   const rawNext = searchParams.get("next") ?? "/portfolio"
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/portfolio"
+  const next =
+    rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : "/portfolio"
 
   const [isLoading, setIsLoading] = useState(false)
   const [globalError, setGlobalError] = useState("")
@@ -201,7 +196,11 @@ function PasswordStep({
     setGlobalError("")
     setIsLoading(true)
     try {
-      await authApi.login(data.email, data.password, data.totp_code || undefined)
+      await authApi.login(
+        data.email,
+        data.password,
+        data.totp_code || undefined
+      )
       router.push(next)
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Login failed")
@@ -214,14 +213,16 @@ function PasswordStep({
     <div className="space-y-4">
       <Form {...form}>
         <form onSubmit={onSubmit} className="space-y-4">
-          <p className="text-sm text-muted-foreground text-center py-2">{email}</p>
+          <p className="py-2 text-center text-sm text-muted-foreground">
+            {email}
+          </p>
 
           <FormField
             control={form.control}
             name="password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                <FormLabel className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   Password
                 </FormLabel>
                 <FormControl>
@@ -243,9 +244,9 @@ function PasswordStep({
             name="totp_code"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                <FormLabel className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                   2FA code{" "}
-                  <span className="normal-case font-normal text-muted-foreground/60">
+                  <span className="font-normal text-muted-foreground/60 normal-case">
                     (if enabled)
                   </span>
                 </FormLabel>
@@ -283,7 +284,7 @@ function PasswordStep({
           variant="ghost"
           size="sm"
           onClick={onBack}
-          className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
         >
           ← Use different email
         </Button>
@@ -291,8 +292,10 @@ function PasswordStep({
           type="button"
           variant="ghost"
           size="sm"
-          onClick={() => router.push(`/forgot-password?email=${encodeURIComponent(email)}`)}
-          className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+          onClick={() =>
+            router.push(`/forgot-password?email=${encodeURIComponent(email)}`)
+          }
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
         >
           Forgot password?
         </Button>
@@ -315,7 +318,10 @@ function MagicLinkStep({
   const router = useRouter()
   const searchParams = useSearchParams()
   const rawNext = searchParams.get("next") ?? "/portfolio"
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/portfolio"
+  const next =
+    rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : "/portfolio"
 
   const [otp, setOtp] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -401,14 +407,16 @@ function MagicLinkStep({
       {step === "otp" ? (
         <>
           <OtpInput value={otp} onChange={setOtp} error={!!error} />
-          {error && <p className="text-xs text-destructive text-center">{error}</p>}
+          {error && (
+            <p className="text-center text-xs text-destructive">{error}</p>
+          )}
           <div className="flex items-center justify-between">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={onBack}
-              className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+              className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
             >
               Use different email
             </Button>
@@ -418,7 +426,7 @@ function MagicLinkStep({
               size="sm"
               onClick={handleResend}
               disabled={resendTimer > 0}
-              className="text-xs text-muted-foreground hover:text-foreground h-auto p-0 disabled:opacity-50"
+              className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
             >
               {resendTimer > 0 ? `Resend in ${resendTimer}s` : "Resend code"}
             </Button>
@@ -426,17 +434,23 @@ function MagicLinkStep({
         </>
       ) : (
         <>
-          <p className="text-sm text-muted-foreground text-center py-2">
+          <p className="py-2 text-center text-sm text-muted-foreground">
             Enter the code from your authenticator app
           </p>
           <OtpInput value={totpCode} onChange={setTotpCode} error={!!error} />
-          {error && <p className="text-xs text-destructive text-center">{error}</p>}
+          {error && (
+            <p className="text-center text-xs text-destructive">{error}</p>
+          )}
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            onClick={() => { setStep("otp"); setTotpCode(""); setError("") }}
-            className="text-xs text-muted-foreground hover:text-foreground h-auto p-0"
+            onClick={() => {
+              setStep("otp")
+              setTotpCode("")
+              setError("")
+            }}
+            className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
           >
             ← Back to login code
           </Button>
@@ -474,15 +488,21 @@ export function LoginForm() {
         <div className="text-foreground">
           <PolygonMark />
         </div>
-        <span className="text-sm font-medium text-foreground tracking-tight">Polymarket</span>
+        <span className="text-sm font-medium tracking-tight text-foreground">
+          Polymarket
+        </span>
       </div>
 
-      <Card className="w-full max-w-sm border-border/60 bg-card/80 backdrop-blur-sm shadow-none">
+      <Card className="w-full max-w-sm border-border/60 bg-card/80 shadow-none backdrop-blur-sm">
         <CardContent className="p-6">
           {/* Header */}
           <div className="mb-6 text-center">
-            <h1 className="text-lg font-semibold text-foreground tracking-tight">
-              {flow === "password" ? "Welcome back" : flow === "magic" ? "Check your email" : "Sign in"}
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">
+              {flow === "password"
+                ? "Welcome back"
+                : flow === "magic"
+                  ? "Check your email"
+                  : "Sign in"}
             </h1>
             {flow === "magic" && (
               <p className="mt-1 text-sm text-muted-foreground">
@@ -523,7 +543,7 @@ export function LoginForm() {
             variant="ghost"
             size="sm"
             onClick={() => router.push("/signup")}
-            className="text-xs text-foreground h-auto p-0"
+            className="h-auto p-0 text-xs text-foreground"
           >
             Sign up
           </Button>

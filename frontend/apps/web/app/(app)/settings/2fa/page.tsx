@@ -1,4 +1,4 @@
-import { TwoFactorPageClient } from "./TwoFactorPageClient"
+import { TwoFactorPageClient } from "../../../../components/auth/TwoFactorPageClient"
 
 export const metadata = {
   robots: { index: false, follow: false },

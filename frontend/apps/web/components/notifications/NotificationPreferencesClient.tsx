@@ -6,7 +6,7 @@ import { Switch } from "@workspace/ui/components/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { sileo } from "sileo"
-import type { NotificationPreference } from "@/lib/schemas/notifications"
+import type { NotificationPreference } from "@/schemas/notifications"
 
 interface ToggleRowProps {
   label: string

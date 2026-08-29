@@ -142,7 +142,7 @@ const faqs = [
 
 function FAQItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false)
-  const toggle = useCallback(() => setOpen(o => !o), [])
+  const toggle = useCallback(() => setOpen((o) => !o), [])
 
   return (
     <div className="border-b border-border last:border-0">
@@ -166,11 +166,11 @@ function FAQItem({ q, a }: { q: string; a: string }) {
       </button>
       <div
         className={cn(
-          "overflow-hidden transition-all duration-200 px-4",
+          "overflow-hidden px-4 transition-all duration-200",
           open ? "max-h-96 pb-4" : "max-h-0"
         )}
       >
-        <p className="text-sm text-muted-foreground leading-relaxed">{a}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">{a}</p>
       </div>
     </div>
   )
@@ -180,19 +180,22 @@ export default function FAQPage() {
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-12">
-        <h1 className="text-2xl font-bold tracking-tight">Frequently Asked Questions</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Frequently Asked Questions
+        </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Common questions about PredictX prediction markets, trading, and platform features.
+          Common questions about PredictX prediction markets, trading, and
+          platform features.
         </p>
       </div>
 
       <div className="space-y-12">
         {faqs.map(({ category, questions }) => (
           <section key={category}>
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-4">
+            <h2 className="mb-4 text-xs font-semibold tracking-widest text-muted-foreground uppercase">
               {category}
             </h2>
-            <div className="rounded-lg border border-border bg-card divide-y divide-border">
+            <div className="divide-y divide-border rounded-lg border border-border bg-card">
               {questions.map(({ q, a }) => (
                 <FAQItem key={q} q={q} a={a} />
               ))}

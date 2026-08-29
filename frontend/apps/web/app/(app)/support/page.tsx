@@ -1,26 +1,30 @@
+import Link from "next/link"
+
 export const metadata = {
   title: "Support",
-  description: "Get help with your PredictX account, trading, and platform questions.",
+  description:
+    "Get help with your PredictX account, trading, and platform questions.",
 }
-
-import Link from "next/link"
 
 export default function SupportPage() {
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-12">
         <h1 className="text-2xl font-bold tracking-tight">Support</h1>
-        <p className="mt-3 text-sm text-muted-foreground leading-relaxed max-w-md">
+        <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
           Get help with your PredictX account, trading, and platform questions.
         </p>
       </div>
 
       <div className="divide-y border-y">
-        <div className="flex items-center justify-between py-5 gap-8">
+        <div className="flex items-center justify-between gap-8 py-5">
           <div>
             <p className="text-sm font-medium">Email</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              <a href="mailto:support@predictx.io" className="text-primary hover:underline">
+              <a
+                href="mailto:support@predictx.io"
+                className="text-primary hover:underline"
+              >
                 support@predictx.io
               </a>
             </p>
@@ -31,16 +35,18 @@ export default function SupportPage() {
           href="https://discord.com"
           target="_blank"
           rel="noopener noreferrer"
-          className="group flex items-center justify-between py-5 gap-8 hover:no-underline"
+          className="group flex items-center justify-between gap-8 py-5 hover:no-underline"
         >
           <div>
-            <p className="text-sm font-medium group-hover:text-primary transition-colors">Discord</p>
+            <p className="text-sm font-medium transition-colors group-hover:text-primary">
+              Discord
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Join our Discord server for community support and discussion.
             </p>
           </div>
           <svg
-            className="size-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0"
+            className="size-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-primary"
             viewBox="0 0 16 16"
             fill="none"
             stroke="currentColor"
@@ -56,22 +62,29 @@ export default function SupportPage() {
 
         <Link
           href="/faq"
-          className="group flex items-center justify-between py-5 gap-8 hover:no-underline"
+          className="group flex items-center justify-between gap-8 py-5 hover:no-underline"
         >
           <div>
-            <p className="text-sm font-medium group-hover:text-primary transition-colors">FAQ</p>
+            <p className="text-sm font-medium transition-colors group-hover:text-primary">
+              FAQ
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Common questions about PredictX — trading, market resolution, fees, and more.
+              Common questions about PredictX — trading, market resolution,
+              fees, and more.
             </p>
           </div>
           <svg
-            className="size-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0"
+            className="size-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-primary"
             viewBox="0 0 16 16"
             fill="none"
             stroke="currentColor"
             strokeWidth="1.5"
           >
-            <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M3 8h10M9 4l4 4-4 4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </Link>
       </div>

@@ -9,10 +9,22 @@ import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { SplitMergeForm } from "@/components/liquidity/split-merge-form"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@workspace/ui/components/table"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@workspace/ui/components/table"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Lock, ArrowUpRight, ChevronDown } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
@@ -48,25 +60,53 @@ function Greeting() {
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
   if (outcome === "yes") {
-    return <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white capitalize shrink-0">yes</Badge>
+    return (
+      <Badge className="shrink-0 bg-emerald-600 text-white capitalize hover:bg-emerald-700">
+        yes
+      </Badge>
+    )
   }
   if (outcome === "no") {
-    return <Badge variant="destructive" className="capitalize shrink-0">no</Badge>
+    return (
+      <Badge variant="destructive" className="shrink-0 capitalize">
+        no
+      </Badge>
+    )
   }
   // multi-outcome markets — show as secondary badge
-  return <Badge variant="secondary" className="capitalize shrink-0 truncate max-w-[80px]" title={outcome}>{outcome}</Badge>
+  return (
+    <Badge
+      variant="secondary"
+      className="max-w-[80px] shrink-0 truncate capitalize"
+      title={outcome}
+    >
+      {outcome}
+    </Badge>
+  )
 }
 
 function SideBadge({ side }: { side: string }) {
   if (side === "buy") {
-    return <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white capitalize">buy</Badge>
+    return (
+      <Badge className="bg-emerald-600 text-white capitalize hover:bg-emerald-700">
+        buy
+      </Badge>
+    )
   }
-  return <Badge variant="destructive" className="capitalize">sell</Badge>
+  return (
+    <Badge variant="destructive" className="capitalize">
+      sell
+    </Badge>
+  )
 }
 
 // ── Wallet Hero ────────────────────────────────────────────────────────────────
 
-const WalletHero = memo(function WalletHero({ wallet, username, positions }: {
+const WalletHero = memo(function WalletHero({
+  wallet,
+  username,
+  positions,
+}: {
   wallet: NonNullable<ReturnType<typeof useWallet>["data"]>
   username: string
   positions: Position[]
@@ -82,48 +122,90 @@ const WalletHero = memo(function WalletHero({ wallet, username, positions }: {
     <Card>
       <CardContent className="p-6">
         <p className="text-sm text-muted-foreground">
-          <Greeting />, <span className="font-medium text-foreground">{username}</span>
+          <Greeting />,{" "}
+          <span className="font-medium text-foreground">{username}</span>
         </p>
 
-        <p className="text-5xl font-bold tabular-nums tracking-tight mt-3">${balance.toFixed(2)}</p>
-        <p className="text-xs text-muted-foreground mt-1">Total portfolio value</p>
+        <p className="mt-3 text-5xl font-bold tracking-tight tabular-nums">
+          ${balance.toFixed(2)}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Total portfolio value
+        </p>
 
-        <div className="flex gap-3 mt-5">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent border border-border">
+        <div className="mt-5 flex gap-3">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-accent px-3 py-2">
             <ArrowUpRight className="size-3.5 text-emerald-600 dark:text-emerald-400" />
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Available</p>
-              <p className="text-sm font-semibold tabular-nums text-foreground">${available.toFixed(2)}</p>
+              <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                Available
+              </p>
+              <p className="text-sm font-semibold text-foreground tabular-nums">
+                ${available.toFixed(2)}
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent border border-border">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-accent px-3 py-2">
             <Lock className="size-3.5 text-amber-600 dark:text-amber-400" />
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Locked</p>
-              <p className="text-sm font-semibold tabular-nums text-foreground">${locked.toFixed(2)}</p>
+              <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                Locked
+              </p>
+              <p className="text-sm font-semibold text-foreground tabular-nums">
+                ${locked.toFixed(2)}
+              </p>
             </div>
           </div>
         </div>
 
-        <div className="border-t border-border my-5" />
+        <div className="my-5 border-t border-border" />
 
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium mb-1">Unrealized</p>
-            <p className={cn("text-lg font-bold tabular-nums tracking-tight", totalUnrealized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+            <p className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+              Unrealized
+            </p>
+            <p
+              className={cn(
+                "text-lg font-bold tracking-tight tabular-nums",
+                totalUnrealized >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-destructive"
+              )}
+            >
               {formatPnL(totalUnrealized)}
             </p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{positions.length} positions</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              {positions.length} positions
+            </p>
           </div>
           <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium mb-1">Realized</p>
-            <p className={cn("text-lg font-bold tabular-nums tracking-tight", totalRealized >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+            <p className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+              Realized
+            </p>
+            <p
+              className={cn(
+                "text-lg font-bold tracking-tight tabular-nums",
+                totalRealized >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-destructive"
+              )}
+            >
               {formatPnL(totalRealized)}
             </p>
           </div>
           <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium mb-1">Total P&L</p>
-            <p className={cn("text-lg font-bold tabular-nums tracking-tight", totalPnL >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+            <p className="mb-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+              Total P&L
+            </p>
+            <p
+              className={cn(
+                "text-lg font-bold tracking-tight tabular-nums",
+                totalPnL >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-destructive"
+              )}
+            >
               {formatPnL(totalPnL)}
             </p>
           </div>
@@ -135,7 +217,12 @@ const WalletHero = memo(function WalletHero({ wallet, username, positions }: {
 
 // ── Positions ─────────────────────────────────────────────────────────────────
 
-const PositionsSection = memo(function PositionsSection({ positions, isLoading, hasMore, fetchNextPage }: {
+const PositionsSection = memo(function PositionsSection({
+  positions,
+  isLoading,
+  hasMore,
+  fetchNextPage,
+}: {
   positions: Position[]
   isLoading: boolean
   hasMore?: boolean
@@ -144,8 +231,12 @@ const PositionsSection = memo(function PositionsSection({ positions, isLoading, 
   if (isLoading && positions.length === 0) {
     return (
       <Card>
-        <CardHeader><CardTitle className="text-base">Open Positions</CardTitle></CardHeader>
-        <CardContent className="flex h-48 items-center justify-center"><Spinner className="size-5" /></CardContent>
+        <CardHeader>
+          <CardTitle className="text-base">Open Positions</CardTitle>
+        </CardHeader>
+        <CardContent className="flex h-48 items-center justify-center">
+          <Spinner className="size-5" />
+        </CardContent>
       </Card>
     )
   }
@@ -153,8 +244,12 @@ const PositionsSection = memo(function PositionsSection({ positions, isLoading, 
   if (positions.length === 0) {
     return (
       <Card>
-        <CardHeader><CardTitle className="text-base">Open Positions</CardTitle></CardHeader>
-        <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">No open positions</CardContent>
+        <CardHeader>
+          <CardTitle className="text-base">Open Positions</CardTitle>
+        </CardHeader>
+        <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+          No open positions
+        </CardContent>
       </Card>
     )
   }
@@ -162,37 +257,65 @@ const PositionsSection = memo(function PositionsSection({ positions, isLoading, 
   return (
     <div className="space-y-3">
       <Card>
-        <CardHeader><CardTitle className="text-base">Open Positions</CardTitle></CardHeader>
-        <div className="divide-y overflow-auto" style={{ maxHeight: "400px", minHeight: "200px" }}>
-            {positions.map((pos) => {
-              const unrealized = n(pos.unrealized_pnl)
-              const isUp = unrealized >= 0
-              return (
-                <div key={pos.id} className="flex items-center gap-4 px-6 py-4 hover:bg-accent/40 transition-colors">
-                  <div className="shrink-0">
-                    <OutcomeBadge outcome={pos.outcome} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{pos.market_question}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {Number(pos.shares_held).toFixed(0)} shares @ ${n(pos.average_price).toFixed(3)}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className={cn("text-sm font-semibold tabular-nums", isUp ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
-                      {formatPnL(unrealized)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">unrealized</p>
-                  </div>
+        <CardHeader>
+          <CardTitle className="text-base">Open Positions</CardTitle>
+        </CardHeader>
+        <div
+          className="divide-y overflow-auto"
+          style={{ maxHeight: "400px", minHeight: "200px" }}
+        >
+          {positions.map((pos) => {
+            const unrealized = n(pos.unrealized_pnl)
+            const isUp = unrealized >= 0
+            return (
+              <div
+                key={pos.id}
+                className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-accent/40"
+              >
+                <div className="shrink-0">
+                  <OutcomeBadge outcome={pos.outcome} />
                 </div>
-              )
-            })}
-          </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {pos.market_question}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {Number(pos.shares_held).toFixed(0)} shares @ $
+                    {n(pos.average_price).toFixed(3)}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p
+                    className={cn(
+                      "text-sm font-semibold tabular-nums",
+                      isUp
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-destructive"
+                    )}
+                  >
+                    {formatPnL(unrealized)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">unrealized</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </Card>
       {hasMore && (
         <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={fetchNextPage} disabled={isLoading} className="gap-2">
-            {isLoading ? <Spinner className="size-3" /> : <ChevronDown className="size-3" />}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchNextPage}
+            disabled={isLoading}
+            className="gap-2"
+          >
+            {isLoading ? (
+              <Spinner className="size-3" />
+            ) : (
+              <ChevronDown className="size-3" />
+            )}
             Load more
           </Button>
         </div>
@@ -203,7 +326,12 @@ const PositionsSection = memo(function PositionsSection({ positions, isLoading, 
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 
-const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, fetchNextPage }: {
+const OrdersSection = memo(function OrdersSection({
+  orders,
+  isLoading,
+  hasMore,
+  fetchNextPage,
+}: {
   orders: Order[]
   isLoading: boolean
   hasMore?: boolean
@@ -212,8 +340,12 @@ const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, 
   if (isLoading && orders.length === 0) {
     return (
       <Card>
-        <CardHeader><CardTitle className="text-base">Recent Orders</CardTitle></CardHeader>
-        <CardContent className="flex h-48 items-center justify-center"><Spinner className="size-5" /></CardContent>
+        <CardHeader>
+          <CardTitle className="text-base">Recent Orders</CardTitle>
+        </CardHeader>
+        <CardContent className="flex h-48 items-center justify-center">
+          <Spinner className="size-5" />
+        </CardContent>
       </Card>
     )
   }
@@ -221,8 +353,12 @@ const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, 
   if (orders.length === 0) {
     return (
       <Card>
-        <CardHeader><CardTitle className="text-base">Recent Orders</CardTitle></CardHeader>
-        <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">No orders yet</CardContent>
+        <CardHeader>
+          <CardTitle className="text-base">Recent Orders</CardTitle>
+        </CardHeader>
+        <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+          No orders yet
+        </CardContent>
       </Card>
     )
   }
@@ -230,8 +366,13 @@ const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, 
   return (
     <div className="space-y-3">
       <Card>
-        <CardHeader><CardTitle className="text-base">Recent Orders</CardTitle></CardHeader>
-        <div className="overflow-auto" style={{ maxHeight: "400px", minHeight: "200px" }}>
+        <CardHeader>
+          <CardTitle className="text-base">Recent Orders</CardTitle>
+        </CardHeader>
+        <div
+          className="overflow-auto"
+          style={{ maxHeight: "400px", minHeight: "200px" }}
+        >
           <Table noWrapper className="w-full">
             <TableHeader className="sticky top-0 z-20 bg-muted">
               <TableRow className="hover:bg-transparent">
@@ -246,18 +387,33 @@ const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, 
             </TableHeader>
             <TableBody>
               {orders.map((order) => (
-                <TableRow key={order.id} className="hover:bg-accent/30 transition-colors">
-                  <TableCell className="font-medium max-w-xs truncate">{order.market_question}</TableCell>
-                  <TableCell><SideBadge side={order.side} /></TableCell>
-                  <TableCell className="capitalize text-muted-foreground text-sm">
+                <TableRow
+                  key={order.id}
+                  className="transition-colors hover:bg-accent/30"
+                >
+                  <TableCell className="max-w-xs truncate font-medium">
+                    {order.market_question}
+                  </TableCell>
+                  <TableCell>
+                    <SideBadge side={order.side} />
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground capitalize">
                     {order.order_type.replace("_", " ")}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">${n(order.price).toFixed(3)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">{n(order.amount).toFixed(0)}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className="capitalize text-xs">{order.status}</Badge>
+                  <TableCell className="text-right text-sm tabular-nums">
+                    ${n(order.price).toFixed(3)}
                   </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">{formatTime(order.created_at)}</TableCell>
+                  <TableCell className="text-right text-sm tabular-nums">
+                    {n(order.amount).toFixed(0)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" className="text-xs capitalize">
+                      {order.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatTime(order.created_at)}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -266,8 +422,18 @@ const OrdersSection = memo(function OrdersSection({ orders, isLoading, hasMore, 
       </Card>
       {hasMore && (
         <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={fetchNextPage} disabled={isLoading} className="gap-2">
-            {isLoading ? <Spinner className="size-3" /> : <ChevronDown className="size-3" />}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchNextPage}
+            disabled={isLoading}
+            className="gap-2"
+          >
+            {isLoading ? (
+              <Spinner className="size-3" />
+            ) : (
+              <ChevronDown className="size-3" />
+            )}
             Load more
           </Button>
         </div>
@@ -297,9 +463,19 @@ export default function PortfolioPage() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
-      const message = msg as { type?: string; title?: string; body?: string; outcome?: string; condition?: string; trigger_price?: number }
+      const message = msg as {
+        type?: string
+        title?: string
+        body?: string
+        outcome?: string
+        condition?: string
+        trigger_price?: number
+      }
       if (message.type === "notification") {
-        sileo.info({ title: message.title ?? "Notification", description: message.body ?? "" })
+        sileo.info({
+          title: message.title ?? "Notification",
+          description: message.body ?? "",
+        })
         qc.invalidateQueries({ queryKey: ["notifications"] })
         return
       }
@@ -318,20 +494,32 @@ export default function PortfolioPage() {
     [qc]
   )
 
-  useUserSocket({ userId: user?.id ?? "", onMessage: handleWsMessage, enabled: !!user?.id })
+  useUserSocket({
+    userId: user?.id ?? "",
+    onMessage: handleWsMessage,
+    enabled: !!user?.id,
+  })
 
   const positions = positionsData?.positions ?? []
   const orders = ordersData?.orders ?? []
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="container mx-auto max-w-7xl space-y-6 px-4 py-8">
       {/* Top: Wallet (3/4) + Liquidity (1/4) */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
         <div className="lg:col-span-3">
           {walletLoading ? (
-            <Card><CardContent className="flex h-56 items-center justify-center"><Spinner className="size-5" /></CardContent></Card>
+            <Card>
+              <CardContent className="flex h-56 items-center justify-center">
+                <Spinner className="size-5" />
+              </CardContent>
+            </Card>
           ) : wallet ? (
-            <WalletHero wallet={wallet} username={user?.username ?? "Trader"} positions={positions} />
+            <WalletHero
+              wallet={wallet}
+              username={user?.username ?? "Trader"}
+              positions={positions}
+            />
           ) : null}
         </div>
         <div className="lg:col-span-1">

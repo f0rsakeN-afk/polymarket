@@ -1,5 +1,5 @@
 import { api } from "./client"
-import { createAlertSchema } from "@/lib/schemas/alerts"
+import { createAlertSchema } from "@/schemas/alerts"
 import type { Alert } from "@/hooks/api/types/alert"
 
 export function createAlert(data: Parameters<typeof createAlertSchema.parse>[0]) {

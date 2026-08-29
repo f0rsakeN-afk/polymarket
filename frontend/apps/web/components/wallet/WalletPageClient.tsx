@@ -4,13 +4,17 @@ import { useState, useCallback } from "react"
 import { useWallet, useDeposit, useWithdraw } from "@/hooks/api/use-wallet"
 import { WalletBalance } from "@/components/wallet/wallet-balance"
 import { Button } from "@workspace/ui/components/button"
-import { Dialog, DialogContent, DialogTitle } from "@workspace/ui/components/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { depositSchema, withdrawSchema } from "@/lib/schemas/wallet"
-import type { DepositInput, WithdrawInput } from "@/lib/schemas/wallet"
+import { depositSchema, withdrawSchema } from "@/schemas/wallet"
+import type { DepositInput, WithdrawInput } from "@/schemas/wallet"
 import { sileo } from "sileo"
 
 function AmountForm({
@@ -53,7 +57,9 @@ function AmountForm({
           {...register("amount", { valueAsNumber: true })}
         />
         {errors.amount && (
-          <p className="text-xs text-destructive">{String(errors.amount.message)}</p>
+          <p className="text-xs text-destructive">
+            {String(errors.amount.message)}
+          </p>
         )}
       </div>
       <Button type="submit" disabled={loading}>
@@ -70,31 +76,37 @@ export function WalletPageClient() {
   const [depositOpen, setDepositOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
 
-  const handleDeposit = useCallback((data: DepositInput) => {
-    deposit.mutate(data, {
-      onSuccess: () => {
-        sileo.success({ title: "Deposit initiated" })
-        setDepositOpen(false)
-      },
-      onError: () => sileo.error({ title: "Deposit failed" }),
-    })
-  }, [deposit])
+  const handleDeposit = useCallback(
+    (data: DepositInput) => {
+      deposit.mutate(data, {
+        onSuccess: () => {
+          sileo.success({ title: "Deposit initiated" })
+          setDepositOpen(false)
+        },
+        onError: () => sileo.error({ title: "Deposit failed" }),
+      })
+    },
+    [deposit]
+  )
 
-  const handleWithdraw = useCallback((data: WithdrawInput) => {
-    withdraw.mutate(data, {
-      onSuccess: () => {
-        sileo.success({ title: "Withdrawal initiated" })
-        setWithdrawOpen(false)
-      },
-      onError: () => sileo.error({ title: "Withdrawal failed" }),
-    })
-  }, [withdraw])
+  const handleWithdraw = useCallback(
+    (data: WithdrawInput) => {
+      withdraw.mutate(data, {
+        onSuccess: () => {
+          sileo.success({ title: "Withdrawal initiated" })
+          setWithdrawOpen(false)
+        },
+        onError: () => sileo.error({ title: "Withdrawal failed" }),
+      })
+    },
+    [withdraw]
+  )
 
   const openDeposit = useCallback(() => setDepositOpen(true), [])
   const openWithdraw = useCallback(() => setWithdrawOpen(true), [])
 
   return (
-    <div className="p-8 max-w-md space-y-6">
+    <div className="max-w-md space-y-6 p-8">
       <h1 className="text-2xl font-semibold">Wallet</h1>
 
       <WalletBalance wallet={wallet ?? null} loading={isLoading} />

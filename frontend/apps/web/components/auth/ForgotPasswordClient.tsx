@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation"
 import { useMutation } from "@tanstack/react-query"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { forgotPasswordSchema, type ForgotPasswordInput } from "@/lib/schemas/auth"
+import { forgotPasswordSchema, type ForgotPasswordInput } from "@/schemas/auth"
 import { passwordApi } from "@/lib/api/auth"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -33,7 +33,7 @@ function PolygonMark({ className }: { className?: string }) {
 export function ForgotPasswordClient() {
   const searchParams = useSearchParams()
   const emailParam = searchParams.get("email") ?? ""
-  const [sent, setSent] = useState(false)
+  const [sent, setSent] = useState<boolean>(false)
   const [submittedEmail, setSubmittedEmail] = useState(emailParam)
 
   const form = useForm<ForgotPasswordInput>({

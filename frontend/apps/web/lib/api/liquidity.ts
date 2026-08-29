@@ -1,5 +1,5 @@
 import { api } from "./client"
-import { addLiquiditySchema, removeLiquiditySchema } from "@/lib/schemas/liquidity"
+import { addLiquiditySchema, removeLiquiditySchema } from "@/schemas/liquidity"
 
 export interface LPAnalyticsResponse {
   success: boolean

@@ -16,7 +16,10 @@ interface WalletBalanceProps {
   loading?: boolean
 }
 
-const WalletBalance = memo(function WalletBalance({ wallet, loading }: WalletBalanceProps) {
+const WalletBalance = memo(function WalletBalance({
+  wallet,
+  loading,
+}: WalletBalanceProps) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 text-xs/relaxed">
       <h3 className="mb-3 text-sm font-medium">Wallet</h3>
@@ -36,7 +39,9 @@ const WalletBalance = memo(function WalletBalance({ wallet, loading }: WalletBal
           </div>
           <div className="flex justify-between border-t border-border pt-2">
             <span className="text-muted-foreground">Available</span>
-            <span className="font-bold">{formatUSD(wallet.available_balance)}</span>
+            <span className="font-bold">
+              {formatUSD(wallet.available_balance)}
+            </span>
           </div>
         </div>
       ) : (
