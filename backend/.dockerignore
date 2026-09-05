@@ -1,23 +1,47 @@
 .venv/
+venv/
 .git/
 .gitignore
-*.log
-*.pyc
+*.md
+LICENSE
+
+# Secrets — never copy into image
+.env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-.venv/
-venv/
+*.pyc
+*.pyo
+*.pyd
 .pytest_cache/
-.coverage
+.ruff_cache/
+.pyright/
+.mypy_cache/
 htmlcov/
-dist/
-build/
+.coverage
 *.egg-info/
 .eggs/
-celerybeat-schedule*
+dist/
+build/
+
+# Logs / runtime
 logs/
-docs/
-migrations/
-alembic.ini
-*.md
-.env.local
-.env.*.local
+*.log
+celerybeat-schedule*
+dump.rdb
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Docker files
+Dockerfile*
+docker-compose*
+
+# Tests / scripts not needed at runtime
+tests/
+e2e_api_test.py

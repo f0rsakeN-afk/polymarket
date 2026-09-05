@@ -1,44 +1,46 @@
-# Stage 1: builder
-FROM python:3.12-slim AS builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Install build deps
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libpq-dev \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock* ./
-RUN pip install uv && uv sync --frozen --no-dev --no-install-project
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Stage 2: production image
-FROM python:3.12-slim
-
-RUN groupadd --gid 1000 appgroup && useradd --uid 1000 --gid appgroup appuser
+FROM python:3.13-slim AS runner
 
 WORKDIR /app
-
-# Install runtime deps only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/app/.venv/bin:$PATH"
 
-# Copy venv from builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system --gid 1001 appuser \
+    && adduser --system --uid 1001 --gid 1001 appuser
+
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy app source
 COPY . .
 
-# Switch to non-root user
+RUN chown -R appuser:appuser /app
+
 USER appuser
 
 EXPOSE 8000
 
-CMD ["gunicorn", "app.app:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120"]
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "app.app:app"]

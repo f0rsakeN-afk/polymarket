@@ -1,6 +1,4 @@
-# Local development — hot-reload, uses existing postgres (5433) and redis (6380) on the host.
-# Reads defaults from .env — override values there or export env vars before running.
-# Usage: docker compose up
+name: polymarket-backend-dev
 
 services:
   app:
@@ -8,11 +6,10 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     ports:
-      - "6000:8000"
-    # Mount ONLY the app source dir — keeps .venv from the image intact
+      - "${BACKEND_PORT:-6000}:8000"
     volumes:
-      - ./app:/app/app:rw
-      - ./migrations:/app/migrations:rw
+      - ./app:/app/app
+      - ./migrations:/app/migrations
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -22,15 +19,12 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-development}
-      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@host.docker.internal:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-polymarket}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/1
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-    command: uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
+      RATE_LIMIT_ENABLED: "true"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 10s
@@ -41,12 +35,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: "512M"
-        reservations:
-          cpus: "0.25"
-          memory: "256M"
-    security_opt:
-      - no-new-privileges:true
+          memory: "1G"
 
   celery_worker:
     build:
@@ -55,8 +44,8 @@ services:
     profiles:
       - celery
     volumes:
-      - ./app:/app/app:rw
-      - ./migrations:/app/migrations:rw
+      - ./app:/app/app
+      - ./migrations:/app/migrations
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -69,12 +58,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@host.docker.internal:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-polymarket}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/1
-    command: celery -A app.tasks worker --loglevel=info --concurrency=1
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
     deploy:
       resources:
         limits:
           cpus: "0.5"
-          memory: "256M"
+          memory: "512M"
 
   celery_beat:
     build:
@@ -83,8 +72,8 @@ services:
     profiles:
       - celery
     volumes:
-      - ./app:/app/app:rw
-      - ./migrations:/app/migrations:rw
+      - ./app:/app/app
+      - ./migrations:/app/migrations
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
@@ -97,7 +86,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@host.docker.internal:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-polymarket}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:${REDIS_PORT:-6380}/1
-    command: celery -A app.tasks beat --loglevel=info
+    command: celery -A app.workers.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
     deploy:
       resources:
         limits:

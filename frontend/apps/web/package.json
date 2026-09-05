@@ -12,14 +12,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@hookform/resolvers": "^5.9.1",
+    "@tanstack/react-virtual": "^3.14.9",
     "@workspace/ui": "workspace:*",
     "lucide-react": "^1.37.0",
     "next": "^16.3.3",
     "next-themes": "^0.4.6",
     "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "react-hook-form": "^7.87.0"
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

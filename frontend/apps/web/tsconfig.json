@@ -3,6 +3,7 @@
   "compilerOptions": {
     "paths": {
       "@/*": ["./*"],
+      "@/lib/schemas/*": ["./schemas/*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     },
     "plugins": [
