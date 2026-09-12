@@ -8,6 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the before..sha diff works on multi-commit pushes.
+          # (Shallow clones only contain HEAD, leaving Files Changed empty.)
+          fetch-depth: 0
 
       - name: Send Discord Notification
         env:
@@ -17,6 +21,10 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         run: |
+          if [ -z "${DISCORD_WEBHOOK}" ]; then
+            echo "::error::DISCORD_WEBHOOK secret is not set"
+            exit 1
+          fi
           AUTHOR_NAME="${GITHUB_ACTOR}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           COMMIT_MSG=$(git log -1 --pretty=%s "${GITHUB_SHA}" 2>/dev/null || echo "N/A")
