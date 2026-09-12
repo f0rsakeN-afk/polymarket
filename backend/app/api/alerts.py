@@ -34,6 +34,12 @@ async def create_alert(data: AlertCreate, request: Request, db: AsyncSession = D
     await db.commit()
     await db.refresh(alert)
 
+    # Write-through to the trigger index (best-effort; task self-repairs on miss).
+    from app.services.alert_engine import index_alert
+    await index_alert(
+        str(data.market_id), str(alert.id), data.outcome, data.condition, float(data.trigger_price)
+    )
+
     logger.info(f"Alert created: user={user.id} market={data.market_id} {data.condition} {data.trigger_price}")
     return success_response(AlertResponse.model_validate(alert))
 
@@ -64,5 +70,8 @@ async def delete_alert(alert_id: str, request: Request, db: AsyncSession = Depen
 
     await db.execute(delete(Alert).where(Alert.id == alert_id, Alert.user_id == user.id))
     await db.commit()
+
+    from app.services.alert_engine import deindex_alert
+    await deindex_alert(str(alert.market_id), alert_id, alert.outcome, alert.condition)
     logger.info(f"Alert deleted: {alert_id} by user={user.id}")
     return success_response({"id": alert_id, "deleted": True})
