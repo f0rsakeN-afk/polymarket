@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
     ConflictError,
+    ForbiddenError,
     NotFoundError,
     UnauthorizedError,
     ValidationError,
@@ -793,6 +794,9 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
     if not user.is_active:
         raise UnauthorizedError("Account is inactive")
 
+    if not user.is_email_verified:
+        raise ForbiddenError("Email not verified — check your inbox for the verification code")
+
     if not user.password_hash:
         raise UnauthorizedError("No password set for this account. Use magic link login.")
 
@@ -972,13 +976,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not refresh_token:
         raise UnauthorizedError("No refresh token")
 
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
+    # Look up by hash WITHOUT status filters so we can distinguish
+    # invalid vs expired vs revoked (reuse).
     result = await db.execute(
         select(RefreshToken)
-        .where(
-            RefreshToken.token_hash == _hash_refresh_token(refresh_token),
-            RefreshToken.revoked.is_(False),
-            RefreshToken.expires_at > datetime.now(UTC),
-        )
+        .where(RefreshToken.token_hash == _hash_refresh_token(refresh_token))
         .options(selectinload(RefreshToken.current_session))
         .with_for_update()
     )
@@ -986,24 +991,40 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not token_record:
         raise UnauthorizedError("Invalid or expired refresh token")
 
-    user_id = str(token_record.user_id)
+    # Reuse detection: a revoked token presented again means it was stolen
+    # (the legitimate client rotated it away). Revoke everything.
+    if token_record.revoked:
+        await _revoke_all_refresh_tokens(db, str(token_record.user_id))
+        sessions_result = await db.execute(
+            select(Session).where(
+                Session.user_id == token_record.user_id,
+                Session.revoked.is_(False),
+            )
+        )
+        for s in sessions_result.scalars().all():
+            s.revoked = True
+        await db.commit()
+        logger.warning(
+            f"Refresh token reuse detected for user {token_record.user_id} — all sessions revoked"
+        )
+        raise UnauthorizedError("Invalid or expired refresh token")
+
+    if token_record.expires_at <= datetime.now(UTC):
+        token_record.revoked = True
+        await db.commit()
+        raise UnauthorizedError("Invalid or expired refresh token")
+
+    user = await db.get(User, token_record.user_id)
+    if not user or not user.is_active:
+        raise ForbiddenError("Account is inactive")
+
+    # Rotate: revoke old token + old session, issue new token + new session
+    # bound to the current ip/user-agent.
     token_record.revoked = True
-
-    # Update last_active_at on the linked session
     if token_record.current_session:
-        token_record.current_session.last_active_at = datetime.now(UTC)
-
-    new_refresh = str(uuid.uuid4())
-    new_record = RefreshToken(
-        id=new_refresh,
-        user_id=token_record.user_id,
-        token_hash=_hash_refresh_token(new_refresh),
-        expires_at=datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire),
-    )
-    db.add(new_record)
-
-    access_token, jti = create_access_token(user_id)
-    set_auth_cookies(response, access_token, new_refresh)
+        token_record.current_session.revoked = True
+    new_access, _jti, new_refresh, _new_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    set_auth_cookies(response, new_access, new_refresh)
     await db.commit()
     return success_response({"status": "refreshed"}, message="Token refreshed")
 

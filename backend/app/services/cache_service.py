@@ -91,11 +91,13 @@ async def cache_invalidate_market_lists():
     r = await get_redis()
 
     async def _op():
-        keys = await r.smembers("ct:market_lists")
-        if not keys:
+        raw_keys = await r.smembers("ct:market_lists")
+        if not raw_keys:
             return
+        # Redis returns bytes; decode and strip prefix (stored as ml:{key}, cache key is cache:ml:{key})
+        keys = [k.decode() if isinstance(k, bytes) else k for k in raw_keys]
         pipe = r.pipeline()
-        pipe.delete(*[f"cache:ml:{k.removeprefix('ml:')}" for k in keys])
+        pipe.delete(*[f"cache:{k}" if k.startswith("ml:") or k.startswith("cache:") else f"cache:ml:{k}" for k in keys])
         pipe.delete("ct:market_lists")
         await pipe.execute()
 

@@ -8,9 +8,22 @@ import gc
 import os
 import uuid
 
-# MUST be before any app imports
-os.environ["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5433/mydatabase_test"
-os.environ["REDIS_URL"] = "redis://localhost:6380/15"
+# MUST be before any app imports.
+# Credentials follow the local stack (.env): POSTGRES_USER/PASSWORD/PORT and
+# REDIS_PASSWORD/PORT, with a dedicated test database + Redis DB index.
+_pg_user = os.environ.get("POSTGRES_USER", "postgres")
+_pg_pass = os.environ.get("POSTGRES_PASSWORD", "change-me")
+_pg_port = os.environ.get("POSTGRES_PORT", "5433")
+_redis_pass = os.environ.get("REDIS_PASSWORD", "change-me")
+_redis_port = os.environ.get("REDIS_PORT", "6380")
+_redis_auth = f":{_redis_pass}@" if _redis_pass else ""
+os.environ["DATABASE_URL"] = (
+    f"postgresql+asyncpg://{_pg_user}:{_pg_pass}@localhost:{_pg_port}/mydatabase_test"
+)
+os.environ["REDIS_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
+# Rate limiting is an infrastructure concern, not under test here — and the
+# shared Redis DB would leak counters between tests. No test asserts on 429.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 import pytest
 import pytest_asyncio

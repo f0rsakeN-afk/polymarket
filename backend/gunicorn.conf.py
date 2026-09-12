@@ -12,7 +12,8 @@ max_requests = 10000
 max_requests_jitter = 1000
 
 # Preload app so DB pools are initialized before forking
-preload_app = True
+# Disabled: async engines / redis pools must be created per-worker after fork.
+preload_app = False
 
 # Logging
 accesslog = "-"

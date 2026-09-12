@@ -21,7 +21,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ### Database Migrations
 
-**22 migrations exist** — always use Alembic in production:
+**1 migration exists** (squashed initial schema) — always use Alembic in production:
 ```bash
 # Dry run first
 alembic upgrade --sql
@@ -34,7 +34,7 @@ alembic current
 alembic history --enum_size=medium
 ```
 
-The app's `lifespan` auto-creates tables on startup only if no tables exist (first boot). After first boot, **always use migrations** — never rely on `lifespan` for schema changes.
+The app no longer auto-creates tables on startup. **Always run migrations before starting the API** — on first boot and after every schema change. Never rely on auto-creation for schema changes.
 
 ### Migration Strategy
 

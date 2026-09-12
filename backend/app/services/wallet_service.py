@@ -2,6 +2,7 @@ import logging
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import (
@@ -62,12 +63,19 @@ class WalletService:
             type="withdrawal",
             amount=-amount,
             balance_after=wallet.balance,
-            reference_id=idempotency_key or "",
+            # NULL when no key given — excluded from the partial unique index,
+            # so keyless withdrawals never collide with each other.
+            reference_id=idempotency_key,
             reference_type="withdrawal",
             status="pending",
         )
         db.add(tx)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Concurrent request with the same key won the race.
+            await db.rollback()
+            raise IdempotencyError("Withdrawal already processed")
 
         logger.info(f"Withdrawal: user={user.id} amount={float(amount)}")
 

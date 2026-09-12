@@ -91,8 +91,9 @@ class BinaryAMM:
 
         current_price = self.price(outcome)
 
-        self.yes_shares = new_yes
-        self.no_shares = new_no
+        q = Decimal("0.00000001")
+        self.yes_shares = new_yes.quantize(q, rounding=ROUND_DOWN)
+        self.no_shares = new_no.quantize(q, rounding=ROUND_DOWN)
 
         after_total = self.yes_shares + self.no_shares
         after_price_yes = self.yes_shares / after_total if after_total > 0 else Decimal("0.5")
@@ -148,8 +149,9 @@ class BinaryAMM:
 
         current_price = self.price(outcome)
 
-        self.yes_shares = new_yes
-        self.no_shares = new_no
+        q = Decimal("0.00000001")
+        self.yes_shares = new_yes.quantize(q, rounding=ROUND_DOWN)
+        self.no_shares = new_no.quantize(q, rounding=ROUND_DOWN)
 
         after_total = self.yes_shares + self.no_shares
         after_price_yes = self.yes_shares / after_total if after_total > 0 else Decimal("0.5")

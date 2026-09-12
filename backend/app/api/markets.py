@@ -496,13 +496,13 @@ async def resolve_market_endpoint(
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
 
-    if market.status == "resolved":
+    if market.status in ("resolved", "resolving"):
         raise ValidationError("Market is already resolved")
 
     # Distributed lock: prevent two API pods from both resolving the same market.
     # Uses Redis SETNX with TTL — lock is auto-released if this pod dies.
     r = await get_redis()
-    lock_key = f"resolve_lock:{market.id}"
+    lock_key = f"resolve_api_lock:{market.id}"
     lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=30)
     if not lock_acquired:
         raise ConflictError("Market resolution is already in progress")
@@ -527,14 +527,15 @@ async def resolve_market_endpoint(
         # Queue-level idempotency: set dedup key AFTER successful enqueue.
         # If the task was already enqueued by a concurrent request, we get nx=False here
         # and must not commit — another worker already owns this resolution.
-        task_dedup_key = f"resolve_task:{market.id}"
+        task_dedup_key = f"resolve_enqueue:{market.id}"
         if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
             # Task already enqueued by a concurrent request — do not double-resolve
             await db.rollback()
             raise ConflictError("Resolution task already enqueued")
 
-        # Only mark resolved after settlement task is confirmed queued.
-        market.status = "resolved"
+        # Mark as resolving (NOT resolved) — the worker flips to resolved after settlement.
+        # Worker skips markets already in resolving/resolved, so this also guards double-settlement.
+        market.status = "resolving"
         market.winning_outcome_id = outcome.id
         market.resolved_at = datetime.now(UTC)
         await db.commit()

@@ -43,7 +43,6 @@ from app.api.webhooks import router as webhook_router
 from app.config import settings
 from app.database import _get_engine, _get_replica_engine
 from app.middleware.request_id import RequestIDMiddleware
-from app.models import Base
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
 
@@ -114,13 +113,56 @@ async def lifespan(app: FastAPI):
             "Example: TRUSTED_PROXY_IPS=10.0.0.0/8,172.16.0.0/12"
         )
 
+    # Wait for Postgres + Redis before accepting traffic.
+    # Compose gates initial startup with depends_on:service_healthy, but that only
+    # applies at `up` time — if either dependency restarts later, or when running
+    # outside Compose, the app must block here instead of failing the first request.
+    import asyncio
+
+    async def _wait_for_postgres(timeout_s: float = 60.0) -> None:
+        from sqlalchemy import text
+
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        last_err: Exception | None = None
+        while True:
+            try:
+                async with _get_engine().begin() as conn:
+                    await conn.execute(text("SELECT 1"))
+                return
+            except Exception as e:  # noqa: BLE001 — log and retry until timeout
+                last_err = e
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise RuntimeError(f"Postgres not ready after {timeout_s}s: {last_err}") from last_err
+                logger.warning(f"Waiting for Postgres... ({last_err})")
+                await asyncio.sleep(2)
+
+    async def _wait_for_redis(timeout_s: float = 60.0) -> None:
+        from app.redis import get_redis, redis_cb
+
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        last_err: Exception | None = None
+        while True:
+            try:
+                r = await get_redis()
+                await redis_cb.call(lambda: r.ping())
+                return
+            except Exception as e:  # noqa: BLE001 — log and retry until timeout
+                last_err = e
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise RuntimeError(f"Redis not ready after {timeout_s}s: {last_err}") from last_err
+                logger.warning(f"Waiting for Redis... ({last_err})")
+                await asyncio.sleep(2)
+
+    await _wait_for_postgres()
+    await _wait_for_redis()
+    logger.info("Postgres + Redis ready — starting API")
+
     async with _get_engine().begin() as conn:
         existing_tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         if not existing_tables:
-            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
-            logger.info("Database tables created")
+            logger.warning("Database is empty — run 'alembic upgrade head' before starting the API")
         else:
-            logger.info("Database tables already exist; skipping automatic schema creation")
+            logger.info("Database tables present; migrations own the schema (no auto create_all)")
 
     # Start Redis pub/sub listener
     try:
@@ -238,11 +280,17 @@ async def health_ready():
             checks["redis"]["error"] = str(e)  # show in dev/staging for debugging
         unhealthy = True
 
-    return {
-        "status": "ok" if not unhealthy else "degraded",
-        "checks": checks,
-        "version": app.version,
-    }
+    from fastapi.responses import JSONResponse
+
+    status_code = 200 if not unhealthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ok" if not unhealthy else "degraded",
+            "checks": checks,
+            "version": app.version,
+        },
+    )
 
 
 @app.get("/")

@@ -1,4 +1,12 @@
-from sqlalchemy import Column, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -24,11 +32,21 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
         Index("ix_transactions_user_id", "user_id"),
         Index("ix_transactions_user_created", "user_id", "created_at"),
         Index("ix_transactions_wallet_id", "wallet_id"),
-        # NOTE: unique constraint on (reference_id, type) was removed.
-        # Idempotency for deposits/withdrawals is handled at the application layer
-        # (see wallet_service.py). reference_id can legitimately repeat across
-        # different transaction types (e.g. multiple trades per order, multiple
-        # liquidity ops per pool). Each row is already unique by primary key (id).
+        # Idempotency guards (partial unique indexes — NULL reference_ids ignored):
+        # - one withdrawal per idempotency key (concurrent double-submit safe)
+        # - one deposit per Stripe payment_intent_id (webhook double-delivery safe)
+        Index(
+            "uq_transactions_withdrawal_ref",
+            "reference_id",
+            unique=True,
+            postgresql_where=text("type = 'withdrawal' AND reference_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_transactions_deposit_ref",
+            "reference_id",
+            unique=True,
+            postgresql_where=text("type = 'deposit' AND reference_id IS NOT NULL"),
+        ),
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

@@ -131,6 +131,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         result = await RateLimitService.check(limit_type, identifier, ip)
 
+        if not result.allowed:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=429,
+                content={"error_code": "RATE_LIMIT_EXCEEDED", "retry_after": result.retry_after},
+                headers={
+                    "X-RateLimit-Limit": str(result.limit),
+                    "X-RateLimit-Remaining": "0",
+                    **({"Retry-After": str(result.retry_after)} if result.retry_after else {}),
+                },
+            )
+
         response = await call_next(request)
 
         response.headers["X-RateLimit-Limit"] = str(result.limit)
@@ -138,13 +151,5 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if result.retry_after:
             response.headers["Retry-After"] = str(result.retry_after)
-
-        if not result.allowed:
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=429,
-                content={"error_code": "RATE_LIMIT_EXCEEDED", "retry_after": result.retry_after},
-                headers=dict(response.headers),
-            )
 
         return response

@@ -17,17 +17,17 @@ class MarketService:
     def compute_prices(pool: LiquidityPool | None) -> tuple[float, float]:
         if pool is None:
             return 0.5, 0.5
-        total = float(pool.yes_shares) + float(pool.no_shares)
+        total = pool.yes_shares + pool.no_shares
         if total == 0:
             return 0.5, 0.5
-        return float(pool.yes_shares) / total, float(pool.no_shares) / total
+        return float(pool.yes_shares / total), float(pool.no_shares / total)
 
     @staticmethod
     def pool_price(pool: LiquidityPool) -> Decimal:
-        total = float(pool.yes_shares) + float(pool.no_shares)
+        total = pool.yes_shares + pool.no_shares
         if total == 0:
             return Decimal("0.5")
-        return Decimal(str(float(pool.yes_shares) / total))
+        return pool.yes_shares / total
 
     @staticmethod
     async def get_market_prices_from_db(market_id: str) -> tuple[float, float]:
@@ -38,10 +38,10 @@ class MarketService:
             )
             pool = pool_result.scalar_one_or_none()
             if pool:
-                total = float(pool.yes_shares) + float(pool.no_shares)
+                total = pool.yes_shares + pool.no_shares
                 return (
-                    float(pool.yes_shares) / total if total > 0 else 0.5,
-                    float(pool.no_shares) / total if total > 0 else 0.5,
+                    float(pool.yes_shares / total) if total > 0 else 0.5,
+                    float(pool.no_shares / total) if total > 0 else 0.5,
                 )
         return 0.5, 0.5
 
@@ -83,7 +83,8 @@ class MarketService:
         r = await get_redis()
 
         try:
-            acquired = await redis_cb.call(lambda: r.setnx(lock_key, "1", ex=30))
+            # redis-py has no setnx(ex=...); use SET with NX + EX for the stampede lock.
+            acquired = await redis_cb.call(lambda: r.set(lock_key, "1", nx=True, ex=30))
             if acquired:
                 try:
                     prices = await MarketService.get_market_prices_from_db(market_id)

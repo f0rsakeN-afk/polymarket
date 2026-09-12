@@ -2,7 +2,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
@@ -10,7 +10,7 @@ from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.audit import AuthAuditEvent
-from app.models.user import User
+from app.models.user import RefreshToken, Session, User
 from app.services.audit_service import AuthAuditService
 from app.services.liquidity_service import LiquidityService
 
@@ -105,7 +105,7 @@ async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
 
 @router.patch("/users/{user_id}/ban", summary="Ban user (admin)")
 async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Ban a user — sets is_active=False."""
+    """Ban a user — deactivates the account and revokes all tokens/sessions."""
     admin = await _get_admin_user(request, db)
 
     result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
@@ -117,6 +117,18 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         raise ForbiddenError("Cannot ban an admin")
 
     user.is_active = False
+    # Revoke all refresh tokens + sessions so the ban takes effect immediately
+    # (access JWTs expire naturally within 15 min and are rejected via is_active).
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked.is_(False))
+        .values(revoked=True)
+    )
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user.id, Session.revoked.is_(False))
+        .values(revoked=True)
+    )
     await db.commit()
 
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host if request.client else None
