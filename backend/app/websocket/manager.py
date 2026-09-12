@@ -68,6 +68,13 @@ class ConnectionManager:
     MAX_CONNECTIONS_PER_IP = 10
     MAX_CONNECTIONS_PER_USER = 5
     MAX_SUBSCRIPTIONS_PER_SOCKET = 50  # cap per connection to prevent abuse
+    # Slow-client protection: a socket that can't accept a frame within this
+    # budget is wedged (full TCP buffer, client not reading). Without a timeout
+    # one wedged socket stalls the gather() for EVERY subscriber on that market.
+    SEND_TIMEOUT_S = 2.0
+    # Bound concurrent sends so a 50k-subscriber tick doesn't materialize 50k
+    # tasks at once — memory spike per price update.
+    SEND_CONCURRENCY = 1000
 
     def __init__(self):
         self._market_subs: dict[str, set[WebSocket]] = defaultdict(set)
@@ -219,8 +226,11 @@ class ConnectionManager:
 
     async def broadcast_to_market(self, market_id: str, event: dict):
         """
-        Fire-and-forget broadcast — only to sockets subscribed to this market.
-        Safely copies the socket list before iteration.
+        Broadcast to sockets subscribed to this market.
+
+        Slow-client safe: each send races a timeout under a bounded semaphore,
+        so one wedged socket delays neither the tick nor other subscribers.
+        Sockets that time out or fail are disconnected inline (async).
         """
         lock = await _market_locks._get_lock(market_id)
         async with lock:
@@ -238,26 +248,48 @@ class ConnectionManager:
         if not sockets:
             return
 
+        dead = await self._bounded_send(sockets, event)
+        if dead:
+            task = asyncio.create_task(self._disconnect_many(dead))
+            self._pending_cleanups.add(task)
+            task.add_done_callback(self._pending_cleanups.discard)
+
+    async def _bounded_send(self, sockets: list[WebSocket], event: dict) -> list[WebSocket]:
+        """Send to all sockets with per-send timeout + bounded concurrency.
+        Returns the sockets that failed or timed out."""
+        sem = asyncio.Semaphore(self.SEND_CONCURRENCY)
+        dead: list[WebSocket] = []
+
         async def safe_send(ws: WebSocket):
             try:
-                await ws.send_json(event)
+                async with sem:
+                    await asyncio.wait_for(ws.send_json(event), timeout=self.SEND_TIMEOUT_S)
+            except Exception:
+                dead.append(ws)
+
+        await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
+        return dead
+
+    async def _disconnect_many(self, sockets: list[WebSocket]):
+        for ws in sockets:
+            try:
+                await self.disconnect(ws)
             except Exception:
                 pass
 
-        # Fire-and-forget: all sends run concurrently, cleanup runs in background
-        await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
-        task = asyncio.create_task(self._cleanup_dead(sockets))
-        self._pending_cleanups.add(task)
-        task.add_done_callback(self._pending_cleanups.discard)
-
     async def _cleanup_dead(self, sockets: list[WebSocket]):
-        """Ping dead sockets and disconnect if they don't respond."""
+        """Probe sockets and disconnect the unresponsive ones.
+
+        NOTE: no longer run after every broadcast (that was an O(n) ping storm
+        per tick at scale). Broadcasts now report failures directly; this is
+        kept for periodic sweeps only.
+        """
         for ws in sockets:
             # Skip if already disconnected
             if ws not in self._ws_subscriptions:
                 continue
             try:
-                await ws.send_json({"type": "ping"})
+                await asyncio.wait_for(ws.send_json({"type": "ping"}), timeout=self.SEND_TIMEOUT_S)
             except Exception:
                 await self.disconnect(ws)
 
@@ -273,16 +305,11 @@ class ConnectionManager:
         if not all_sockets:
             return
 
-        async def safe_send(ws: WebSocket):
-            try:
-                await ws.send_json(event)
-            except Exception:
-                pass
-
-        await asyncio.gather(*(safe_send(ws) for ws in all_sockets), return_exceptions=True)
-        task = asyncio.create_task(self._cleanup_dead(all_sockets))
-        self._pending_cleanups.add(task)
-        task.add_done_callback(self._pending_cleanups.discard)
+        dead = await self._bounded_send(all_sockets, event)
+        if dead:
+            task = asyncio.create_task(self._disconnect_many(dead))
+            self._pending_cleanups.add(task)
+            task.add_done_callback(self._pending_cleanups.discard)
 
     def subscriber_count(self, market_id: str) -> int:
         return len(self._market_subs.get(market_id, set()))
@@ -299,6 +326,8 @@ manager = ConnectionManager()
 
 class UserConnectionManager:
     """Per-user notification WS connections. Per-user locks, fire-and-forget sends."""
+
+    SEND_TIMEOUT_S = 2.0
 
     def __init__(self):
         self._user_socks: dict[str, set[WebSocket]] = defaultdict(set)
@@ -329,16 +358,20 @@ class UserConnectionManager:
         if not sockets:
             return
 
+        dead: list[WebSocket] = []
+
         async def safe_send(ws: WebSocket):
             try:
-                await ws.send_json(event)
+                await asyncio.wait_for(ws.send_json(event), timeout=self.SEND_TIMEOUT_S)
             except Exception:
-                pass
+                dead.append(ws)
 
         await asyncio.gather(*(safe_send(ws) for ws in sockets), return_exceptions=True)
-        task = asyncio.create_task(self._cleanup_dead_user(user_id, sockets))
-        self._pending_cleanups.add(task)
-        task.add_done_callback(self._pending_cleanups.discard)
+        for ws in dead:
+            try:
+                await self.disconnect(ws, user_id)
+            except Exception:
+                pass
 
     async def _cleanup_dead_user(self, user_id: str, sockets: list[WebSocket]):
         for ws in sockets:
@@ -393,6 +426,10 @@ class RedisPubSub:
             })
             pipe.expire(f"market:{market_id}:price", 300)
             pipe.publish(f"market:{market_id}:price", json.dumps(msg))
+            # Mark the market dirty so the limit-order executor only scans
+            # markets whose price actually moved (instead of a full-table
+            # FOR UPDATE sweep every minute). No extra round-trip: same pipeline.
+            pipe.sadd("dirty:markets", market_id)
             await pipe.execute()
 
         try:

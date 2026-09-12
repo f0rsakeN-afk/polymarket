@@ -14,7 +14,6 @@ from app.amm.engine import BinaryAMM
 from app.config import settings
 from app.database import async_session as _get_session
 from app.models import (
-    Alert,
     LiquidityPool,
     LPShare,
     Market,
@@ -139,15 +138,26 @@ def check_limit_order_execution(self):
     result = None
     try:
         async def _run():
+            from app.services.alert_engine import pop_dirty_markets
+
             async with get_session() as db:
+                # Only markets whose price moved can have newly fillable orders.
+                # AMM prices change exclusively on trade, and every trade marks
+                # its market dirty — so an empty dirty set means zero work.
+                # None = Redis unavailable -> fall back to the full scan.
+                dirty = await pop_dirty_markets()
+                if dirty is not None and not dirty:
+                    return "No price moves since last check"
+
                 now = datetime.now(UTC)
-                result = await db.execute(
-                    select(Order).where(
-                        Order.order_type.in_(["limit", "fill_or_kill"]),
-                        Order.status.in_(["pending", "partial"]),
-                        Order.remaining_amount > 0,
-                ).with_for_update()
-            )
+                query = select(Order).where(
+                    Order.order_type.in_(["limit", "fill_or_kill"]),
+                    Order.status.in_(["pending", "partial"]),
+                    Order.remaining_amount > 0,
+                )
+                if dirty:
+                    query = query.where(Order.market_id.in_(dirty))
+                result = await db.execute(query.with_for_update())
                 orders = result.scalars().all()
 
                 if not orders:
@@ -243,7 +253,9 @@ def check_limit_order_execution(self):
                                  continue
 
                              if order_side == "buy":
-                                 if wallet.balance < remaining:
+                                 # Available balance, not total: locked limit funds
+                                 # must not be double-spent by a second fill.
+                                 if wallet.balance - wallet.locked_balance < remaining:
                                      continue
                                  quote = amm.buy(outcome.name.lower(), remaining)
                                  wallet.balance -= remaining
@@ -845,26 +857,42 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
     start = time.perf_counter()
     try:
         async def _run():
-            async with get_session() as db:
-                result = await db.execute(
-                    select(Alert).where(
-                        Alert.market_id == market_id,
-                        ~Alert.triggered,
-                    )
-                )
-                alerts = result.scalars().all()
-                if not alerts:
-                    return "No active alerts"
+            from app.services.alert_engine import (
+                claim_due_alerts,
+                mark_triggered,
+                reindex_market_alerts,
+            )
 
-                triggered_count = 0
-                for alert in alerts:
-                    price = yes_price if (alert.outcome == "yes" or alert.outcome is None) else no_price
-                    is_triggered = (
-                        (alert.condition == "above" and price >= alert.trigger_price) or
-                        (alert.condition == "below" and price <= alert.trigger_price)
+            async with get_session() as db:
+                try:
+                    claimed = await claim_due_alerts(market_id, yes_price, no_price)
+
+                    if not claimed:
+                        # Either nothing is due, or the index is cold/empty.
+                        # Distinguish cheaply: reindex rebuilds from Postgres; if it
+                        # indexed rows, evaluate them via the legacy scan once.
+                        reindexed = await reindex_market_alerts(db, market_id)
+                        if reindexed:
+                            claimed = await claim_due_alerts(market_id, yes_price, no_price)
+                        if not claimed:
+                            return "No active alerts"
+
+                    alerts = await mark_triggered(db, claimed)
+                    if not alerts:
+                        # Lost the race (another worker flipped them) or IDs stale.
+                        return "No active alerts"
+
+                    from app.models.market import Market
+                    from app.services.notification_service import (
+                        NotificationService,
                     )
-                    if is_triggered:
-                        alert.triggered = True
+                    market_result = await db.execute(select(Market).where(Market.id == market_id))
+                    market = market_result.scalar_one_or_none()
+                    market_slug = market.slug if market else market_id
+
+                    triggered_count = 0
+                    for alert in alerts:
+                        price = yes_price if (alert.outcome == "yes" or alert.outcome is None) else no_price
                         alert.triggered_at = datetime.now(UTC)
                         triggered_count += 1
                         try:
@@ -881,13 +909,6 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                                 },
                             )
                             # Also dispatch in-app notification
-                            from app.models.market import Market
-                            from app.services.notification_service import (
-                                NotificationService,
-                            )
-                            market_result = await db.execute(select(Market).where(Market.id == market_id))
-                            market = market_result.scalar_one_or_none()
-                            market_slug = market.slug if market else market_id
                             await NotificationService.dispatch(
                                 db, str(alert.user_id), "alert_triggered",
                                 f"Price alert triggered: {alert.outcome or 'price'} {alert.condition} ${alert.trigger_price:.2f}",
@@ -897,7 +918,18 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
                         except Exception:
                             pass
                     await db.commit()
-                    return f"Checked {len(alerts)} alerts, {triggered_count} triggered"
+                    return f"Checked alerts, {triggered_count} triggered"
+                except Exception:
+                    # Crash between claim (ZREM) and commit would orphan alerts
+                    # out of the index while still untriggered in Postgres.
+                    # Reindex from source of truth so nothing is lost.
+                    await db.rollback()
+                    try:
+                        await reindex_market_alerts(db, market_id)
+                        await db.commit()
+                    except Exception:
+                        pass
+                    raise
 
         result = celery_run(_run())
     finally:
