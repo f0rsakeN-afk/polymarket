@@ -70,34 +70,44 @@ def expire_stale_orders(self):
     result = None
     try:
         async def _run():
+            from app.services.cache_service import cache_invalidate_orderbook
+
             async with get_session() as db:
-                now = datetime.now(UTC)
-                result = await db.execute(
-                    select(Order).where(
-                        Order.order_type.in_(["limit", "fill_or_kill"]),
-                        Order.status.in_(["pending", "partial"]),
-                        Order.expires_at <= now,
-                    ).with_for_update()
-                )
-                orders = result.scalars().all()
-
-                if not orders:
-                    return "No orders to expire"
-
+                # Batched: one giant FOR UPDATE sweep would lock every expirable
+                # order row and balloon the transaction. SKIP LOCKED lets a
+                # concurrent executor keep working while we drain in chunks.
                 expired_count = 0
-                for order in orders:
-                    order.status = "expired"
-                    order.executed_at = datetime.now(UTC)
-                    if order.side == "buy" and order.amount:
-                        wallet_result = await db.execute(
-                            select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
-                        )
-                        wallet = wallet_result.scalar_one_or_none()
-                        if wallet:
-                            wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
-                    expired_count += 1
+                expired_by_market: dict[str, list] = {}
+                while True:
+                    now = datetime.now(UTC)
+                    result = await db.execute(
+                        select(Order).where(
+                            Order.order_type.in_(["limit", "fill_or_kill"]),
+                            Order.status.in_(["pending", "partial"]),
+                            Order.expires_at <= now,
+                        ).with_for_update(skip_locked=True).limit(500)
+                    )
+                    orders = result.scalars().all()
+                    if not orders:
+                        break
 
-                await db.commit()
+                    for order in orders:
+                        order.status = "expired"
+                        order.executed_at = datetime.now(UTC)
+                        if order.side == "buy" and order.amount:
+                            wallet_result = await db.execute(
+                                select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
+                            )
+                            wallet = wallet_result.scalar_one_or_none()
+                            if wallet:
+                                wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                        expired_count += 1
+                        expired_by_market.setdefault(str(order.market_id), []).append(order)
+
+                    await db.commit()
+
+                if not expired_count:
+                    return "No orders to expire"
 
                 # Notify WebSocket clients — all publishes run concurrently
                 await asyncio.gather(
@@ -105,10 +115,13 @@ def expire_stale_orders(self):
                         redis_pubsub.publish_market_event(
                             str(order.market_id), "order:expired", {"order_id": str(order.id)}
                         )
-                        for order in orders
+                        for batch in expired_by_market.values()
+                        for order in batch
                     ],
                     return_exceptions=True,
                 )
+                for market_id in expired_by_market:
+                    await cache_invalidate_orderbook(market_id)
 
                 return f"Expired {expired_count} orders"
 
@@ -164,6 +177,7 @@ def check_limit_order_execution(self):
                     return "No executable orders"
 
                 executed = 0
+                filled_markets: set[str] = set()
 
                 # Group orders by market — one market/pool lock per group instead of per order
                 by_market: dict[str, list] = {}
@@ -414,6 +428,12 @@ def check_limit_order_execution(self):
                                 pass
 
                         executed += 1
+                        filled_markets.add(market_id)
+
+                if filled_markets:
+                    from app.services.cache_service import cache_invalidate_orderbook
+                    for mid in filled_markets:
+                        await cache_invalidate_orderbook(mid)
 
                 return f"Executed {executed}/{len(orders)} limit orders"
 

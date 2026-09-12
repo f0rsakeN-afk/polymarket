@@ -24,7 +24,7 @@ router = APIRouter(prefix="/split-merge", tags=["split-merge"])
 @router.post("/split", summary="Split USDC into equal YES+NO shares")
 async def split(
     market_id: str,
-    amount: float,
+    amount: Decimal,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
@@ -35,7 +35,7 @@ async def split(
     giving accurate unrealized PnL display.
     """
     user = await get_current_user(request, db)
-    amount_dec = Decimal(str(amount))
+    amount_dec = amount
 
     if amount_dec <= 0:
         raise ValidationError("Amount must be positive")
@@ -80,6 +80,10 @@ async def split(
     fee = amount_dec * SPLIT_MERGE_FEE_RATE
     amount_after_fee = amount_dec - fee
     wallet.balance -= amount_dec
+    # Route the fee to the pool's protocol ledger (swept to treasury at
+    # settlement) instead of burning it.
+    if pool is not None:
+        pool.protocol_fees += fee
 
     async def update_position(outcome_obj, avg_price):
         pos_result = await db.execute(
@@ -162,7 +166,7 @@ async def split(
 @router.post("/merge", summary="Merge equal YES+NO shares back into USDC")
 async def merge(
     market_id: str,
-    amount: float,
+    amount: Decimal,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
@@ -172,7 +176,7 @@ async def merge(
     `amount` shares of BOTH YES and NO to perform a merge.
     """
     user = await get_current_user(request, db)
-    amount_dec = Decimal(str(amount))
+    amount_dec = amount
 
     if amount_dec <= 0:
         raise ValidationError("Amount must be positive")
@@ -183,6 +187,15 @@ async def merge(
     market = market_result.scalar_one_or_none()
     if not market:
         raise NotFoundError("Market not found")
+    if market.status != "active":
+        raise ValidationError("Market is not active")
+
+    # Lock order market -> pool -> position -> wallet matches the trading
+    # path (pool before positions) to avoid deadlocks with concurrent trades.
+    pool_result = await db.execute(
+        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+    )
+    pool = pool_result.scalar_one_or_none()
 
     outcomes_result = await db.execute(
         select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
@@ -221,18 +234,24 @@ async def merge(
         select(Wallet).where(Wallet.user_id == user.id).with_for_update()
     )
     wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise NotFoundError("Wallet not found")
 
     fee = amount_dec * SPLIT_MERGE_FEE_RATE
     amount_after_fee = amount_dec - fee
+    if pool is not None:
+        pool.protocol_fees += fee
+
+    # Realize PnL per side: each destroyed pair returns amount_after_fee/2
+    # against its cost basis. Rows are kept at 0 shares (positions endpoint
+    # filters them) so realized history survives full closes.
+    proceeds_per_side = amount_after_fee / 2
+    yes_pos.realized_pnl += proceeds_per_side - yes_pos.average_price * amount_dec
+    no_pos.realized_pnl += proceeds_per_side - no_pos.average_price * amount_dec
 
     yes_pos.shares_held -= amount_dec
     no_pos.shares_held -= amount_dec
     wallet.balance += amount_after_fee
-
-    if yes_pos.shares_held == 0:
-        await db.delete(yes_pos)
-    if no_pos.shares_held == 0:
-        await db.delete(no_pos)
 
     tx = Transaction(
         user_id=user.id,

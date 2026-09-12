@@ -42,6 +42,7 @@ from app.api.wallet import router as wallet_router
 from app.api.webhooks import router as webhook_router
 from app.config import settings
 from app.database import _get_engine, _get_replica_engine
+from app.middleware.metrics import MetricsMiddleware, clean_multiproc_dir
 from app.middleware.request_id import RequestIDMiddleware
 from app.websocket.manager import redis_pubsub
 from app.websocket.routes import router as ws_router
@@ -85,6 +86,8 @@ async def lifespan(app: FastAPI):
     # and log_level (verbosity). This replaces the module-level basicConfig.
     _configure_logging(settings.app_env, settings.log_level)
     logger.info(f"Starting up (app_env={settings.app_env}, log_level={settings.log_level})")
+    # Drop stale per-worker metric files from a previous run (multiproc mode).
+    clean_multiproc_dir()
 
     # Fail fast: all secrets must be set via environment variables
     if settings.totp_encryption_key == "change-me-in-production":
@@ -202,10 +205,16 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Explicit lists: with credentials allowed, "*" methods/headers would
+    # let any origin's script drive state-changing endpoints via the
+    # victim's cookies. Keep to what the frontend actually sends.
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "Stripe-Signature"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+    max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware, enabled=settings.rate_limit_enabled)
@@ -242,6 +251,13 @@ app.include_router(ws_router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus scrape endpoint (aggregate across workers in multiprocess mode)."""
+    from app.middleware.metrics import metrics_response
+    return metrics_response()
 
 
 @app.get("/health/ready")

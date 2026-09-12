@@ -383,10 +383,18 @@ async def test_get_replies_not_found(client: AsyncClient, test_market):
 # ── Treasury ───────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_treasury(client: AsyncClient):
+async def test_get_treasury(client: AsyncClient, test_user):
+    client.cookies.set("access_token", _token(test_user.id))
     resp = await client.get("/api/v1/treasury")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_treasury_requires_auth(client: AsyncClient):
+    resp = await client.get("/api/v1/treasury")
+    assert resp.status_code == 401
+    assert resp.json()["success"] is False
 
 
 @pytest.mark.asyncio
