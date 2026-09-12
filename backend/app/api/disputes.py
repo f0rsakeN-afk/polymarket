@@ -43,7 +43,9 @@ async def create_dispute(
     if not market:
         raise NotFoundError("Market not found")
 
-    if market.status not in ("resolved", "dispute_window"):
+    # `resolving` counts: the outcome is proposed and settlement is pending —
+    # that is exactly the window users must be able to dispute in.
+    if market.status not in ("resolving", "resolved", "dispute_window"):
         raise ValidationError("Market is not in a resolvable state")
 
     if market.dispute_deadline and datetime.now(UTC) > market.dispute_deadline:
