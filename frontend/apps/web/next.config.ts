@@ -3,6 +3,11 @@ import type { NextConfig } from "next"
 const nextConfig: NextConfig = {
   transpilePackages: ["@workspace/ui"],
   output: "standalone",
+  experimental: {
+    // Barrel imports (lucide-react: 13 consumers, date-fns via ui) resolve
+    // to per-module chunks instead of dragging whole packages in.
+    optimizePackageImports: ["lucide-react", "date-fns"],
+  },
   async headers() {
     return [
       {
