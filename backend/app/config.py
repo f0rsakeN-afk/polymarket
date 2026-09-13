@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -76,9 +78,23 @@ class Settings(BaseSettings):
     # Referral
     referral_reward_amount: float = 1.0
 
+    # Fees — all rates as decimals (0.02 = 2%).
+    # A taker buy pays BOTH legs: trading fee (stays in the pool for LPs,
+    # deducted from collateral before the AMM quote) AND protocol fee
+    # (accrues in pool.protocol_fees, swept to treasury at settlement).
+    # Effective take rate = trading_fee_rate + protocol_fee_rate (default 3%).
+    trading_fee_rate: Decimal = Decimal("0.02")
+    protocol_fee_rate: Decimal = Decimal("0.01")
+    split_merge_fee_rate: Decimal = Decimal("0.02")
+
     # 2FA
     totp_encryption_key: str = "change-me-in-production"
     totp_setup_expire_seconds: int = 900  # 15 minutes
+
+    # Error tracking (optional — unset means errors only go to logs)
+    sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.1
+    sentry_profiles_sample_rate: float = 0.0
 
     @field_validator("database_url", "database_replica_url", mode="before")
     @classmethod

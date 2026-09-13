@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import InsufficientBalanceError
+from app.config import settings
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
@@ -77,7 +78,7 @@ class MatchingEngine:
         outcome_name = outcome.name.lower() if outcome else "unknown"
 
         usdc_value = match_shares * match_price
-        fee = usdc_value * Decimal("0.01")
+        fee = usdc_value * settings.protocol_fee_rate
 
         # Always lock wallets in deterministic order by user_id to prevent deadlocks
         user_ids = sorted([maker.user_id, taker_user_id], key=str)

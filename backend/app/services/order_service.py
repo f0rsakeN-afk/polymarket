@@ -413,7 +413,7 @@ class OrderService:
                 amm_slippage = quote.slippage
 
             trade_value = remaining_usdc if data.side == "buy" else sell_proceeds_amm
-            protocol_fee = trade_value * Decimal("0.01")
+            protocol_fee = trade_value * settings.protocol_fee_rate
             pool.protocol_fees += protocol_fee
 
             pool.yes_shares = amm.yes_shares

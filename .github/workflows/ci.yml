@@ -1,0 +1,74 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: change-me
+          POSTGRES_DB: mydatabase_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mydatabase_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep -q PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_PORT: "5433"
+      # No-auth redis in CI; conftest builds the URL from these.
+      REDIS_PASSWORD: ""
+      REDIS_PORT: "6380"
+      JWT_SECRET: ci-test-secret-not-real
+      SECRET_KEY: ci-test-secret-not-real
+      TOTP_ENCRYPTION_KEY: ci-test-secret-not-real
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff via uvx; not a project dep)
+        run: uvx ruff check app/ tests/
+
+      - name: Migrate (ephemeral pg, proves the chain works fresh)
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:change-me@localhost:5433/mydatabase_test
+
+      - name: Tests
+        run: uv run pytest tests/ -q

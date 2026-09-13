@@ -89,6 +89,19 @@ async def lifespan(app: FastAPI):
     # Drop stale per-worker metric files from a previous run (multiproc mode).
     clean_multiproc_dir()
 
+    # Error tracking — opt-in via SENTRY_DSN. No-op locally when unset.
+    if settings.sentry_dsn:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.app_env,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            profiles_sample_rate=settings.sentry_profiles_sample_rate,
+            send_default_pii=False,
+        )
+        logger.info("Sentry error tracking enabled")
+
     # Fail fast: all secrets must be set via environment variables
     if settings.totp_encryption_key == "change-me-in-production":
         raise RuntimeError(

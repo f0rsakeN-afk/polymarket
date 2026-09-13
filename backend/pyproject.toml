@@ -33,6 +33,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "pip-audit>=2.7.0",
     "prometheus-client>=0.26.0",
+    "sentry-sdk>=2.69.1",
 ]
 
 [tool.ruff]

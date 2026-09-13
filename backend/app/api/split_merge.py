@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import NotFoundError, ValidationError
 from app.api.responses import success_response
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.liquidity import LiquidityPool
@@ -17,7 +18,6 @@ from app.services.market_service import MarketService
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("polymarket")
-SPLIT_MERGE_FEE_RATE = Decimal("0.02")
 router = APIRouter(prefix="/split-merge", tags=["split-merge"])
 
 
@@ -77,7 +77,7 @@ async def split(
     if amount_dec > available:
         raise ValidationError("Insufficient balance")
 
-    fee = amount_dec * SPLIT_MERGE_FEE_RATE
+    fee = amount_dec * settings.split_merge_fee_rate
     amount_after_fee = amount_dec - fee
     wallet.balance -= amount_dec
     # Route the fee to the pool's protocol ledger (swept to treasury at
@@ -237,7 +237,7 @@ async def merge(
     if not wallet:
         raise NotFoundError("Wallet not found")
 
-    fee = amount_dec * SPLIT_MERGE_FEE_RATE
+    fee = amount_dec * settings.split_merge_fee_rate
     amount_after_fee = amount_dec - fee
     if pool is not None:
         pool.protocol_fees += fee
