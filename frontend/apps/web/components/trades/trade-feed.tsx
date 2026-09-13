@@ -41,8 +41,8 @@ const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
           className={cn(
             "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide inline-block",
             trade.side === "buy"
-              ? "bg-green-500/10 text-green-500"
-              : "bg-red-500/10 text-red-500"
+              ? "bg-green-500/10 text-green-700"
+              : "bg-red-500/10 text-red-700"
           )}
         >
           {trade.side}
@@ -76,8 +76,9 @@ const TradeFeed = memo(function TradeFeed({ trades, loading, title, listRef }: T
 
   if (loading && trades.length === 0) {
     return (
-      <div className="flex h-40 items-center justify-center">
+      <div role="status" className="flex h-40 items-center justify-center">
         <Spinner className="size-5" />
+        <span className="sr-only">Loading…</span>
       </div>
     )
   }

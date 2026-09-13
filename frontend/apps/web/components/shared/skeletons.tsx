@@ -14,7 +14,7 @@ function Skeleton({ className }: { className?: string }) {
 
 const SkeletonMarketCard = memo(function SkeletonMarketCard() {
   return (
-    <div className="flex flex-col rounded-xl border border-border bg-card overflow-hidden">
+    <div aria-hidden="true" className="flex flex-col rounded-xl border border-border bg-card overflow-hidden">
       <div className="p-4 pb-2 space-y-2 flex-1">
         <Skeleton className="h-3 w-16" />
         <Skeleton className="h-4 w-full" />
@@ -42,7 +42,7 @@ const SkeletonMarketCard = memo(function SkeletonMarketCard() {
 
 const SkeletonMarketGrid = memo(function SkeletonMarketGrid({ count = 6 }: { count?: number }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div aria-hidden="true" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {Array.from({ length: count }).map((_, i) => (
         <SkeletonMarketCard key={i} />
       ))}
@@ -52,7 +52,7 @@ const SkeletonMarketGrid = memo(function SkeletonMarketGrid({ count = 6 }: { cou
 
 const SkeletonTradeFeed = memo(function SkeletonTradeFeed({ rows = 6 }: { rows?: number }) {
   return (
-    <div className="space-y-0">
+    <div aria-hidden="true" className="space-y-0">
       <div className="grid grid-cols-7 gap-2 px-1 py-2 border-b border-border">
         {Array.from({ length: 7 }).map((_, i) => (
           <Skeleton key={i} className="h-2.5" />
@@ -120,12 +120,13 @@ const SkeletonPortfolioSummary = memo(function SkeletonPortfolioSummary() {
 
 const SkeletonTrendingCarousel = memo(function SkeletonTrendingCarousel() {
   return (
-    <div className="flex gap-4 overflow-hidden">
+    <div className="flex gap-4 overflow-hidden" aria-hidden="true">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="min-w-[240px] rounded-xl border border-border bg-card p-4 space-y-2 shrink-0">
+        <div key={i} className="w-[280px] shrink-0 rounded-xl border border-border bg-card p-4 space-y-2">
           <Skeleton className="h-3 w-16" />
-          <Skeleton className="h-3.5 w-full" />
-          <Skeleton className="h-3.5 w-3/4" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-24 w-full rounded-md" />
           <div className="flex items-center justify-between pt-1">
             <Skeleton className="h-4 w-12" />
             <Skeleton className="h-2.5 w-16" />
@@ -217,7 +218,7 @@ const SkeletonMarketDetail = memo(function SkeletonMarketDetail() {
 
 const SkeletonTable = memo(function SkeletonTable({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div aria-hidden="true" className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
         <div className="flex items-center gap-4">
           {Array.from({ length: cols }).map((_, i) => (
@@ -240,7 +241,7 @@ const SkeletonTable = memo(function SkeletonTable({ rows = 5, cols = 4 }: { rows
 
 const SkeletonOrderBook = memo(function SkeletonOrderBook({ rows = 8 }: { rows?: number }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div aria-hidden="true" className="flex flex-col gap-4">
       {/* Header */}
       <div className="flex items-center justify-between px-1">
         <Skeleton className="h-2.5 w-12" />

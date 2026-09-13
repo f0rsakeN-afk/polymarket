@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect } from "react"
+import { useState, useMemo, useCallback } from "react"
 import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@workspace/ui/components/table"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -40,7 +40,7 @@ export interface DataTableProps<T> {
 
 type SortDir = "asc" | "desc" | null
 
-function useSort<T>(data: T[], columns: Column<T>[], rowKey: (row: T) => string) {
+function useSort<T>(data: T[], columns: Column<T>[]) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>(null)
 
@@ -79,14 +79,14 @@ function useSort<T>(data: T[], columns: Column<T>[], rowKey: (row: T) => string)
 
   const SortIcon = useCallback(
     ({ colKey }: { colKey: string }) => {
-      if (sortCol !== colKey) return <ChevronsUpDown className="size-3 opacity-40" />
-      if (sortDir === "asc") return <ChevronUp className="size-3" />
-      return <ChevronDown className="size-3" />
+      if (sortCol !== colKey) return <ChevronsUpDown className="size-3 opacity-40" aria-hidden="true" />
+      if (sortDir === "asc") return <ChevronUp className="size-3" aria-hidden="true" />
+      return <ChevronDown className="size-3" aria-hidden="true" />
     },
     [sortCol, sortDir]
   )
 
-  return { sorted, handleSort, SortIcon }
+  return { sorted, handleSort, SortIcon, sortCol, sortDir }
 }
 
 function SkeletonRows({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
@@ -139,28 +139,19 @@ export function DataTable<T>({
   error,
   onRetry,
   selectable,
-  selectedIds = new Set(),
+  selectedIds = new Set<string>(),
   onSelectionChange,
   pagination,
   emptyMessage = "No data found",
   rowKey,
   skeletonRows = 5,
 }: DataTableProps<T>) {
-  const [localSelected, setLocalSelected] = useState<Set<string>>(selectedIds)
-  const [expanded, setExpanded] = useState(false)
-
   const visibleColumns = columns.filter((c) => c.visible !== false)
-  const { sorted, handleSort, SortIcon } = useSort(data, columns, rowKey)
-
-  // Sync local selection with prop
-  useEffect(() => {
-    setLocalSelected(selectedIds)
-  }, [selectedIds])
+  const { sorted, handleSort, SortIcon } = useSort(data, columns)
 
   const handleSelectAll = useCallback(
     (checked: boolean) => {
       const newSet = checked ? new Set(sorted.map((row) => rowKey(row))) : new Set<string>()
-      setLocalSelected(newSet)
       onSelectionChange?.(newSet)
     },
     [sorted, rowKey, onSelectionChange]
@@ -168,13 +159,12 @@ export function DataTable<T>({
 
   const handleSelectRow = useCallback(
     (id: string, checked: boolean) => {
-      const newSet = new Set(localSelected)
+      const newSet = new Set(selectedIds)
       if (checked) newSet.add(id)
       else newSet.delete(id)
-      setLocalSelected(newSet)
       onSelectionChange?.(newSet)
     },
-    [localSelected, onSelectionChange]
+    [selectedIds, onSelectionChange]
   )
 
   const totalPages = pagination ? Math.ceil(pagination.total / pagination.pageSize) : 1
@@ -189,13 +179,12 @@ export function DataTable<T>({
     [pagination, currentPage]
   )
 
-  const allSelected = sorted.length > 0 && sorted.every((row) => localSelected.has(rowKey(row)))
-  const someSelected = sorted.some((row) => localSelected.has(rowKey(row)))
+  const allSelected = sorted.length > 0 && sorted.every((row) => selectedIds.has(rowKey(row)))
 
   if (error) {
     return (
       <Card>
-        <CardContent className="flex h-48 flex-col items-center justify-center gap-3">
+        <CardContent role="alert" className="flex h-48 flex-col items-center justify-center gap-3">
           <p className="text-sm text-destructive">Failed to load data</p>
           {onRetry && (
             <Button size="sm" variant="outline" onClick={onRetry}>
@@ -258,7 +247,7 @@ export function DataTable<T>({
             <TableBody>
               {sorted.map((row) => {
                 const id = rowKey(row)
-                const isSelected = localSelected.has(id)
+                const isSelected = selectedIds.has(id)
                 return (
                   <TableRow
                     key={id}

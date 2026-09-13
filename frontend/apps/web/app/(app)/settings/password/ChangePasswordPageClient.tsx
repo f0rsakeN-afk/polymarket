@@ -74,7 +74,7 @@ export function ChangePasswordPageClient() {
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <SettingsBreadcrumb page="Security" />
       <div>
-        <h1 className="text-2xl font-semibold">Change Password</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Change Password</h1>
         <p className="text-sm text-muted-foreground mt-1">Update your account password</p>
       </div>
 
@@ -90,7 +90,7 @@ export function ChangePasswordPageClient() {
             </Alert>
           )}
           {success && (
-            <Alert className="mb-4 border-green-500/50 text-green-600 dark:text-green-400">
+            <Alert className="mb-4 border-green-500/50 text-green-600">
               <AlertDescription>Password updated successfully.</AlertDescription>
             </Alert>
           )}

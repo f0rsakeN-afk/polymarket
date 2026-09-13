@@ -99,11 +99,12 @@ export function SignupForm() {
     []
   );
 
-  const handleVerifyOtp = useCallback(async () => {
-    if (otp.length !== 6) return;
+  const handleVerifyOtp = useCallback(async (code?: string) => {
+    const codeToVerify = code ?? otp
+    if (codeToVerify.length !== 6) return;
     setIsLoading(true);
     try {
-      await registerApi.verifyEmail(email, otp);
+      await registerApi.verifyEmail(email, codeToVerify);
       sileo.success({ title: "Email verified!" });
       router.push("/login");
     } catch (err) {
@@ -113,7 +114,7 @@ export function SignupForm() {
     } finally {
       setIsLoading(false);
     }
-  }, [email, otp]);
+  }, [email, otp, router]);
 
   const handleResend = useCallback(async () => {
     try {
@@ -133,11 +134,6 @@ export function SignupForm() {
     const id = setInterval(() => setResendTimer((t) => t - 1), 1_000);
     return () => clearInterval(id);
   }, [resendTimer]);
-
-  // Auto-verify on 6 digits
-  useEffect(() => {
-    if (step === "otp" && otp.length === 6) handleVerifyOtp();
-  }, [otp, step, handleVerifyOtp]);
 
   // Pre-fill referral code from ?ref= URL param
   useEffect(() => {
@@ -266,7 +262,14 @@ export function SignupForm() {
             {/* ── OTP step ── */}
             {step === "otp" && (
               <div className="space-y-4">
-                <OtpInput value={otp} onChange={setOtp} error={!!otpError} />
+                <OtpInput
+                  value={otp}
+                  onChange={(v) => {
+                    setOtp(v);
+                    if (v.length === 6 && step === "otp") handleVerifyOtp(v);
+                  }}
+                  error={!!otpError}
+                />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <button
                     onClick={handleBackToDetails}

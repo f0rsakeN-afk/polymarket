@@ -280,14 +280,14 @@ export function useMarketSocket({
   onMessage: (data: unknown) => void
   enabled?: boolean
 }) {
-  const [status, setStatus] = useState<WSStatus>("disconnected")
+  const ctx = useContext(MarketSocketContext)
+
+  const [status, setStatus] = useState<WSStatus>(() => ctx.getStatus())
   const onMessageRef = useRef(onMessage)
   const marketIdRef = useRef(marketId)
 
   useEffect(() => { onMessageRef.current = onMessage }, [onMessage])
   useEffect(() => { marketIdRef.current = marketId }, [marketId])
-
-  const ctx = useContext(MarketSocketContext)
 
   useEffect(() => {
     if (!enabled || !marketId) return () => {}
@@ -299,7 +299,6 @@ export function useMarketSocket({
 
     const unsubMsg = ctx.subscribe(marketId, (data) => onMessageRef.current(data))
     const unsubStatus = ctx.subscribe(marketId, statusHandler)
-    setStatus(ctx.getStatus())
 
     return () => {
       unsubMsg()

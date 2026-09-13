@@ -4,6 +4,7 @@ import { Mercator } from "@visx/geo";
 import { ParentSize } from "@visx/responsive";
 import type { TransformMatrix } from "@visx/zoom";
 import { Zoom } from "@visx/zoom";
+import type { GeoPermissibleObjects } from "d3-geo";
 import type { FeatureCollection, Geometry } from "geojson";
 import type { Transition } from "motion/react";
 import React, {
@@ -168,8 +169,7 @@ const DEFAULT_INITIAL_ZOOM: TransformMatrix = {
 };
 
 interface MercatorRenderProps {
-  // biome-ignore lint/suspicious/noExplicitAny: visx geo projection bundle
-  path: (geo: any) => string | null;
+  path: (geo: GeoPermissibleObjects) => string | null;
   projection: (coords: [number, number]) => [number, number] | null | undefined;
 }
 
@@ -261,8 +261,7 @@ const ChoroplethMercatorContent = memo(function ChoroplethMercatorContent({
   );
 
   const rawPathGenerator = useCallback(
-    // biome-ignore lint/suspicious/noExplicitAny: GeoJSON types are complex
-    (geo: any) => mercator.path(geo),
+    (geo: GeoPermissibleObjects) => mercator.path(geo),
     [mercator]
   );
 

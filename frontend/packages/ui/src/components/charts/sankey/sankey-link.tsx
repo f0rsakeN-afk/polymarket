@@ -120,7 +120,7 @@ function AnimatedLink({
       const length = pathRef.current.getTotalLength();
       setPathLength(length);
     }
-  });
+  }, [path]);
 
   const progress = useMountProgress(
     enterTransition,

@@ -8,5 +8,9 @@ export const metadata: Metadata = {
 };
 
 export default function PlainLayout({ children }: { children: React.ReactNode }) {
-  return children;
+  return (
+    <main id="main-content" className="outline-none" tabIndex={-1}>
+      {children}
+    </main>
+  );
 }

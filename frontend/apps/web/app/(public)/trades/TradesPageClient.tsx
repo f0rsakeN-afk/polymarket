@@ -52,7 +52,7 @@ export function TradesPageClient() {
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold">Trade Feed</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Trade Feed</h1>
         <p className="mt-1 text-muted-foreground">Recent trades across all markets</p>
       </div>
 

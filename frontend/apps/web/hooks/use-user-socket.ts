@@ -12,7 +12,7 @@ interface UseUserSocketOptions {
 }
 
 export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSocketOptions) {
-  const [status, setStatus] = useState<WSStatus>("disconnected")
+  const [statusState, setStatusState] = useState<WSStatus>("disconnected")
   const wsRef = useRef<WebSocket | null>(null)
   const retriesRef = useRef(0)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -36,10 +36,12 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
     userIdRef.current = userId
   }, [userId])
 
-  const connect: () => void = useCallback(() => {
+  // Named function expression so the reconnect timeout can reference itself
+  // without touching the outer `connect` binding during initialization.
+  const connect: () => void = useCallback(function connectFn() {
     if (!enabledRef.current || !userIdRef.current) return
 
-    setStatus("connecting")
+    setStatusState("connecting")
 
     // Auth: access_token cookie is sent automatically by browser on WS handshake
     const ws = new WebSocket(`${config.wsUrl}/ws/notifications/${userIdRef.current}`)
@@ -50,7 +52,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
         ws.close()
         return
       }
-      setStatus("connected")
+      setStatusState("connected")
       retriesRef.current = 0
     }
 
@@ -63,25 +65,20 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
 
     ws.onclose = () => {
       if (!mountedRef.current) return
-      setStatus("disconnected")
+      setStatusState("disconnected")
       const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 30_000)
       retriesRef.current++
-      timeoutRef.current = setTimeout(connectRef.current, delay)
+      timeoutRef.current = setTimeout(() => {
+        if (mountedRef.current) connectFn()
+      }, delay)
     }
 
     ws.onerror = () => {
       if (!mountedRef.current) return
-      setStatus("error")
+      setStatusState("error")
       ws.close()
     }
   }, [])
-
-  // connectRef is assigned after connect is defined — it is set in the effect below
-  const connectRef = useRef<() => void>(connect)
-  // Store connect in ref so onclose can call the latest version
-  useEffect(() => {
-    connectRef.current = connect
-  }, [connect])
 
   useEffect(() => {
     if (!enabled) {
@@ -89,7 +86,6 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       wsRef.current?.close()
       wsRef.current = null
-      setStatus("disconnected")
       return
     }
 
@@ -110,5 +106,5 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
     }
   }, [])
 
-  return { status, send }
+  return { status: enabled ? statusState : "disconnected", send }
 }

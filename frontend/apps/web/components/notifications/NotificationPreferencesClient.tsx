@@ -99,7 +99,7 @@ export function NotificationPreferencesClient() {
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <SettingsBreadcrumb page="Notifications" />
       <div>
-        <h1 className="text-2xl font-semibold">Notification Preferences</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Notification Preferences</h1>
         <p className="text-sm text-muted-foreground mt-1">Manage how you receive alerts</p>
       </div>
 

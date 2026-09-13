@@ -58,6 +58,9 @@ export function usePathStrokeMetrics(
         ? prev
         : { pathD: d, pathLength: len }
     );
+    // Caller-provided deps drive the rendered path; pathRef is a stable ref
+    // read via .current and intentionally excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   return metrics;
