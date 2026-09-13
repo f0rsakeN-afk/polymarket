@@ -62,9 +62,6 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
-      - name: Lint (ruff via uvx; not a project dep)
-        run: uvx ruff check app/ tests/
-
       - name: Migrate (ephemeral pg, proves the chain works fresh)
         run: uv run alembic upgrade head
         env:

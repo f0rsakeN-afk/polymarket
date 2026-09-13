@@ -108,12 +108,12 @@ async def lifespan(app: FastAPI):
             "totp_encryption_key is using its default placeholder value. "
             "Set TOTP_ENCRYPTION_KEY environment variable to a secure random value before deploying."
         )
-    if settings.jwt_secret == "change-me-in-production":
+    if settings.jwt_secret == "change-me-in-production":  # noqa: S105 -- placeholder sentinel check, not a credential
         raise RuntimeError(
             "jwt_secret is using its default placeholder value. "
             "Set JWT_SECRET environment variable to a secure random value before deploying."
         )
-    if settings.secret_key == "change-me-in-production":
+    if settings.secret_key == "change-me-in-production":  # noqa: S105 -- placeholder sentinel check, not a credential
         raise RuntimeError(
             "secret_key is using its default placeholder value. "
             "Set SECRET_KEY environment variable to a secure random value before deploying."

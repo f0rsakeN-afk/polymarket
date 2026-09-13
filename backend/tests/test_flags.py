@@ -1,7 +1,7 @@
 """Tests for flag endpoints."""
-import pytest
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 
