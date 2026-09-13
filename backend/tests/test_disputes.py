@@ -1,7 +1,7 @@
 """Tests for dispute endpoints."""
-import pytest
 from unittest.mock import patch
 
+import pytest
 from httpx import AsyncClient
 
 
@@ -105,7 +105,6 @@ async def test_propose_resolution_non_admin_forbidden(client: AsyncClient, test_
 @pytest.mark.asyncio
 async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Disputes filed for a market are retrievable."""
-    from app.models.dispute import Dispute
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
     client.cookies.set("access_token", _token(admin_user.id))
@@ -133,11 +132,9 @@ async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_use
 @pytest.mark.asyncio
 async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Admin upholds dispute and market is resolved to proposed outcome."""
-    from app.models.dispute import Dispute
     from unittest.mock import patch
 
     outcome_yes = next(o for o in test_market.outcomes if o.name == "Yes")
-    outcome_no = next(o for o in test_market.outcomes if o.name == "No")
 
     # Propose resolution first
     client.cookies.set("access_token", _token(admin_user.id))
@@ -170,7 +167,6 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
 @pytest.mark.asyncio
 async def test_adjudicate_dispute_dismissed(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Admin dismisses dispute — market status stays dispute_window."""
-    from app.models.dispute import Dispute
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
 
@@ -200,7 +196,6 @@ async def test_adjudicate_dispute_dismissed(client: AsyncClient, admin_user, tes
 @pytest.mark.asyncio
 async def test_adjudicate_dispute_non_admin_forbidden(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Non-admin cannot adjudicate disputes."""
-    from app.models.dispute import Dispute
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
 
@@ -228,7 +223,6 @@ async def test_adjudicate_dispute_non_admin_forbidden(client: AsyncClient, admin
 @pytest.mark.asyncio
 async def test_adjudicate_dispute_invalid_ruling(client: AsyncClient, admin_user, test_user, test_market, db_session):
     """Ruling must be 'upheld' or 'dismissed'."""
-    from app.models.dispute import Dispute
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
 

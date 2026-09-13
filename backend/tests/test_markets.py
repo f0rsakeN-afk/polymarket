@@ -1,15 +1,14 @@
 """Tests for market endpoints."""
 import uuid
-import pytest
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
+import pytest
 from httpx import AsyncClient
 
-from app.models.market import Market, Outcome
 from app.models.liquidity import LiquidityPool
-
+from app.models.market import Market, Outcome
 
 # ── List markets ────────────────────────────────────────────────────────────────
 
@@ -294,9 +293,9 @@ async def test_get_market_resolved(resolved_market: Market, client: AsyncClient)
 @pytest.mark.asyncio
 async def test_get_market_zero_volume(client: AsyncClient, admin_user, db_session):
     """Market with zero volume/liquidity still returns 200."""
-    from datetime import datetime, timezone
-    from app.models.market import Market, Outcome
-    from app.models.liquidity import LiquidityPool
+    from datetime import datetime
+
+    from app.models.market import Market
 
     m = Market(
         slug=f"zero-vol-{uuid.uuid4().hex[:8]}",
@@ -305,7 +304,7 @@ async def test_get_market_zero_volume(client: AsyncClient, admin_user, db_sessio
         category="test",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
         total_liquidity="0",
         total_volume="0",
     )
@@ -326,8 +325,9 @@ async def test_get_market_zero_volume(client: AsyncClient, admin_user, db_sessio
 @pytest.mark.asyncio
 async def test_get_orderbook_empty(client: AsyncClient, admin_user, db_session):
     """Market with no pending orders returns empty bids and asks."""
-    from datetime import datetime, timezone
-    from app.models.market import Market, Outcome
+    from datetime import datetime
+
+    from app.models.market import Market
 
     m = Market(
         slug=f"empty-book-{uuid.uuid4().hex[:8]}",
@@ -336,7 +336,7 @@ async def test_get_orderbook_empty(client: AsyncClient, admin_user, db_session):
         category="test",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
     )
     db_session.add(m)
     await db_session.flush()
@@ -407,9 +407,9 @@ async def test_claim_no_winning_position(client: AsyncClient, test_user, resolve
 @pytest.mark.asyncio
 async def test_claim_idempotent(client: AsyncClient, admin_user, db_session, test_user):
     """Claiming twice on same resolved market returns 422 second time."""
-    from datetime import datetime, timezone
-    from app.models.market import Market, Outcome
-    from app.models.liquidity import LiquidityPool
+    from datetime import datetime
+
+    from app.models.market import Market
     from app.models.position import Position
 
     # Create our own resolved market so we don't mutate test_market
@@ -421,7 +421,7 @@ async def test_claim_idempotent(client: AsyncClient, admin_user, db_session, tes
         category="test",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
     )
     db_session.add(m)
     await db_session.flush()

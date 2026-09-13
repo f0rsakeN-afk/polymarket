@@ -1,10 +1,9 @@
 """Tests for webhook endpoints."""
 import hashlib
 import hmac
-import json
 import time
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -24,7 +23,6 @@ def _stripe_signature(payload: bytes, secret: str) -> str:
 @pytest.mark.asyncio
 async def test_stripe_webhook_payment_intent_succeeded(client: AsyncClient, test_user, db_session):
     """Stripe webhook credits wallet on successful payment."""
-    from app.models.wallet import Wallet, Transaction
 
     payment_intent_id = f"pi_test_{uuid4().hex[:8]}"
     amount_cents = 5000  # $50.00
@@ -57,7 +55,7 @@ async def test_stripe_webhook_payment_intent_succeeded(client: AsyncClient, test
 @pytest.mark.asyncio
 async def test_stripe_webhook_idempotent(client: AsyncClient, test_user, db_session):
     """Stripe webhook is idempotent — same payment_intent doesn't double-credit."""
-    from app.models.wallet import Wallet, Transaction
+    from app.models.wallet import Wallet
 
     payment_intent_id = f"pi_test_{uuid4().hex[:8]}"
     amount_cents = 5000
@@ -194,8 +192,9 @@ async def test_stripe_webhook_missing_amount(client: AsyncClient, db_session):
 @pytest.mark.asyncio
 async def test_stripe_webhook_zero_amount(client: AsyncClient, test_user, db_session):
     """Stripe webhook credits $0 when amount is 0."""
-    from app.models.wallet import Wallet
     from sqlalchemy import select
+
+    from app.models.wallet import Wallet
 
     payment_intent_id = f"pi_test_{uuid4().hex[:8]}"
 

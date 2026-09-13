@@ -2,7 +2,6 @@
 import pytest
 from httpx import AsyncClient
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _token(user_id: str) -> str:
@@ -99,8 +98,8 @@ async def test_login_nonexistent_user(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_login_inactive_user(db_session):
-    from app.models.user import User
     from app.deps import hash_password
+    from app.models.user import User
     user = User(
         email="inactive@example.com",
         username="inactive",
@@ -112,6 +111,7 @@ async def test_login_inactive_user(db_session):
     await db_session.commit()
 
     from httpx import ASGITransport, AsyncClient
+
     from app.app import app
     from app.database import get_db
 

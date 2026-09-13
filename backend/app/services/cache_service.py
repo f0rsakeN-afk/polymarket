@@ -131,6 +131,26 @@ async def cache_get_orderbook(market_id: str) -> dict | None:
     return _loads(raw) if raw else None
 
 
+async def cache_invalidate_orderbook(market_id: str):
+    """Drop the cached orderbook for a market.
+
+    Called on fills, cancels and expiries — all three mutate pending orders.
+    Placement rebuilds eagerly instead; invalidation here is the backstop.
+    """
+    r = await get_redis()
+
+    async def _op():
+        pipe = r.pipeline()
+        pipe.delete(f"cache:cm:ob:{market_id}")
+        pipe.delete(f"cache:ct:ob:{market_id}")
+        await pipe.execute()
+
+    try:
+        await redis_cb.call(_op)
+    except Exception:
+        pass  # non-critical
+
+
 async def build_orderbook(db: AsyncSession, market_id: str) -> dict:
     """Build orderbook dict from pending limit orders. Single source of truth for all orderbook data."""
     outcomes_result = await db.execute(

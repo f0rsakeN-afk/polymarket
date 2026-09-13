@@ -1,12 +1,10 @@
 """Tests for order endpoints."""
-import pytest
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
 
+import pytest
 from httpx import AsyncClient
 
 from app.models.market import Market, Outcome
-from app.models.position import Position
 
 
 def _token(user_id: str) -> str:
@@ -19,7 +17,7 @@ def _token(user_id: str) -> str:
 
 @pytest.mark.asyncio
 async def test_get_quote_auth_required(client: AsyncClient, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     resp = await client.post("/api/v1/orders/quote", json={
         "market_id": str(test_market.id),
         "outcome": "yes",
@@ -32,7 +30,7 @@ async def test_get_quote_auth_required(client: AsyncClient, test_market):
 
 @pytest.mark.asyncio
 async def test_get_quote_success(client: AsyncClient, test_user, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/quote", json={
         "market_id": str(test_market.id),
@@ -76,7 +74,7 @@ async def test_get_quote_invalid_outcome(client: AsyncClient, test_user, test_ma
 
 @pytest.mark.asyncio
 async def test_place_order_market_buy(client: AsyncClient, test_user, test_market, db_session):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/", json={
         "market_id": str(test_market.id),
@@ -94,7 +92,7 @@ async def test_place_order_market_buy(client: AsyncClient, test_user, test_marke
 
 @pytest.mark.asyncio
 async def test_place_order_insufficient_balance(client: AsyncClient, test_user, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/", json={
         "market_id": str(test_market.id),
@@ -110,7 +108,7 @@ async def test_place_order_insufficient_balance(client: AsyncClient, test_user, 
 @pytest.mark.asyncio
 async def test_place_order_closed_market(client: AsyncClient, admin_user, test_user, db_session):
     """Cannot trade on a resolved/closed market."""
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
 
     # Create a closed market
     market = Market(
@@ -158,7 +156,7 @@ async def test_place_order_sell_without_holding(client: AsyncClient, test_user, 
 @pytest.mark.asyncio
 async def test_place_order_duplicate(client: AsyncClient, test_user, test_market):
     """Idempotency - duplicate client_order_id returns same order."""
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     payload = {
         "market_id": str(test_market.id),
@@ -183,7 +181,6 @@ async def test_place_order_duplicate(client: AsyncClient, test_user, test_market
 @pytest.mark.asyncio
 async def test_cancel_order(client: AsyncClient, test_user, test_market, db_session):
     """Cancel a pending limit order."""
-    from decimal import Decimal
     from app.models.order import Order
 
     client.cookies.set("access_token", _token(test_user.id))

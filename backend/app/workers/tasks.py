@@ -70,34 +70,44 @@ def expire_stale_orders(self):
     result = None
     try:
         async def _run():
+            from app.services.cache_service import cache_invalidate_orderbook
+
             async with get_session() as db:
-                now = datetime.now(UTC)
-                result = await db.execute(
-                    select(Order).where(
-                        Order.order_type.in_(["limit", "fill_or_kill"]),
-                        Order.status.in_(["pending", "partial"]),
-                        Order.expires_at <= now,
-                    ).with_for_update()
-                )
-                orders = result.scalars().all()
-
-                if not orders:
-                    return "No orders to expire"
-
+                # Batched: one giant FOR UPDATE sweep would lock every expirable
+                # order row and balloon the transaction. SKIP LOCKED lets a
+                # concurrent executor keep working while we drain in chunks.
                 expired_count = 0
-                for order in orders:
-                    order.status = "expired"
-                    order.executed_at = datetime.now(UTC)
-                    if order.side == "buy" and order.amount:
-                        wallet_result = await db.execute(
-                            select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
-                        )
-                        wallet = wallet_result.scalar_one_or_none()
-                        if wallet:
-                            wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
-                    expired_count += 1
+                expired_by_market: dict[str, list] = {}
+                while True:
+                    now = datetime.now(UTC)
+                    result = await db.execute(
+                        select(Order).where(
+                            Order.order_type.in_(["limit", "fill_or_kill"]),
+                            Order.status.in_(["pending", "partial"]),
+                            Order.expires_at <= now,
+                        ).with_for_update(skip_locked=True).limit(500)
+                    )
+                    orders = result.scalars().all()
+                    if not orders:
+                        break
 
-                await db.commit()
+                    for order in orders:
+                        order.status = "expired"
+                        order.executed_at = datetime.now(UTC)
+                        if order.side == "buy" and order.amount:
+                            wallet_result = await db.execute(
+                                select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
+                            )
+                            wallet = wallet_result.scalar_one_or_none()
+                            if wallet:
+                                wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                        expired_count += 1
+                        expired_by_market.setdefault(str(order.market_id), []).append(order)
+
+                    await db.commit()
+
+                if not expired_count:
+                    return "No orders to expire"
 
                 # Notify WebSocket clients — all publishes run concurrently
                 await asyncio.gather(
@@ -105,10 +115,13 @@ def expire_stale_orders(self):
                         redis_pubsub.publish_market_event(
                             str(order.market_id), "order:expired", {"order_id": str(order.id)}
                         )
-                        for order in orders
+                        for batch in expired_by_market.values()
+                        for order in batch
                     ],
                     return_exceptions=True,
                 )
+                for market_id in expired_by_market:
+                    await cache_invalidate_orderbook(market_id)
 
                 return f"Expired {expired_count} orders"
 
@@ -171,249 +184,279 @@ def check_limit_order_execution(self):
                     by_market.setdefault(str(order.market_id), []).append(order)
 
                 for market_id, market_orders in by_market.items():
-                    market_result = await db.execute(
-                        select(Market).where(Market.id == market_id).with_for_update()
-                    )
-                    market = market_result.scalar_one_or_none()
-                    if not market or market.status != "active":
-                        continue
-
-                    pool_result = await db.execute(
-                        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-                    )
-                    pool = pool_result.scalar_one_or_none()
-                    if not pool:
-                        continue
-
-                    for order in market_orders:
-                        # Re-lock the individual order row
-                        re_lock_result = await db.execute(
-                            select(Order).where(Order.id == order.id).with_for_update()
+                    # Per-market fault isolation: one market's failure rolls back
+                    # only its own group and never aborts the rest of the run.
+                    # The group-boundary commit also releases market/pool locks
+                    # promptly instead of holding them across all markets.
+                    market_fills = 0
+                    try:
+                        market_result = await db.execute(
+                            select(Market).where(Market.id == market_id).with_for_update()
                         )
-                        re_locked_order = re_lock_result.scalar_one_or_none()
-                        if not re_locked_order or re_locked_order.status not in ("pending", "partial"):
+                        market = market_result.scalar_one_or_none()
+                        if not market or market.status != "active":
+                            await db.rollback()
                             continue
 
-                        if re_locked_order.expires_at and re_locked_order.expires_at <= now:
-                            re_locked_order.status = "expired"
-                            re_locked_order.executed_at = now
-                            if re_locked_order.side == "buy":
-                                wallet = await db.execute(
-                                    select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
-                                )
-                                wallet = wallet.scalar_one_or_none()
-                                if wallet:
-                                    wallet.locked_balance = max(wallet.locked_balance - re_locked_order.remaining_amount, 0)
-                            await db.commit()
-                            continue
-
-                        outcome = await db.get(Outcome, re_locked_order.outcome_id)
-                        if not outcome:
-                            continue
-
-                        order_side = re_locked_order.side
-                        order_amount = re_locked_order.remaining_amount
-                        limit_price = re_locked_order.price
-
-                        remaining_after_book, book_matches = await MatchingEngine.match_pending_order(
-                            db, re_locked_order, market, outcome,
+                        pool_result = await db.execute(
+                            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
                         )
+                        pool = pool_result.scalar_one_or_none()
+                        if not pool:
+                            continue
 
-                        remaining = remaining_after_book
-                        amm_shares = Decimal(0)
-                        amm_price_val = Decimal(0)
-                        amm_fee = Decimal(0)
-                        sell_proceeds_amm = Decimal(0)
+                        for order in market_orders:
+                            # Re-lock the individual order row
+                            re_lock_result = await db.execute(
+                                select(Order).where(Order.id == order.id).with_for_update()
+                            )
+                            re_locked_order = re_lock_result.scalar_one_or_none()
+                            if not re_locked_order or re_locked_order.status not in ("pending", "partial"):
+                                continue
 
-                        if remaining > 0:
-                             amm = BinaryAMM(
-                                 yes_shares=pool.yes_shares,
-                                 no_shares=pool.no_shares,
-                                 fee_rate=pool.fee_rate,
-                             )
+                            if re_locked_order.expires_at and re_locked_order.expires_at <= now:
+                                re_locked_order.status = "expired"
+                                re_locked_order.executed_at = now
+                                if re_locked_order.side == "buy":
+                                    wallet = await db.execute(
+                                        select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
+                                    )
+                                    wallet = wallet.scalar_one_or_none()
+                                    if wallet:
+                                        wallet.locked_balance = max(wallet.locked_balance - re_locked_order.remaining_amount, 0)
+                                await db.commit()
+                                continue
 
-                             current_price = float(amm.price(outcome.name.lower()))
-                             limit_price_f = float(limit_price)
+                            outcome = await db.get(Outcome, re_locked_order.outcome_id)
+                            if not outcome:
+                                continue
 
-                             if order_side == "buy":
-                                 can_fill = current_price <= limit_price_f
-                             else:
-                                 can_fill = current_price >= limit_price_f
+                            order_side = re_locked_order.side
+                            order_amount = re_locked_order.remaining_amount
+                            limit_price = re_locked_order.price
 
-                             if not can_fill:
-                                 if re_locked_order.status != "filled":
-                                     await db.commit()
-                                 continue
+                            remaining_after_book, book_matches = await MatchingEngine.match_pending_order(
+                                db, re_locked_order, market, outcome,
+                            )
 
-                             wallet = await db.execute(
-                                 select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
-                             )
-                             wallet = wallet.scalar_one_or_none()
-                             if not wallet:
-                                 continue
+                            remaining = remaining_after_book
+                            amm_shares = Decimal(0)
+                            amm_price_val = Decimal(0)
+                            amm_fee = Decimal(0)
+                            sell_proceeds_amm = Decimal(0)
 
-                             if order_side == "buy":
-                                 # Available balance, not total: locked limit funds
-                                 # must not be double-spent by a second fill.
-                                 if wallet.balance - wallet.locked_balance < remaining:
-                                     continue
-                                 quote = amm.buy(outcome.name.lower(), remaining)
-                                 wallet.balance -= remaining
-                                 amm_shares = quote.shares_out
-                                 amm_price_val = quote.price
-                                 amm_fee = quote.fee
-
-                                 if wallet.locked_balance > 0:
-                                     wallet.locked_balance = max(wallet.locked_balance - remaining, 0)
-
-                                 pos_result = await db.execute(
-                                     select(Position).where(
-                                         Position.user_id == re_locked_order.user_id,
-                                         Position.market_id == market.id,
-                                         Position.outcome_id == outcome.id,
-                                     ).with_for_update()
+                            if remaining > 0:
+                                 amm = BinaryAMM(
+                                     yes_shares=pool.yes_shares,
+                                     no_shares=pool.no_shares,
+                                     fee_rate=pool.fee_rate,
                                  )
-                                 pos = pos_result.scalar_one_or_none()
-                                 if pos:
-                                     total_shares_pos = pos.shares_held + amm_shares
-                                     if total_shares_pos > 0:
-                                         pos.average_price = (
-                                             pos.average_price * pos.shares_held + remaining
-                                         ) / total_shares_pos
-                                     pos.shares_held = total_shares_pos
+
+                                 current_price = float(amm.price(outcome.name.lower()))
+                                 limit_price_f = float(limit_price)
+
+                                 if order_side == "buy":
+                                     can_fill = current_price <= limit_price_f
                                  else:
-                                     avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
-                                     # Upsert: INSERT ON CONFLICT DO UPDATE — atomic, no race between SELECT and INSERT
-                                     await db.execute(
-                                         text("""
-                                             INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
-                                             VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
-                                             ON CONFLICT (user_id, market_id, outcome_id)
-                                             DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
-                                                          average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
-                                         """),
-                                         {
-                                             "user_id": re_locked_order.user_id,
-                                             "market_id": market.id,
-                                             "outcome_id": outcome.id,
-                                             "shares_held": amm_shares,
-                                             "average_price": avg_price,
-                                         }
-                                     )
+                                     can_fill = current_price >= limit_price_f
 
-                                 market.total_volume += remaining
-                                 market.num_trades += 1
-                             else:
-                                 pos_result = await db.execute(
-                                     select(Position).where(
-                                         Position.user_id == re_locked_order.user_id,
-                                         Position.market_id == market.id,
-                                         Position.outcome_id == outcome.id,
-                                     ).with_for_update()
-                                 )
-                                 pos = pos_result.scalar_one_or_none()
-                                 if not pos or pos.shares_held < remaining:
+                                 if not can_fill:
+                                     if re_locked_order.status != "filled":
+                                         await db.commit()
                                      continue
 
-                                 quote = amm.sell(outcome.name.lower(), remaining)
-                                 cost_basis = pos.average_price * remaining
-                                 sell_proceeds_amm = quote.collateral_in
-                                 realized_pnl = sell_proceeds_amm - cost_basis
-                                 pos.shares_held -= remaining
-                                 pos.realized_pnl += realized_pnl
-                                 wallet.balance += sell_proceeds_amm
-                                 amm_shares = remaining
-                                 amm_price_val = quote.price
-                                 amm_fee = quote.fee
+                                 wallet = await db.execute(
+                                     select(Wallet).where(Wallet.user_id == re_locked_order.user_id).with_for_update()
+                                 )
+                                 wallet = wallet.scalar_one_or_none()
+                                 if not wallet:
+                                     continue
 
-                                 market.total_volume += remaining
-                                 market.num_trades += 1
+                                 if order_side == "buy":
+                                     # Available balance, not total: locked limit funds
+                                     # must not be double-spent by a second fill.
+                                     if wallet.balance - wallet.locked_balance < remaining:
+                                         continue
+                                     quote = amm.buy(outcome.name.lower(), remaining)
+                                     wallet.balance -= remaining
+                                     amm_shares = quote.shares_out
+                                     amm_price_val = quote.price
+                                     amm_fee = quote.fee
 
-                             trade_value = remaining * amm_price_val
-                             protocol_fee = trade_value * Decimal("0.01")
-                             pool.protocol_fees += protocol_fee
+                                     if wallet.locked_balance > 0:
+                                         wallet.locked_balance = max(wallet.locked_balance - remaining, 0)
 
-                             pool.yes_shares = amm.yes_shares
-                             pool.no_shares = amm.no_shares
+                                     pos_result = await db.execute(
+                                         select(Position).where(
+                                             Position.user_id == re_locked_order.user_id,
+                                             Position.market_id == market.id,
+                                             Position.outcome_id == outcome.id,
+                                         ).with_for_update()
+                                     )
+                                     pos = pos_result.scalar_one_or_none()
+                                     if pos:
+                                         total_shares_pos = pos.shares_held + amm_shares
+                                         if total_shares_pos > 0:
+                                             pos.average_price = (
+                                                 pos.average_price * pos.shares_held + remaining
+                                             ) / total_shares_pos
+                                         pos.shares_held = total_shares_pos
+                                     else:
+                                         avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
+                                         # Upsert: INSERT ON CONFLICT DO UPDATE — atomic, no race between SELECT and INSERT
+                                         await db.execute(
+                                             text("""
+                                                 INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
+                                                 VALUES (gen_random_uuid(), :user_id, :market_id, :outcome_id, :shares_held, :average_price, 0, NULL, NOW(), NOW())
+                                                 ON CONFLICT (user_id, market_id, outcome_id)
+                                                 DO UPDATE SET shares_held = positions.shares_held + EXCLUDED.shares_held,
+                                                              average_price = (positions.average_price * positions.shares_held + EXCLUDED.average_price * EXCLUDED.shares_held) / (positions.shares_held + EXCLUDED.shares_held)
+                                             """),
+                                             {
+                                                 "user_id": re_locked_order.user_id,
+                                                 "market_id": market.id,
+                                                 "outcome_id": outcome.id,
+                                                 "shares_held": amm_shares,
+                                                 "average_price": avg_price,
+                                             }
+                                         )
 
-                             re_locked_order.remaining_amount -= remaining
-                             if re_locked_order.remaining_amount <= 0:
-                                 re_locked_order.status = "filled"
-                                 re_locked_order.executed_at = now
-                             elif re_locked_order.status != "filled":
-                                 re_locked_order.status = "partial"
+                                     market.total_volume += remaining
+                                     market.num_trades += 1
+                                 else:
+                                     pos_result = await db.execute(
+                                         select(Position).where(
+                                             Position.user_id == re_locked_order.user_id,
+                                             Position.market_id == market.id,
+                                             Position.outcome_id == outcome.id,
+                                         ).with_for_update()
+                                     )
+                                     pos = pos_result.scalar_one_or_none()
+                                     if not pos or pos.shares_held < remaining:
+                                         continue
 
-                             re_locked_order.shares_bought = amm_shares if order_side == "buy" else None
-                             re_locked_order.shares_sold = amm_shares if order_side == "sell" else None
-                             re_locked_order.fees_paid = (re_locked_order.fees_paid or Decimal(0)) + amm_fee
+                                     quote = amm.sell(outcome.name.lower(), remaining)
+                                     cost_basis = pos.average_price * remaining
+                                     sell_proceeds_amm = quote.collateral_in
+                                     realized_pnl = sell_proceeds_amm - cost_basis
+                                     pos.shares_held -= remaining
+                                     pos.realized_pnl += realized_pnl
+                                     wallet.balance += sell_proceeds_amm
+                                     amm_shares = remaining
+                                     amm_price_val = quote.price
+                                     amm_fee = quote.fee
 
-                             trade = Trade(
-                                 user_id=re_locked_order.user_id,
-                                 market_id=market.id,
-                                 outcome=outcome.name.lower(),
-                                 side=order_side,
-                                 price=amm_price_val,
-                                 amount=remaining,
-                                 executed_at=now,
-                             )
-                             db.add(trade)
+                                     market.total_volume += remaining
+                                     market.num_trades += 1
 
-                             trade_amount = -float(remaining) if order_side == "buy" else float(sell_proceeds_amm)
-                             tx = Transaction(
-                                 user_id=re_locked_order.user_id,
-                                 wallet_id=wallet.id,
-                                 type="trade_buy" if order_side == "buy" else "trade_sell",
-                                 amount=trade_amount,
-                                 balance_after=wallet.balance,
-                                 reference_id=str(re_locked_order.id),
-                                 reference_type="order",
-                                 status="completed",
-                             )
-                             db.add(tx)
+                                 trade_value = remaining * amm_price_val
+                                 protocol_fee = trade_value * settings.protocol_fee_rate
+                                 pool.protocol_fees += protocol_fee
 
-                    if re_locked_order.status in ("filled", "partial"):
+                                 pool.yes_shares = amm.yes_shares
+                                 pool.no_shares = amm.no_shares
+
+                                 re_locked_order.remaining_amount -= remaining
+                                 if re_locked_order.remaining_amount <= 0:
+                                     re_locked_order.status = "filled"
+                                     re_locked_order.executed_at = now
+                                 elif re_locked_order.status != "filled":
+                                     re_locked_order.status = "partial"
+
+                                 re_locked_order.shares_bought = amm_shares if order_side == "buy" else None
+                                 re_locked_order.shares_sold = amm_shares if order_side == "sell" else None
+                                 re_locked_order.fees_paid = (re_locked_order.fees_paid or Decimal(0)) + amm_fee
+
+                                 trade = Trade(
+                                     user_id=re_locked_order.user_id,
+                                     market_id=market.id,
+                                     outcome=outcome.name.lower(),
+                                     side=order_side,
+                                     price=amm_price_val,
+                                     amount=remaining,
+                                     executed_at=now,
+                                 )
+                                 db.add(trade)
+
+                                 trade_amount = -float(remaining) if order_side == "buy" else float(sell_proceeds_amm)
+                                 tx = Transaction(
+                                     user_id=re_locked_order.user_id,
+                                     wallet_id=wallet.id,
+                                     type="trade_buy" if order_side == "buy" else "trade_sell",
+                                     amount=trade_amount,
+                                     balance_after=wallet.balance,
+                                     reference_id=str(re_locked_order.id),
+                                     reference_type="order",
+                                     status="completed",
+                                 )
+                                 db.add(tx)
+
+                        if re_locked_order.status in ("filled", "partial"):
+                            await db.commit()
+
+                            if re_locked_order.status == "filled":
+                                total = pool.yes_shares + pool.no_shares
+                                yes_price = float(pool.yes_shares / total) if total > 0 else 0.5
+                                no_price = float(pool.no_shares / total) if total > 0 else 0.5
+                                try:
+                                    from app.websocket.manager import redis_pubsub
+                                    await redis_pubsub.publish_price_update(
+                                        str(market.id), yes_price, no_price, float(market.total_volume)
+                                    )
+                                    check_price_alerts.delay(str(market.id), yes_price, no_price)
+                                    await redis_pubsub.publish_order_fill(str(re_locked_order.user_id), {
+                                        "order_id": str(re_locked_order.id),
+                                        "market_id": str(market.id),
+                                        "status": re_locked_order.status,
+                                        "side": order_side,
+                                        "shares": float(order_amount) - float(remaining),
+                                        "price": float(amm_price_val) if amm_price_val > 0 else float(re_locked_order.price),
+                                    })
+                                    # Also dispatch in-app notification
+                                    from app.services.notification_service import (
+                                        NotificationService,
+                                    )
+                                    await NotificationService.dispatch(
+                                        db, str(re_locked_order.user_id), "order_filled",
+                                        f"Order filled: {order_side} {float(order_amount - remaining):.2f} shares",
+                                        f"Your {re_locked_order.status} order on {market.slug} has been filled.",
+                                        {"order_id": str(re_locked_order.id), "market_id": str(market.id), "side": order_side}
+                                    )
+                                    # Publish position:update for real-time UI refresh
+                                    await redis_pubsub.publish_notification(str(re_locked_order.user_id), {
+                                        "type": "position:update",
+                                        "market_id": str(market.id),
+                                        "outcome": outcome.name if outcome else None,
+                                        "shares": float(order_amount) - float(remaining),
+                                        "side": order_side,
+                                    })
+                                except Exception:
+                                    pass
+
+                                executed += 1
+                                market_fills += 1
+
                         await db.commit()
+                    except Exception:
+                        await db.rollback()
+                        logger.exception(f"Limit executor failed for market {market_id} — continuing")
+                        continue
 
-                        if re_locked_order.status == "filled":
-                            total = pool.yes_shares + pool.no_shares
-                            yes_price = float(pool.yes_shares / total) if total > 0 else 0.5
-                            no_price = float(pool.no_shares / total) if total > 0 else 0.5
-                            try:
-                                from app.websocket.manager import redis_pubsub
-                                await redis_pubsub.publish_price_update(
-                                    str(market.id), yes_price, no_price, float(market.total_volume)
-                                )
-                                check_price_alerts.delay(str(market.id), yes_price, no_price)
-                                await redis_pubsub.publish_order_fill(str(re_locked_order.user_id), {
-                                    "order_id": str(re_locked_order.id),
-                                    "market_id": str(market.id),
-                                    "status": re_locked_order.status,
-                                    "side": order_side,
-                                    "shares": float(order_amount) - float(remaining),
-                                    "price": float(amm_price_val) if amm_price_val > 0 else float(re_locked_order.price),
-                                })
-                                # Also dispatch in-app notification
-                                from app.services.notification_service import (
-                                    NotificationService,
-                                )
-                                await NotificationService.dispatch(
-                                    db, str(re_locked_order.user_id), "order_filled",
-                                    f"Order filled: {order_side} {float(order_amount - remaining):.2f} shares",
-                                    f"Your {re_locked_order.status} order on {market.slug} has been filled.",
-                                    {"order_id": str(re_locked_order.id), "market_id": str(market.id), "side": order_side}
-                                )
-                                # Publish position:update for real-time UI refresh
-                                await redis_pubsub.publish_notification(str(re_locked_order.user_id), {
-                                    "type": "position:update",
-                                    "market_id": str(market.id),
-                                    "outcome": outcome.name if outcome else None,
-                                    "shares": float(order_amount) - float(remaining),
-                                    "side": order_side,
-                                })
-                            except Exception:
-                                pass
-
-                        executed += 1
+                    if market_fills:
+                        # Rebuild + push the book once per market with fills,
+                        # same contract as the placement path (cache + event).
+                        try:
+                            from app.services.cache_service import (
+                                build_orderbook,
+                                cache_set_orderbook,
+                            )
+                            book = await build_orderbook(db, market_id)
+                            await cache_set_orderbook(market_id, book, ttl=60)
+                            await redis_pubsub.publish_market_event(
+                                market_id, "orderbook:update", book
+                            )
+                        except Exception:
+                            pass
 
                 return f"Executed {executed}/{len(orders)} limit orders"
 

@@ -1,10 +1,11 @@
 import logging
+from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError
+from app.api.exceptions import ForbiddenError, ValidationError
 from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
@@ -38,8 +39,12 @@ async def _get_or_create_treasury(db: AsyncSession) -> Treasury:
 
 @router.get("")
 async def get_treasury(
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    # Authenticated read: a GET must never let anonymous traffic write
+    # (this endpoint lazily creates the singleton row).
+    await get_current_user(request, db)
     treasury = await _get_or_create_treasury(db)
     return success_response(TreasuryResponse(
         id=str(treasury.id),
@@ -102,21 +107,17 @@ async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) 
 
 @router.post("/distribute")
 async def distribute_fees(
-    amount: float = Query(..., gt=0, le=100_000_000, description="Amount to distribute (must be positive, max 100M)"),
+    amount: Decimal = Query(..., gt=0, le=100_000_000, description="Amount to distribute (must be positive, max 100M)"),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
-    from decimal import Decimal
     if request is None:
-        raise HTTPException(status_code=400, detail="Request object missing")
-    admin = await get_current_user(request, db)
-    if not admin.is_admin:
-        raise ForbiddenError("Admin access required")
+        raise ValidationError("Request object missing")
+    await _get_admin_user(request, db)
 
     treasury = await _get_or_create_treasury(db)
-    amount_dec = Decimal(str(amount))
+    amount_dec = amount
     if treasury.balance < amount_dec:
-        from app.api.exceptions import ValidationError
         raise ValidationError("Insufficient treasury balance")
 
     treasury.balance -= amount_dec

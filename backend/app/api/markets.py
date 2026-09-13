@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import (
@@ -14,6 +14,7 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.api.responses import success_response
+from app.config import settings
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.faq import MarketFAQ
@@ -31,6 +32,7 @@ from app.schemas.market import (
     ResolveMarketRequest,
 )
 from app.services.cache_service import (
+    build_orderbook,
     cache_get_market,
     cache_get_market_list,
     cache_get_orderbook,
@@ -39,7 +41,6 @@ from app.services.cache_service import (
     cache_set_market,
     cache_set_market_list,
     cache_set_orderbook,
-    build_orderbook,
 )
 from app.services.market_service import MarketService
 from app.workers.tasks import resolve_market
@@ -307,7 +308,7 @@ async def create_market(
         yes_shares=0,
         no_shares=0,
         collateral=0,
-        fee_rate=Decimal("0.02"),
+        fee_rate=settings.trading_fee_rate,
         lp_token_supply=0,
     )
     db.add(pool)

@@ -1,7 +1,7 @@
 """Tests for notification endpoints."""
-import pytest
 import uuid
 
+import pytest
 from httpx import AsyncClient
 
 

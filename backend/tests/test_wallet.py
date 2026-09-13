@@ -1,11 +1,9 @@
 """Tests for wallet, liquidity, split/merge, and position endpoints."""
-import pytest
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from httpx import AsyncClient
-
-from app.models.liquidity import LiquidityPool, LPShare
 
 
 def _token(user_id: str) -> str:

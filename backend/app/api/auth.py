@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -396,8 +397,15 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     ua = request.headers.get("user-agent", "")[:200]
     token = str(uuid.uuid4())
     r = await get_redis()
-    # Store as "user_id:ip:ua" for IP-binding on verification — ip already stripped of port by _strip_port in _get_client_ip
-    await redis_cb.call(lambda: r.set(f"magicurl:{token}", f"{user.id}:{ip}:{ua}", ex=900))
+    # JSON payload — never delimited strings: IPv6 addresses and user-agents
+    # both contain colons and break naive split parsing.
+    await redis_cb.call(
+        lambda: r.set(
+            f"magicurl:{token}",
+            json.dumps({"user_id": str(user.id), "ip": ip, "ua": ua}),
+            ex=900,
+        )
+    )
 
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
@@ -416,14 +424,20 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
     if not stored:
         raise UnauthorizedError("Invalid or expired link")
 
-    # Stored as "user_id:ip:ua" — split carefully since UUID has no colons
+    # Stored as JSON {"user_id": ..., "ip": ..., "ua": ...}.
+    # Legacy "user_id:ip:ua" tokens (issued pre-deploy, 15-min TTL) fall back
+    # to best-effort parsing; IPv6 never parsed correctly in that format.
     ip = _get_client_ip(request)
-    first_colon = stored.find(":")
-    user_id = stored[:first_colon] if first_colon != -1 else stored
-    rest = stored[first_colon + 1:] if first_colon != -1 else ""
-    second_colon = rest.find(":")
-    stored_ip = rest[:second_colon] if second_colon != -1 else rest
-    stored_ua = rest[second_colon + 1:] if second_colon != -1 else ""  # noqa: F841
+    try:
+        payload = json.loads(stored)
+        user_id = payload["user_id"]
+        stored_ip = payload.get("ip", "")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        first_colon = stored.find(":")
+        user_id = stored[:first_colon] if first_colon != -1 else stored
+        rest = stored[first_colon + 1:] if first_colon != -1 else ""
+        second_colon = rest.find(":")
+        stored_ip = rest[:second_colon] if second_colon != -1 else rest
 
     # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
     # Do NOT delete the token — if IP mismatch is due to NAT/proxy rotation, the legitimate

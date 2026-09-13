@@ -13,8 +13,8 @@ FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery — a prediction market 
 uv sync
 
 # 2. Start PostgreSQL + Redis (Docker)
-docker run -d -p 5435:5432 --name postgres -e POSTGRES_USER=myuser -e POSTGRES_PASSWORD=mypassword -e POSTGRES_DB=mydatabase postgres:16-alpine
-docker run -d -p 6382:6379 --name redis redis:7-alpine
+docker compose -f docker-compose.dev.yml up -d postgres redis  # ports 5433/6380 per .env
+
 
 # 3. Run migrations
 uv run alembic upgrade head
@@ -134,7 +134,7 @@ uv sync
 uv run alembic upgrade head
 
 # 3. Start server
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
 # 4. (Separate terminal) Start Celery worker
 uv run celery -A app.workers.celery_app worker --loglevel=info
@@ -192,8 +192,8 @@ Swagger UI: http://localhost:8000/docs
 ```
 backend/
 ├── Dockerfile              # API image (uvicorn)
-├── Dockerfile.worker       # Celery worker image
-├── docker-compose.yml      # Full stack
+├── docker-compose.dev.yml  # Local stack (postgres+redis+api, hot reload)
+├── docker-compose.prod.yml # Prod stack (+nginx, celery)
 └── scripts/postgres.conf  # PostgreSQL tuning
 ```
 
@@ -346,6 +346,8 @@ Buy $1000 YES (2% fee = $20, after fee = $980):
 |-----|------|---------|
 | **Trading fee** | 2% of collateral | Stays in the pool (accrues to LP providers) |
 | **Protocol fee** | 1% of trade value | Extracted to treasury at settlement |
+
+Rates are tunable via `TRADING_FEE_RATE` / `PROTOCOL_FEE_RATE` / `SPLIT_MERGE_FEE_RATE` (defaults 2% / 1% / 2%; effective taker take rate = trading + protocol).
 
 Trading fee is deducted from the collateral before the trade executes. Protocol fee is computed from the total trade value and accumulated in `pool.protocol_fees`, then swept to the treasury during market resolution.
 
@@ -1352,19 +1354,19 @@ Redis distributes to ALL subscribed workers
 | `SECRET_KEY` | `change-me-in-production` | Application secret |
 | `DEBUG` | `false` | Enable debug mode |
 | `CORS_ORIGINS` | `*` | Comma-separated CORS origins |
-| `DATABASE_URL` | `postgresql+asyncpg://...:5435/mydatabase` | Primary database |
+| `DATABASE_URL` | `postgresql+asyncpg://...:5433/polymarket` (.env) | Primary database |
 | `DATABASE_REPLICA_URL` | (empty) | Read replica (falls back to primary) |
 | `DB_POOL_SIZE` | `50` | Connection pool size |
 | `DB_MAX_OVERFLOW` | `30` | Max overflow connections |
 | `DB_POOL_TIMEOUT` | `30` | Pool timeout in seconds |
-| `REDIS_URL` | `redis://localhost:6382/0` | Redis URL |
+| `REDIS_URL` | `redis://localhost:6380/0` (.env) | Redis URL |
 | `REDIS_MAX_CONNECTIONS` | `100` | Redis max connections |
 | `JWT_SECRET` | `change-me-in-production` | JWT signing key |
 | `JWT_ACCESS_EXPIRE` | `900` | Access token TTL (seconds, 15 min) |
 | `JWT_REFRESH_EXPIRE` | `604800` | Refresh token TTL (seconds, 7 days) |
 | `STRIPE_SECRET_KEY` | (empty) | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | (empty) | Stripe webhook signing secret |
-| `CELERY_BROKER_URL` | `redis://localhost:6382/1` | Celery broker (Redis DB 1) |
+| `CELERY_BROKER_URL` | `redis://localhost:6380/1` (.env) | Celery broker (Redis DB 1) |
 | `RESEND_API_KEY` | (empty) | Resend email API key |
 | `REFERRAL_REWARD_AMOUNT` | `1.0` | Reward for successful referral |
 
@@ -1458,7 +1460,7 @@ wscat -c ws://localhost:8000/ws/markets/<MARKET_ID>
 ### WebSocket connections timing out
 
 - Nginx default keepalive is 65s — WS routes use `proxy_read_timeout 7d` to handle long connections
-- If using Docker, make sure `api` container has `nofile` limit raised (set in docker-compose.yml)
+- If using Docker, make sure `api` container has `nofile` limit raised (set in docker-compose.prod.yml)
 
 ### "Connection limit exceeded" errors on WebSocket
 
@@ -1481,7 +1483,7 @@ cat celerybeat-schedule
 ### Redis connection errors
 
 - Circuit breaker opens after 5 consecutive Redis failures — auto-recovers after 30s
-- Check Redis is running: `redis-cli -p 6382 ping`
+- Check Redis is running: `redis-cli -p 6380 -a $REDIS_PASSWORD ping`
 
 ### PostgreSQL connection pool exhausted
 
