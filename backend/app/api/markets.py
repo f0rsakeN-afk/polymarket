@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -130,32 +129,14 @@ async def list_markets(
     page_markets = [market for market, _ in rows]
     market_ids = [m.id for m in page_markets]
 
-    # Batch-fetch Redis prices
-    redis = await get_redis()
-    pipe = redis.pipeline()
-    for m in page_markets:
-        pipe.hgetall(f"market:{m.id}:price")
-    price_data = await pipe.execute()
-
-    # Collect missing market IDs and fetch all missing prices concurrently
-    missing_indices = []
-    for i, (market, pool) in enumerate(rows):
-        pd = price_data[i]
-        if not (pd and "yes_price" in pd and "no_price" in pd):
-            missing_indices.append(i)
-
-    if missing_indices:
-        missing_ids = [str(rows[i][0].id) for i in missing_indices]
-        results = await asyncio.gather(*[MarketService.get_market_prices(id) for id in missing_ids])
-        price_map = dict(zip(missing_ids, results))
+    # Batched price fetch: one Redis pipeline + one SELECT for all misses.
+    # (Never N sequential per-market lookups — that fanned out DB sessions
+    # and stalled cold list pages.)
+    price_map = await MarketService.get_market_prices_batch([str(m.id) for m in page_markets])
 
     market_responses = []
     for i, (market, pool) in enumerate(rows):
-        pd = price_data[i]
-        if pd and "yes_price" in pd and "no_price" in pd:
-            yes_price, no_price = float(pd["yes_price"]), float(pd["no_price"])
-        else:
-            yes_price, no_price = price_map[str(market.id)]
+        yes_price, no_price = price_map[str(market.id)]
         market_responses.append(market_to_response(market, yes_price, no_price))
 
     # Targeted outcome query using page market IDs

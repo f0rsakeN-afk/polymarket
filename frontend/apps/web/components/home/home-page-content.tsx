@@ -49,18 +49,22 @@ export default function HomePageContent() {
         )}
       </section>
 
-      {closingSoonData && closingSoonData.markets.length > 0 && (
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Closing Soon</h2>
-          </div>
-          {closingSoonLoading ? (
-            <SkeletonTrendingCarousel />
-          ) : (
-            <TrendingCarousel markets={closingSoonData.markets.slice(0, 8)} />
-          )}
-        </section>
-      )}
+      {/* Always mounted: conditional mounting would push every section
+          below it down when data arrives (layout shift). */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Closing Soon</h2>
+        </div>
+        {closingSoonLoading || !closingSoonData ? (
+          <SkeletonTrendingCarousel />
+        ) : closingSoonData.markets.length > 0 ? (
+          <TrendingCarousel markets={closingSoonData.markets.slice(0, 8)} />
+        ) : (
+          <p className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
+            No markets closing soon
+          </p>
+        )}
+      </section>
 
       <section>
         <div className="flex items-center justify-between mt-6 mb-4">
