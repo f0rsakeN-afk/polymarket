@@ -1,7 +1,7 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { memo, useCallback, useMemo, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
 import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
@@ -10,7 +10,6 @@ import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { Button } from "@workspace/ui/components/button"
-import { Badge } from "@workspace/ui/components/badge"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
@@ -51,10 +50,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     if (!orderbookData?.outcomes) return null
     return Object.values(orderbookData.outcomes)[0] ?? null
   }, [orderbookData])
-  // Seed with empty array — chart renders nothing until market loads, then useEffect seeds it
-  const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
-  // outcomeNames starts empty — component won't render until market loads anyway
-  const [outcomeNames, setOutcomeNames] = useState<string[]>([])
+  // WS-only points — chart renders history + seeds + these, capped at 200
+  const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
 
   const handleWSMessage = useCallback((data: unknown) => {
@@ -68,7 +65,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     }
     if (msg.type === "market:price_update") {
       const now = Math.floor(Date.now() / 1000)
-      setPriceHistory((prev) => {
+      setWsPoints((prev) => {
         const point: Record<string, number | string> = { time: now }
         if (msg.outcome_prices) {
           const prices = Object.values(msg.outcome_prices)
@@ -137,14 +134,16 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const isBinary = !!(yesOutcome && noOutcome)
 
-  // Seed priceHistory from market prices on mount — always valid numbers, chart renders immediately
-  useEffect(() => {
-    if (!market) return
+  const outcomeNames = useMemo(() => outcomeList.map((o) => o.name), [outcomeList])
 
-    const names = outcomeList.map((o) => o.name)
-    setOutcomeNames(names)
+  // Stable seed clock — captured once per market so re-renders don't shift the chart
+  const [seedTime] = useState(() => Math.floor(Date.now() / 1000))
 
-    const now = Math.floor(Date.now() / 1000)
+  // Two seed points from current market prices so the chart renders immediately
+  const seedPoints = useMemo(() => {
+    if (!market) return [] as LiveLinePoint[]
+
+    const now = seedTime
     const seedPoint: Record<string, number | string> = { time: now - 60 }
     const seedPoint2: Record<string, number | string> = { time: now }
 
@@ -168,14 +167,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         seedPoint2[o.name] = isNaN(p) ? uniform : p
       }
     }
-    setPriceHistory([seedPoint, seedPoint2] as LiveLinePoint[])
-  }, [market, outcomeList, isBinary])
+    return [seedPoint, seedPoint2] as LiveLinePoint[]
+  }, [market, outcomeList, isBinary, seedTime])
 
-  // Layer in historical price history data when it arrives — prepend so chart shows history behind now
-  useEffect(() => {
-    if (!priceHistoryData || priceHistoryData.length === 0) return
+  // Historical points from fetched price history — shown behind seeds/live data
+  const historicalPoints = useMemo(() => {
+    if (!priceHistoryData || priceHistoryData.length === 0) return [] as LiveLinePoint[]
 
-    const historical = priceHistoryData.map((p: PriceHistoryPoint) => {
+    return priceHistoryData.map((p: PriceHistoryPoint) => {
       const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000 }
       // value drives the first LiveLine (YES for binary)
       const firstOutcome = p.outcomes[0]
@@ -185,13 +184,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       }
       return point as LiveLinePoint
     })
-
-    setPriceHistory((prev) => {
-      // Remove the two seed points and prepend historical data
-      const rest = prev.slice(2)
-      return [...historical, ...rest]
-    })
   }, [priceHistoryData])
+
+  const priceHistory = useMemo(
+    () => [...historicalPoints, ...seedPoints, ...wsPoints].slice(-200),
+    [historicalPoints, seedPoints, wsPoints]
+  )
 
   const { data: currentUser } = useCurrentUser()
   const { mutateAsync: resolveMarket, isPending: isResolving } = useResolveMarket()
@@ -264,8 +262,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       <div className="space-y-6 lg:col-span-3">
         {/* Resolution banner */}
         {market.status === "resolved" && (
-          <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
-            <div className="text-sm font-semibold text-yellow-600">RESOLVED</div>
+          <div role="status" className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+            <div className="text-sm font-semibold text-yellow-700">Resolved</div>
             <div className="text-xs text-muted-foreground mt-1">
               Winning outcome: <span className="font-medium text-foreground">{market.winning_outcome_name ?? "Unknown"}</span>
             </div>
@@ -276,7 +274,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         {/* Admin resolve UI */}
         {market.status !== "resolved" && currentUser?.is_admin && (
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
-            <div className="text-xs font-semibold text-blue-500 mb-3 uppercase tracking-wider">Admin: Resolve Market</div>
+            <div className="text-xs font-semibold text-blue-700 mb-3 uppercase tracking-wider">Admin: Resolve Market</div>
             <div className="flex items-center gap-2">
               <Select value={selectedOutcomeId} onValueChange={handleOutcomeSelect}>
                 <SelectTrigger className="flex-1 h-9">
@@ -304,36 +302,36 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             {market.category && (
-              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-primary">
                 {market.category}
               </span>
             )}
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground">POLYMARKET</span>
+            <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
           </div>
-          <h1 className="text-2xl font-semibold leading-tight">{market.question}</h1>
+          <h1 className="text-2xl font-bold leading-tight tracking-tight">{market.question}</h1>
           {market.description && (
             <p className="text-sm text-muted-foreground leading-relaxed">{market.description}</p>
           )}
         </div>
 
         {/* Price chart */}
-        <div className="relative rounded-xl border border-border bg-card p-5 overflow-hidden">
-          <div className="mb-4 flex items-center justify-between">
+        <div className="relative rounded-xl border border-border bg-card p-4 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {isBinary
                 ? (
                   <>
                     <div className="flex items-center gap-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">YES</div>
-                      <div className="text-lg font-bold text-green-500">${Number(market.yes_price ?? 0.5).toFixed(2)}</div>
+                      <div className="text-xs uppercase tracking-wider text-muted-foreground">Yes</div>
+                      <div className="text-lg font-bold text-green-700 tabular-nums">{Math.round(Number(market.yes_price ?? 0.5) * 100)}¢</div>
                       <div className="text-xs text-muted-foreground">
                         {headerOutcome?.bids?.[0] ? `${Number(headerOutcome.bids[0].size).toFixed(0)} shares` : ""}
                       </div>
                     </div>
                     <div className="h-6 w-px bg-border" />
                     <div className="flex items-center gap-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">NO</div>
-                      <div className="text-lg font-bold text-red-500">${Number(market.no_price).toFixed(2)}</div>
+                      <div className="text-xs uppercase tracking-wider text-muted-foreground">No</div>
+                      <div className="text-lg font-bold text-red-700 tabular-nums">{Math.round(Number(market.no_price ?? 0.5) * 100)}¢</div>
                       <div className="text-xs text-muted-foreground">
                         {headerOutcome?.asks?.[0] ? `${Number(headerOutcome.asks[0].size).toFixed(0)} shares` : ""}
                       </div>
@@ -342,24 +340,29 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 )
                 : outcomeList.slice(0, 4).map((outcome, i) => (
                     <div key={outcome.id} className="flex items-center gap-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{outcome.name}</div>
-                      <div className="text-lg font-bold" style={{ color: chartColors[i % chartColors.length] }}>
-                        ${Number((outcome as { price?: number }).price ?? 0).toFixed(2)}
+                      <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
+                      <div className="text-lg font-bold tabular-nums" style={{ color: chartColors[i % chartColors.length] }}>
+                        {Math.round(Number((outcome as { price?: number }).price ?? 0) * 100)}¢
                       </div>
                     </div>
                   ))
               }
             </div>
             <div className="flex items-center gap-2">
-              <span
-                role="status"
-                aria-label={`WebSocket ${wsStatus}`}
-                className={cn(
-                  "size-2 rounded-full",
-                  wsStatus === "connected" ? "bg-green-500" : wsStatus === "connecting" ? "bg-yellow-500 animate-pulse" : "bg-muted"
-                )}
-              />
-              <span className="text-xs text-muted-foreground">Vol ${market.total_volume.toLocaleString()}</span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  role="status"
+                  aria-label={`WebSocket ${wsStatus}`}
+                  className={cn(
+                    "size-2 rounded-full",
+                    wsStatus === "connected" ? "bg-green-600 dark:bg-green-400" : wsStatus === "connecting" ? "bg-yellow-600 animate-pulse dark:bg-yellow-400" : "bg-muted-foreground/40"
+                  )}
+                />
+                <span className="text-xs font-medium text-muted-foreground">
+                  {wsStatus === "connected" ? "Live" : wsStatus === "connecting" ? "Syncing" : "Offline"}
+                </span>
+              </span>
+              <span className="text-xs text-muted-foreground tabular-nums">Vol ${market.total_volume.toLocaleString()}</span>
             </div>
           </div>
           <div className="h-[220px]">
@@ -383,8 +386,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               {isBinary ? (
                 // Binary: YES = green primary line, NO = red secondary line
                 <>
-                  <LiveLine key="Yes" dataKey="Yes" stroke="var(--green-500, #22c55e)" fill />
-                  <LiveLine key="No" dataKey="No" stroke="var(--red-500, #ef4444)" fill />
+                  <LiveLine key="Yes" dataKey="Yes" stroke="var(--chart-1)" fill />
+                  <LiveLine key="No" dataKey="No" stroke="var(--destructive)" fill />
                 </>
               ) : (
                 // Multi-outcome: one line per outcome, capped at 4 to avoid visual overload
@@ -395,27 +398,27 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </LiveLineChart>
             )}
           </div>
-          {/* Live Trade Ticker - floats over the chart */}
-          <div className="absolute bottom-3 left-3 right-3 z-10 pointer-events-none">
+          {/* Live Trade Ticker — below chart so it never covers axes */}
+          <div className="mt-3">
             <LiveTradeTicker marketId={market.id} />
           </div>
         </div>
 
         {/* Stats */}
         {stats && (
-          <section aria-label="Market statistics" className="grid grid-cols-4 gap-3">
+          <section aria-label="Market statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="list">
             {stats.map(({ label, value }) => (
-              <div key={label} className="rounded-lg border border-border bg-card p-3 text-center">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>
-                <div className="font-semibold text-sm">{value}</div>
+              <div key={label} role="listitem" className="rounded-xl border border-border bg-card p-3 text-center">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+                <div className="text-sm font-semibold tabular-nums">{value}</div>
               </div>
             ))}
           </section>
         )}
 
         {/* Tabs: Orderbook / Trades / Positions / Discussion / FAQs */}
-        <Tabs defaultValue="orderbook" className="rounded-xl border border-border bg-card overflow-hidden">
-          <TabsList role="tablist" aria-label="Market details" className="w-full justify-start rounded-none bg-muted/50 p-0 h-auto">
+        <Tabs defaultValue="orderbook" className="overflow-hidden rounded-xl border border-border bg-card">
+          <TabsList role="tablist" aria-label="Market details" className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-none bg-muted/50 p-1 nice-scroll">
             <TabsTrigger value="orderbook" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Orderbook</TabsTrigger>
             <TabsTrigger value="trades" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Trades</TabsTrigger>
             <TabsTrigger value="positions" role="tab" className="rounded-md px-4 py-2.5 text-xs font-semibold data-active:bg-primary/10 data-active:text-foreground">Positions</TabsTrigger>
@@ -425,20 +428,20 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             )}
           </TabsList>
 
-          <div className="p-4 space-y-3">
-            <TabsContent value="orderbook" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+          <div className="space-y-3 p-4">
+            <TabsContent value="orderbook" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
               <OrderBook slug={slug} />
             </TabsContent>
-            <TabsContent value="trades" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+            <TabsContent value="trades" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
               <TradeFeed
                 trades={combinedTrades}
                 loading={tradesLoading}
               />
             </TabsContent>
 
-            <TabsContent value="positions" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+            <TabsContent value="positions" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
               {holderOutcomes.length > 0 ? (
-                <div className={holderOutcomes.length > 1 ? "grid grid-cols-2 gap-6" : ""}>
+                <div className={holderOutcomes.length > 1 ? "grid gap-6 sm:grid-cols-2" : ""}>
                   {holderOutcomes.map(([outcomeName, holders]) => (
                     <div key={outcomeName}>
                       <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -463,12 +466,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               )}
             </TabsContent>
 
-            <TabsContent value="discussion" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+            <TabsContent value="discussion" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
               <CommentForm slug={slug} />
               <CommentList slug={slug} />
             </TabsContent>
 
-            <TabsContent value="faqs" role="tabpanel" className="max-h-[400px] overflow-y-auto">
+            <TabsContent value="faqs" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
               {faqs && faqs.length > 0 ? (
                 <div className="space-y-3">
                   {faqs.map((faq, i) => (
@@ -487,7 +490,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       </div>
 
       {/* Right sidebar */}
-      <aside className="space-y-4">
+      <aside aria-label="Trading panel" className="space-y-4">
         {/* Trade card */}
         <section aria-labelledby="trade-heading" className="rounded-xl border border-border bg-card p-5">
           <h2 id="trade-heading" className="mb-4 text-sm font-semibold text-foreground">Place Trade</h2>
@@ -519,20 +522,20 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             <div className="flex items-center justify-between text-xs">
               <dt className="text-muted-foreground">Status</dt>
               {market.status === "resolved" ? (
-                <dd className="font-semibold px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-600">
+                <dd className="font-semibold px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-700">
                   RESOLVED
                 </dd>
               ) : (
                 <dd className={cn(
                   "font-semibold capitalize px-1.5 py-0.5 rounded text-[10px]",
-                  market.status === "active" ? "bg-green-500/10 text-green-500" : "bg-muted text-muted-foreground"
+                  market.status === "active" ? "bg-green-500/10 text-green-700" : "bg-muted text-muted-foreground"
                 )}>{market.status}</dd>
               )}
             </div>
             {market.status === "resolved" && market.winning_outcome_name ? (
               <div className="flex items-center justify-between text-xs">
                 <dt className="text-muted-foreground">Winner</dt>
-                <dd className="font-medium text-green-500">{market.winning_outcome_name}</dd>
+                <dd className="font-medium text-green-700">{market.winning_outcome_name}</dd>
               </div>
             ) : (
               <div className="flex items-center justify-between text-xs">
@@ -572,7 +575,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 >
                   <div className="text-xs font-medium leading-snug line-clamp-2 mb-1.5">{m.question}</div>
                   <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                    <span className="text-green-500 font-semibold">${Number(m.yes_price).toFixed(2)}</span>
+                    <span className="text-green-700 font-semibold">${Number(m.yes_price).toFixed(2)}</span>
                     <span aria-hidden="true">·</span>
                     <span>${(Number(m.total_volume) / 1000).toFixed(0)}K vol</span>
                   </div>

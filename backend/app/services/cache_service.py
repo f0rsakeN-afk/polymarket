@@ -131,6 +131,26 @@ async def cache_get_orderbook(market_id: str) -> dict | None:
     return _loads(raw) if raw else None
 
 
+async def cache_invalidate_orderbook(market_id: str):
+    """Drop the cached orderbook for a market.
+
+    Called on fills, cancels and expiries — all three mutate pending orders.
+    Placement rebuilds eagerly instead; invalidation here is the backstop.
+    """
+    r = await get_redis()
+
+    async def _op():
+        pipe = r.pipeline()
+        pipe.delete(f"cache:cm:ob:{market_id}")
+        pipe.delete(f"cache:ct:ob:{market_id}")
+        await pipe.execute()
+
+    try:
+        await redis_cb.call(_op)
+    except Exception:
+        pass  # non-critical
+
+
 async def build_orderbook(db: AsyncSession, market_id: str) -> dict:
     """Build orderbook dict from pending limit orders. Single source of truth for all orderbook data."""
     outcomes_result = await db.execute(
@@ -162,7 +182,13 @@ async def build_orderbook(db: AsyncSession, market_id: str) -> dict:
         outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
         if outcome_name not in orderbook:
             continue
-        entry = {"price": str(row.price), "size": str(row.total_size)}
+        # Unit convention: bid remainders are USDC budgets, ask remainders
+        # are shares. Normalize bids to shares at their price level so both
+        # sides quote size in shares.
+        size = row.total_size
+        if row.side == "buy" and row.price:
+            size = row.total_size / row.price
+        entry = {"price": str(row.price), "size": str(size)}
         if row.side == "buy":
             orderbook[outcome_name]["bids"].append(entry)
         else:

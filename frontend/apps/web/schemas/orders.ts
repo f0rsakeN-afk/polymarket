@@ -2,7 +2,6 @@ import { z } from "zod"
 
 // Backend Decimal fields are serialized as strings
 const moneyField = z.string()
-const positiveMoney = z.string()
 
 export const cancelOrderSchema = z.object({})
 

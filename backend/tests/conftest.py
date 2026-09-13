@@ -3,8 +3,7 @@ Production-grade pytest configuration.
 Set env vars BEFORE any app imports so settings singletons get correct values.
 Each test gets a completely fresh database (tables recreated).
 """
-import asyncio
-import gc
+# ruff: noqa: E402 -- imports intentionally trail env setup (see below).
 import os
 import uuid
 
@@ -25,14 +24,12 @@ os.environ["REDIS_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.models.base import Base
-
 
 TEST_DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -43,6 +40,8 @@ test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullP
 TestSessionFactory = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
 
 # Patch session makers BEFORE app import so test engine is used
+from datetime import UTC
+
 import app.database as db_module
 
 db_module._async_session_maker = TestSessionFactory
@@ -133,9 +132,9 @@ async def client(db_session: AsyncSession) -> AsyncClient:
 
 @pytest_asyncio.fixture
 async def admin_user(db_session: AsyncSession):
+    from app.deps import hash_password
     from app.models.user import User
     from app.models.wallet import Wallet
-    from app.deps import hash_password
 
     uid = uuid.uuid4().hex[:8]
     user = User(
@@ -158,9 +157,9 @@ async def admin_user(db_session: AsyncSession):
 
 @pytest_asyncio.fixture
 async def test_user(db_session: AsyncSession):
+    from app.deps import hash_password
     from app.models.user import User
     from app.models.wallet import Wallet
-    from app.deps import hash_password
 
     uid = uuid.uuid4().hex[:8]
     user = User(
@@ -182,9 +181,10 @@ async def test_user(db_session: AsyncSession):
 
 @pytest_asyncio.fixture
 async def test_market(db_session: AsyncSession, admin_user):
-    from datetime import datetime, timezone
-    from app.models.market import Market, Outcome
+    from datetime import datetime
+
     from app.models.liquidity import LiquidityPool
+    from app.models.market import Market, Outcome
 
     slug = f"test-mkt-{uuid.uuid4().hex[:8]}"
     market = Market(
@@ -194,7 +194,7 @@ async def test_market(db_session: AsyncSession, admin_user):
         category="weather",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
         total_liquidity="100.00",
         total_volume="50.00",
     )
@@ -211,7 +211,7 @@ async def test_market(db_session: AsyncSession, admin_user):
         yes_shares="50.0",
         no_shares="50.0",
         collateral="100.0",
-        lp_token_supply="200.0",
+        lp_token_supply="200.0",  # noqa: S106 -- LP share count, not a credential
     )
     db_session.add(pool)
     await db_session.commit()
@@ -222,7 +222,8 @@ async def test_market(db_session: AsyncSession, admin_user):
 
 @pytest_asyncio.fixture
 async def resolved_market(db_session: AsyncSession, admin_user):
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from app.models.market import Market, Outcome
 
     slug = f"resolved-{uuid.uuid4().hex[:8]}"
@@ -233,7 +234,7 @@ async def resolved_market(db_session: AsyncSession, admin_user):
         category="weather",
         status="resolved",
         created_by=admin_user.id,
-        closes_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        closes_at=datetime(2020, 1, 1, tzinfo=UTC),
         total_liquidity="100.00",
         total_volume="50.00",
     )

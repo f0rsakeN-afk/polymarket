@@ -40,7 +40,7 @@ export function MarketsPageClient() {
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Markets</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Markets</h1>
         <p className="mt-1 text-muted-foreground text-sm">
           Browse and trade on prediction markets
         </p>

@@ -1,6 +1,5 @@
 """Tests for referral endpoints."""
 import pytest
-
 from httpx import AsyncClient
 
 

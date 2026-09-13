@@ -44,7 +44,7 @@ const ThemeToggle = memo(function ThemeToggle() {
 
 const PolygonIcon = memo(function PolygonIcon() {
   return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="shrink-0" aria-hidden="true">
       <path
         d="M10 1L18.5 6.5V15.5L10 21L1.5 15.5V6.5L10 1Z"
         stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" fill="none"
@@ -104,7 +104,7 @@ export default function Header() {
         </div>
 
         {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-1 mr-4">
+        <nav aria-label="Primary" className="hidden md:flex items-center gap-1 mr-4">
           {navLinks.map(({ href, label }) => (
             <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
           ))}
@@ -118,11 +118,11 @@ export default function Header() {
 
           {/* Mobile menu */}
           <Sheet>
-            <SheetTrigger className="md:hidden inline-flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
-              <MenuIcon className="size-5" />
+            <SheetTrigger aria-label="Open menu" className="md:hidden inline-flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors">
+              <MenuIcon className="size-5" aria-hidden="true" />
             </SheetTrigger>
             <SheetContent side="right" className="w-64 p-0">
-              <nav className="flex flex-col p-6 gap-1">
+              <nav aria-label="Mobile" className="flex flex-col p-6 gap-1">
                 {navLinks.map(({ href, label }) => (
                   <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
                 ))}

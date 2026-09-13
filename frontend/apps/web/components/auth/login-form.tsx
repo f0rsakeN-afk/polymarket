@@ -324,19 +324,20 @@ function MagicLinkStep({
       : "/portfolio"
 
   const [otp, setOtp] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
+  const [, setIsLoading] = useState(false)
   const [resendTimer, setResendTimer] = useState(RESEND_COOLDOWN)
   const [error, setError] = useState("")
   const [magicPartialToken, setMagicPartialToken] = useState("")
   const [step, setStep] = useState<"otp" | "totp">("otp")
   const [totpCode, setTotpCode] = useState("")
 
-  const handleVerifyOtp = useCallback(async () => {
-    if (otp.length !== 6) return
+  const handleVerifyOtp = useCallback(async (code?: string) => {
+    const codeToVerify = code ?? otp
+    if (codeToVerify.length !== 6) return
     setError("")
     setIsLoading(true)
     try {
-      await magicLinkApi.verifyCode(email, otp)
+      await magicLinkApi.verifyCode(email, codeToVerify)
       router.push(next)
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid or expired code"
@@ -358,15 +359,16 @@ function MagicLinkStep({
     }
   }, [email, otp, next, router])
 
-  const handleTotp = useCallback(async () => {
-    if (totpCode.length !== 6) return
+  const handleTotp = useCallback(async (code?: string) => {
+    const codeToVerify = code ?? totpCode
+    if (codeToVerify.length !== 6) return
     setError("")
     setIsLoading(true)
     try {
       if (magicPartialToken) {
-        await magicLinkApi.verifyMagic2fa(magicPartialToken, totpCode)
+        await magicLinkApi.verifyMagic2fa(magicPartialToken, codeToVerify)
       } else {
-        await magicLinkApi.verifyUrl2fa(totpCode, totpCode)
+        await magicLinkApi.verifyUrl2fa(codeToVerify, codeToVerify)
       }
       router.push(next)
     } catch (err) {
@@ -386,15 +388,6 @@ function MagicLinkStep({
     }
   }, [email])
 
-  // Auto-verify
-  useEffect(() => {
-    if (step === "otp" && otp.length === 6) handleVerifyOtp()
-  }, [otp, step, handleVerifyOtp])
-
-  useEffect(() => {
-    if (step === "totp" && totpCode.length === 6) handleTotp()
-  }, [totpCode, step, handleTotp])
-
   // Countdown
   useEffect(() => {
     if (resendTimer <= 0) return
@@ -406,7 +399,14 @@ function MagicLinkStep({
     <div className="space-y-4">
       {step === "otp" ? (
         <>
-          <OtpInput value={otp} onChange={setOtp} error={!!error} />
+          <OtpInput
+            value={otp}
+            onChange={(v) => {
+              setOtp(v)
+              if (v.length === 6 && step === "otp") handleVerifyOtp(v)
+            }}
+            error={!!error}
+          />
           {error && (
             <p className="text-center text-xs text-destructive">{error}</p>
           )}
@@ -437,7 +437,14 @@ function MagicLinkStep({
           <p className="py-2 text-center text-sm text-muted-foreground">
             Enter the code from your authenticator app
           </p>
-          <OtpInput value={totpCode} onChange={setTotpCode} error={!!error} />
+          <OtpInput
+            value={totpCode}
+            onChange={(v) => {
+              setTotpCode(v)
+              if (v.length === 6 && step === "totp") handleTotp(v)
+            }}
+            error={!!error}
+          />
           {error && (
             <p className="text-center text-xs text-destructive">{error}</p>
           )}

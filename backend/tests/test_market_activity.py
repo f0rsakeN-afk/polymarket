@@ -1,6 +1,8 @@
 """Tests for market activity endpoint."""
-import pytest
+from datetime import UTC
 from uuid import uuid4
+
+import pytest
 from httpx import AsyncClient
 
 
@@ -51,7 +53,8 @@ async def test_get_market_activity_not_found(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_get_market_activity_empty_market(client: AsyncClient, db_session, admin_user):
     """Market with no trades, comments, or positions returns empty lists."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from app.models.market import Market, Outcome
 
     slug = f"empty-mkt-{uuid4().hex[:8]}"
@@ -62,7 +65,7 @@ async def test_get_market_activity_empty_market(client: AsyncClient, db_session,
         category="weather",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
         total_liquidity="0.00",
         total_volume="0.00",
     )

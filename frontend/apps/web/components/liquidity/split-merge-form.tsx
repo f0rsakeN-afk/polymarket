@@ -103,10 +103,11 @@ export function SplitMergeForm() {
       </div>
 
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
+        <label htmlFor="split-amount" className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
           {mode === "split" ? "USDC Amount" : "Shares Amount"}
         </label>
         <Input
+          id="split-amount"
           type="number"
           min="0"
           step="0.01"
@@ -117,7 +118,7 @@ export function SplitMergeForm() {
           onKeyDown={handleKeyDown}
         />
         {mode === "split" && parsedAmount > availableBalance && (
-          <p className="text-[10px] text-red-500 mt-1">Insufficient balance — max ${availableBalance.toFixed(2)}</p>
+          <p className="text-[10px] text-red-700 mt-1">Insufficient balance — max ${availableBalance.toFixed(2)}</p>
         )}
         {mode === "split" && selectedMarket && parsedAmount > 0 && (
           <p className="text-[10px] text-muted-foreground mt-1">

@@ -1,12 +1,10 @@
 """Tests for order endpoints."""
-import pytest
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
 
+import pytest
 from httpx import AsyncClient
 
 from app.models.market import Market, Outcome
-from app.models.position import Position
 
 
 def _token(user_id: str) -> str:
@@ -19,7 +17,7 @@ def _token(user_id: str) -> str:
 
 @pytest.mark.asyncio
 async def test_get_quote_auth_required(client: AsyncClient, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     resp = await client.post("/api/v1/orders/quote", json={
         "market_id": str(test_market.id),
         "outcome": "yes",
@@ -32,7 +30,7 @@ async def test_get_quote_auth_required(client: AsyncClient, test_market):
 
 @pytest.mark.asyncio
 async def test_get_quote_success(client: AsyncClient, test_user, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/quote", json={
         "market_id": str(test_market.id),
@@ -76,7 +74,7 @@ async def test_get_quote_invalid_outcome(client: AsyncClient, test_user, test_ma
 
 @pytest.mark.asyncio
 async def test_place_order_market_buy(client: AsyncClient, test_user, test_market, db_session):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/", json={
         "market_id": str(test_market.id),
@@ -94,7 +92,7 @@ async def test_place_order_market_buy(client: AsyncClient, test_user, test_marke
 
 @pytest.mark.asyncio
 async def test_place_order_insufficient_balance(client: AsyncClient, test_user, test_market):
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     resp = await client.post("/api/v1/orders/", json={
         "market_id": str(test_market.id),
@@ -110,7 +108,7 @@ async def test_place_order_insufficient_balance(client: AsyncClient, test_user, 
 @pytest.mark.asyncio
 async def test_place_order_closed_market(client: AsyncClient, admin_user, test_user, db_session):
     """Cannot trade on a resolved/closed market."""
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
 
     # Create a closed market
     market = Market(
@@ -158,7 +156,7 @@ async def test_place_order_sell_without_holding(client: AsyncClient, test_user, 
 @pytest.mark.asyncio
 async def test_place_order_duplicate(client: AsyncClient, test_user, test_market):
     """Idempotency - duplicate client_order_id returns same order."""
-    outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    _outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     client.cookies.set("access_token", _token(test_user.id))
     payload = {
         "market_id": str(test_market.id),
@@ -183,7 +181,6 @@ async def test_place_order_duplicate(client: AsyncClient, test_user, test_market
 @pytest.mark.asyncio
 async def test_cancel_order(client: AsyncClient, test_user, test_market, db_session):
     """Cancel a pending limit order."""
-    from decimal import Decimal
     from app.models.order import Order
 
     client.cookies.set("access_token", _token(test_user.id))
@@ -439,3 +436,105 @@ async def test_list_orders_filter_by_market_id(client: AsyncClient, test_user, t
     resp = await client.get(f"/api/v1/orders/?market_id={test_market.id}")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+# ── Buy-limit unit convention (USDC remainder) ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_buy_limit_persists_usdc_remainder(db_session, test_user, test_market):
+    """Regression: resting BUY limits track USDC budget, not shares.
+
+    AMM price is 0.50, so a 0.30 buy rests. remaining_amount must equal the
+    full USDC budget or the order can never match/fill later.
+    """
+    from app.models.order import Order
+    from app.schemas.order import OrderRequest
+    from app.services.order_service import OrderService
+    from sqlalchemy import select
+
+    result = await OrderService.execute_order(
+        db_session,
+        test_user,
+        OrderRequest(
+            market_id=str(test_market.id),
+            outcome="yes",
+            side="buy",
+            order_type="limit",
+            amount=Decimal("100"),
+            price=Decimal("0.30"),
+        ),
+    )
+    assert result.status == "pending"
+
+    stored = await db_session.execute(
+        select(Order).where(
+            Order.user_id == test_user.id,
+            Order.market_id == test_market.id,
+            Order.status == "pending",
+        )
+    )
+    order = stored.scalar_one()
+    assert order.remaining_amount == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_resting_buy_fills_against_book(db_session, test_user, admin_user, test_market):
+    """Resting BUY (USDC remainder) matches a SELL maker (share remainder)."""
+    from app.models.order import Order
+    from app.models.position import Position
+    from app.services.matching_engine import MatchingEngine
+    from sqlalchemy import select
+
+    yes_outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+
+    db_session.add(Position(
+        user_id=admin_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        shares_held=Decimal("100"),
+        average_price=Decimal("0.5"),
+        realized_pnl=Decimal("0"),
+    ))
+    sell = Order(
+        user_id=admin_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        side="sell",
+        order_type="limit",
+        amount=Decimal("50"),
+        price=Decimal("0.60"),
+        remaining_amount=Decimal("50"),
+        status="pending",
+    )
+    buy = Order(
+        user_id=test_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        side="buy",
+        order_type="limit",
+        amount=Decimal("100"),
+        price=Decimal("0.60"),
+        remaining_amount=Decimal("100"),
+        status="pending",
+    )
+    db_session.add_all([sell, buy])
+    await db_session.commit()
+
+    remaining, _ = await MatchingEngine.match_pending_order(
+        db_session, buy, test_market, yes_outcome
+    )
+    await db_session.commit()
+
+    # 50 shares @ 0.60 = 30 USDC of the 100 USDC budget
+    assert remaining == Decimal("70")
+    assert buy.status == "partial"
+    assert buy.remaining_amount == Decimal("70")
+    assert sell.status == "filled"
+
+    seller_pos = await db_session.execute(
+        select(Position).where(
+            Position.user_id == admin_user.id,
+            Position.outcome_id == yes_outcome.id,
+        )
+    )
+    assert seller_pos.scalar_one().shares_held == Decimal("50")

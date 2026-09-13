@@ -1,9 +1,8 @@
 """Tests for admin endpoints."""
-import pytest
 from uuid import uuid4
 
+import pytest
 from httpx import AsyncClient
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -143,9 +142,9 @@ async def test_ban_non_admin_forbidden(client: AsyncClient, test_user, admin_use
 @pytest.mark.asyncio
 async def test_unban_user_admin(client: AsyncClient, admin_user, db_session):
     """Admin can unban a user."""
-    from app.models.user import User
     # Create and ban a user
     from app.deps import hash_password
+    from app.models.user import User
     uid = uuid4().hex[:8]
     user = User(
         email=f"banned_{uid}@example.com",

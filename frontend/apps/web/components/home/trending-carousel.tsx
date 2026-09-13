@@ -31,7 +31,7 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
         <button
           onClick={scrollLeft}
           aria-label="Scroll left"
-          className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
+          className="absolute top-1/2 left-0 size-8 -translate-x-2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background shadow-sm transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:flex md:opacity-0 md:group-hover/carousel:opacity-100 flex"
         >
           <ChevronLeftIcon className="size-4" aria-hidden="true" />
         </button>
@@ -40,7 +40,7 @@ function TrendingCarousel({ markets }: TrendingCarouselProps) {
         <button
           onClick={scrollRight}
           aria-label="Scroll right"
-          className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 size-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center opacity-0 group-hover/carousel:opacity-100 transition-opacity"
+          className="absolute top-1/2 right-0 size-8 translate-x-2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background shadow-sm transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:flex md:opacity-0 md:group-hover/carousel:opacity-100 flex"
         >
           <ChevronRightIcon className="size-4" aria-hidden="true" />
         </button>

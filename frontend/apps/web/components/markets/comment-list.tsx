@@ -246,7 +246,7 @@ const CommentRow = memo(function CommentRow({
               {timeAgo(comment.created_at)}
             </time>
             {comment.updated_at !== comment.created_at && (
-              <span className="text-[9px] text-muted-foreground/60 leading-none">(edited)</span>
+              <span className="text-[10px] text-muted-foreground/60 leading-none">(edited)</span>
             )}
           </div>
 
@@ -285,7 +285,7 @@ const CommentRow = memo(function CommentRow({
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
-                className="text-[10px] text-muted-foreground hover:text-red-500 font-medium transition-colors disabled:opacity-50"
+                className="text-[10px] text-muted-foreground hover:text-red-700 font-medium transition-colors disabled:opacity-50"
               >
                 {isDeleting ? "..." : "Delete"}
               </button>
@@ -390,7 +390,7 @@ const CommentList = memo(function CommentList({ slug }: { slug: string }) {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-border bg-card py-6 text-center text-xs text-muted-foreground">
+      <div role="alert" className="rounded-lg border border-border bg-card py-6 text-center text-xs text-muted-foreground">
         Failed to load comments.
       </div>
     )

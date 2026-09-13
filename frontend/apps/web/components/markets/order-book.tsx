@@ -36,14 +36,14 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-1 mb-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground">{name}</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-foreground">{name}</span>
         {spread !== null && (
-          <span className="text-[10px] text-muted-foreground">Spread {spread}%</span>
+          <span className="text-xs text-muted-foreground tabular-nums">Spread {spread}%</span>
         )}
       </div>
 
       {/* Column headers */}
-      <div className="flex items-center justify-between px-1 mb-1 text-[9px] uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center justify-between px-1 mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
         <span>Bid</span>
         <span>Price</span>
         <span>Ask</span>
@@ -59,11 +59,11 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
               style={{ width: `${(n(ask.size) / maxDepth) * 100}%` }}
               aria-hidden="true"
             />
-            <div className="absolute inset-y-0 flex items-center justify-between px-1.5 text-[10px]">
-              <span className="w-12 text-right text-red-400/60 font-medium">
+            <div className="absolute inset-y-0 flex w-full items-center justify-between px-1.5 text-xs">
+              <span className="w-12 text-right font-medium text-red-700/70 tabular-nums dark:text-red-400/70">
                 {n(ask.size) > 0 ? n(ask.size).toFixed(0) : ""}
               </span>
-              <span className="w-12 text-center font-semibold text-red-400">
+              <span className="w-12 text-center font-semibold text-red-700 tabular-nums dark:text-red-400">
                 ${n(ask.price).toFixed(3)}
               </span>
               <span className="w-12" />
@@ -72,8 +72,8 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
         ))}
 
         {/* Spread divider */}
-        <div className="flex items-center justify-center py-0.5 my-0.5 rounded bg-muted/50">
-          <span className="text-[9px] font-semibold text-muted-foreground">
+        <div className="my-0.5 flex items-center justify-center rounded bg-muted/50 py-0.5">
+          <span className="text-[10px] font-semibold text-muted-foreground">
             {spread !== null ? `${spread}% spread` : bestBid !== null ? "Bid side only" : "Ask side only"}
           </span>
         </div>
@@ -86,11 +86,11 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
               style={{ width: `${(n(bid.size) / maxDepth) * 100}%` }}
               aria-hidden="true"
             />
-            <div className="absolute inset-y-0 flex items-center justify-between px-1.5 text-[10px]">
-              <span className="w-12 text-right text-green-400/60 font-medium">
+            <div className="absolute inset-y-0 flex w-full items-center justify-between px-1.5 text-xs">
+              <span className="w-12 text-right font-medium text-green-700/70 tabular-nums dark:text-green-400/70">
                 {n(bid.size) > 0 ? n(bid.size).toFixed(0) : ""}
               </span>
-              <span className="w-12 text-center font-semibold text-green-400">
+              <span className="w-12 text-center font-semibold text-green-700 tabular-nums dark:text-green-400">
                 ${n(bid.price).toFixed(3)}
               </span>
               <span className="w-12" />
@@ -109,17 +109,28 @@ const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
     enabled: !!slug,
   })
 
-  const outcomes = data?.data?.outcomes ?? {}
+  const outcomes = useMemo(() => data?.data?.outcomes ?? {}, [data])
+
+  const outcomeNames = useMemo(() => Object.keys(outcomes), [outcomes])
+
+  const outcomeEntries = useMemo(
+    () => outcomeNames.map((name) => ({
+      name,
+      bids: outcomes[name]?.bids ?? [],
+      asks: outcomes[name]?.asks ?? [],
+    })),
+    [outcomeNames, outcomes]
+  )
 
   if (isLoading) {
     return (
-      <div className="flex h-48 items-center justify-center">
-        <div className="size-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <div role="status" className="flex h-48 items-center justify-center">
+        <div aria-hidden="true" className="size-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <span className="sr-only">Loading…</span>
       </div>
     )
   }
 
-  const outcomeNames = Object.keys(outcomes)
   if (outcomeNames.length === 0) {
     return (
       <div className="py-10 text-center text-xs text-muted-foreground">
@@ -131,20 +142,11 @@ const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
   // Two-column grid for binary markets, single column for multi-outcome
   const isBinary = outcomeNames.length === 2
 
-  const outcomeEntries = useMemo(
-    () => outcomeNames.map((name) => ({
-      name,
-      bids: outcomes[name]?.bids ?? [],
-      asks: outcomes[name]?.asks ?? [],
-    })),
-    [outcomeNames, outcomes]
-  )
-
   return (
     <section aria-label="Order book" className="space-y-4">
       {isBinary ? (
-        // Binary: YES and NO side by side
-        <div className="grid grid-cols-2 gap-6">
+        // Binary: YES and NO side by side (stack on mobile)
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
           {outcomeEntries.map(({ name, bids, asks }) => (
             <OutcomeOrderbook
               key={name}
@@ -156,7 +158,7 @@ const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
         </div>
       ) : (
         // Multi-outcome: stacked
-        <div className="grid grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-x-6 sm:gap-y-6 lg:grid-cols-3 xl:grid-cols-4">
           {outcomeEntries.map(({ name, bids, asks }) => (
             <OutcomeOrderbook
               key={name}

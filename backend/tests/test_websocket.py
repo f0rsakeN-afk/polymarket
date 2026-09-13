@@ -1,12 +1,12 @@
 """Tests for WebSocket endpoints."""
-import pytest
+import time
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import pytest
 from starlette.testclient import TestClient
 
 from app.deps import create_access_token
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ def test_market_websocket_disconnect(ws_client, test_market, test_user):
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
-        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as _ws:
             pass  # context exits cleanly
 
 
@@ -105,7 +105,7 @@ def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
             # Connection established but server immediately closes with auth error
             with ws_client.websocket_connect(
                 f"/ws/notifications/{wrong_user_id}?token={token}"
-            ) as ws:
+            ) as _ws:
                 pass  # should not reach here
 
 
@@ -117,7 +117,7 @@ def test_user_notifications_websocket_invalid_token(ws_client, test_user):
         with pytest.raises(Exception):
             with ws_client.websocket_connect(
                 f"/ws/notifications/{test_user.id}?token={invalid_token}"
-            ) as ws:
+            ) as _ws:
                 pass  # should not reach here
 
 
@@ -147,7 +147,7 @@ def test_market_websocket_rapid_resubscribe(ws_client, test_market, test_user):
         with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "subscribe", "market_id": new_market_id})
             # Wait briefly for server to process the subscription switch
-            import time; time.sleep(0.05)
+            time.sleep(0.05)
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"

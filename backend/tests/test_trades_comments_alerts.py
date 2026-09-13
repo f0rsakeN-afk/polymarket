@@ -1,6 +1,7 @@
 """Tests for trades, comments, alerts, notifications, referrals, disputes, flags."""
-import pytest
+from datetime import UTC
 
+import pytest
 from httpx import AsyncClient
 
 
@@ -383,10 +384,18 @@ async def test_get_replies_not_found(client: AsyncClient, test_market):
 # ── Treasury ───────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_treasury(client: AsyncClient):
+async def test_get_treasury(client: AsyncClient, test_user):
+    client.cookies.set("access_token", _token(test_user.id))
     resp = await client.get("/api/v1/treasury")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_treasury_requires_auth(client: AsyncClient):
+    resp = await client.get("/api/v1/treasury")
+    assert resp.status_code == 401
+    assert resp.json()["success"] is False
 
 
 @pytest.mark.asyncio
@@ -419,9 +428,10 @@ async def test_distribute_fees_admin_only(client: AsyncClient, admin_user, test_
 async def test_create_comment_parent_on_different_market(client: AsyncClient, admin_user, test_market, db_session):
     """parent_id referencing a comment on a different market is rejected."""
     import uuid
+    from datetime import datetime
+
     from app.models.comment import Comment
     from app.models.market import Market, Outcome
-    from datetime import datetime, timezone
 
     # Create a comment on a second market
     m2 = Market(
@@ -431,7 +441,7 @@ async def test_create_comment_parent_on_different_market(client: AsyncClient, ad
         category="test",
         status="active",
         created_by=admin_user.id,
-        closes_at=datetime(2099, 12, 31, tzinfo=timezone.utc),
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
     )
     db_session.add(m2)
     await db_session.flush()
@@ -485,7 +495,6 @@ async def test_create_comment_content_too_long(client: AsyncClient, test_user, t
 @pytest.mark.asyncio
 async def test_edit_comment_by_non_owner(client: AsyncClient, test_user, admin_user, test_market, db_session):
     """Editing someone else's comment returns 403."""
-    from app.models.comment import Comment
 
     # admin creates a comment
     client.cookies.set("access_token", _token(admin_user.id))
@@ -528,8 +537,9 @@ async def test_edit_comment_already_deleted(client: AsyncClient, test_user, test
 @pytest.mark.asyncio
 async def test_delete_comment_soft_delete_flag(client: AsyncClient, test_user, test_market, db_session):
     """Soft-delete sets is_deleted=True and hides content from list."""
-    from app.models.comment import Comment
     from sqlalchemy import select
+
+    from app.models.comment import Comment
 
     client.cookies.set("access_token", _token(test_user.id))
     c_resp = await client.post(

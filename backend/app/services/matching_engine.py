@@ -7,6 +7,8 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.exceptions import InsufficientBalanceError
+from app.config import settings
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
@@ -76,7 +78,7 @@ class MatchingEngine:
         outcome_name = outcome.name.lower() if outcome else "unknown"
 
         usdc_value = match_shares * match_price
-        fee = usdc_value * Decimal("0.01")
+        fee = usdc_value * settings.protocol_fee_rate
 
         # Always lock wallets in deterministic order by user_id to prevent deadlocks
         user_ids = sorted([maker.user_id, taker_user_id], key=str)
@@ -92,9 +94,51 @@ class MatchingEngine:
         if maker_side == "buy":
             buyer_wallet = wallet_map[maker.user_id]
             seller_wallet = wallet_map[taker_user_id]
+            seller_user_id = taker_user_id
         else:
             seller_wallet = wallet_map[maker.user_id]
             buyer_wallet = wallet_map[taker_user_id]
+            seller_user_id = maker.user_id
+
+        # Buyer guard: taker buys have no upfront balance validation, so this
+        # is the check that prevents negative available balances. Deterministic
+        # (wallets are locked) -> fail the trade, never silently skip.
+        if buyer_wallet:
+            buyer_available = buyer_wallet.balance - buyer_wallet.locked_balance
+            if buyer_available < usdc_value:
+                raise InsufficientBalanceError({
+                    "available": float(buyer_available),
+                    "required": float(usdc_value),
+                })
+
+        # Seller guard: verify cover BEFORE mutating. A concurrent fill may have
+        # consumed the seller's shares after find_matches read them; matching
+        # more than held would mint shares from thin air. Races skip the match
+        # (caller continues to the next maker) instead of corrupting supply.
+        seller_pos_check = await db.execute(
+            select(Position).where(
+                Position.user_id == seller_user_id,
+                Position.market_id == maker.market_id,
+                Position.outcome_id == maker.outcome_id,
+            ).with_for_update()
+        )
+        seller_pos_row = seller_pos_check.scalar_one_or_none()
+        seller_held = seller_pos_row.shares_held if seller_pos_row else Decimal(0)
+        if seller_held < match_shares:
+            logger.warning(
+                f"Match skipped (stale book): seller={seller_user_id} "
+                f"held={seller_held} < match={match_shares}"
+            )
+            return {
+                "match_price": match_price,
+                "match_shares": Decimal(0),
+                "match_usdc": Decimal(0),
+                "maker_order_id": str(maker.id),
+                "maker_user_id": str(maker.user_id),
+                "side": maker.side,
+                "outcome": outcome_name,
+                "skipped": True,
+            }
 
         if buyer_wallet:
             buyer_wallet.balance -= usdc_value
@@ -102,7 +146,7 @@ class MatchingEngine:
         if seller_wallet:
             seller_wallet.balance += usdc_value - fee
 
-        maker.remaining_amount -= match_shares
+        maker.remaining_amount -= usdc_value if maker.side == "buy" else match_shares
         if maker.remaining_amount <= 0:
             maker.status = "filled"
             maker.executed_at = datetime.now(UTC)
@@ -149,9 +193,8 @@ class MatchingEngine:
             if seller_pos:
                 cost_basis = seller_pos.average_price * match_shares
                 realized_pnl = usdc_value - cost_basis
-                # Clamp: shares_held can legitimately be 0 if the seller has no position
-                # remaining, and the orderbook matched more than expected due to concurrent fills
-                seller_pos.shares_held = max(seller_pos.shares_held - match_shares, Decimal(0))
+                # Cover verified above: plain subtract, never clamp.
+                seller_pos.shares_held -= match_shares
                 seller_pos.realized_pnl += realized_pnl
 
             buyer_pos = await db.execute(
@@ -233,9 +276,8 @@ class MatchingEngine:
             if seller_pos:
                 cost_basis = seller_pos.average_price * match_shares
                 realized_pnl = usdc_value - cost_basis
-                # Clamp to 0: prevents negative shares_held from race conditions
-                # between orderbook matching and position updates
-                seller_pos.shares_held = max(seller_pos.shares_held - match_shares, Decimal(0))
+                # Cover verified above: plain subtract, never clamp.
+                seller_pos.shares_held -= match_shares
                 seller_pos.realized_pnl += realized_pnl
 
         return {
@@ -274,23 +316,24 @@ class MatchingEngine:
                 match_qty = min(maker.remaining_amount, max_buyable)
                 if match_qty == 0:
                     break
-                cost = match_qty * maker.price
-                matched_shares += match_qty
-                matched_usdc += cost
             else:
+                # Taker sells shares; makers here are always BUY orders whose
+                # remaining_amount is a USDC budget, not shares. Convert.
                 remaining_shares = amount - matched_shares
                 if remaining_shares <= 0:
                     break
-                match_qty = min(maker.remaining_amount, remaining_shares)
+                affordable = maker.remaining_amount / maker.price if maker.price > 0 else Decimal(0)
+                match_qty = min(affordable, remaining_shares)
                 if match_qty == 0:
                     break
-                cost = match_qty * maker.price
-                matched_shares += match_qty
-                matched_usdc += cost
 
             result = await MatchingEngine.execute_match(
                 db, maker, taker_user_id or "system", match_qty, maker.price
             )
+            if result.get("skipped"):
+                continue
+            matched_shares += result["match_shares"]
+            matched_usdc += result["match_usdc"]
             match_details.append(result)
 
         return matched_shares, matched_usdc, match_details
@@ -302,6 +345,9 @@ class MatchingEngine:
         market: Market,
         outcome: Outcome,
     ) -> tuple[Decimal, list[dict]]:
+        # Unit convention: order.remaining_amount is USDC budget for BUY
+        # orders, share count for SELL orders. Makers are the opposite side.
+        is_buy = order.side == "buy"
         remaining = order.remaining_amount
         matched_details = []
 
@@ -313,17 +359,27 @@ class MatchingEngine:
         for maker in matches:
             if remaining <= 0:
                 break
-            match_qty = min(maker.remaining_amount, remaining)
+            if is_buy:
+                # Makers are sells (shares); cap by taker USDC budget.
+                affordable = remaining / maker.price if maker.price > 0 else Decimal(0)
+                match_qty = min(maker.remaining_amount, affordable)
+            else:
+                match_qty = min(maker.remaining_amount, remaining)
             if match_qty <= 0:
                 break
-            remaining -= match_qty
 
             result = await MatchingEngine.execute_match(
                 db, maker, str(order.user_id), match_qty, maker.price
             )
-            matched_details.append(result)
-
-            order.remaining_amount -= match_qty
+            if result.get("skipped"):
+                continue
+            fill_cost = result["match_usdc"]
+            if is_buy:
+                remaining -= fill_cost
+                order.remaining_amount -= fill_cost
+            else:
+                remaining -= result["match_shares"]
+                order.remaining_amount -= result["match_shares"]
             if order.remaining_amount <= 0:
                 order.status = "filled"
                 order.executed_at = datetime.now(UTC)

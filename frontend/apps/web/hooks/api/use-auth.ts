@@ -87,7 +87,6 @@ export function useRevokeSession() {
 // ─── Registration ──────────────────────────────────────────────────────────────
 
 export function useRegister() {
-  const qc = useQueryClient()
   return useMutation({
     mutationFn: ({
       email,
@@ -229,7 +228,6 @@ export function useSetPassword() {
 }
 
 export function useChangePassword() {
-  const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ oldPassword, newPassword, totpCode }: { oldPassword: string; newPassword: string; totpCode?: string }) =>
       accountApi.changePassword({ old_password: oldPassword, new_password: newPassword, totp_code: totpCode }),

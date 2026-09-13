@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useCallback } from "react"
 import { authApi } from "@/lib/api/auth"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
+import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@workspace/ui/components/table"
 import { Spinner } from "@workspace/ui/components/spinner"
@@ -115,8 +115,9 @@ function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
   if (isLoading) {
     return (
       <Card className="overflow-hidden pt-0">
-        <CardContent className="flex h-48 items-center justify-center">
+        <CardContent role="status" className="flex h-48 items-center justify-center">
           <Spinner className="size-5" />
+          <span className="sr-only">Loading…</span>
         </CardContent>
       </Card>
     )

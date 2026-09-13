@@ -141,7 +141,7 @@ export function FilterBar({
 }
 
 // Hook for managing filter state
-export function useFilterBar<T extends string = string>(initial?: T[]) {
+export function useFilterBar() {
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([])
 
   const addFilter = useCallback((key: string, value: string) => {

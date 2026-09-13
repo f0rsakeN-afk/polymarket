@@ -45,7 +45,7 @@ const socialLinks = [
 
 function PolygonIcon() {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="shrink-0">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="shrink-0" aria-hidden="true">
       <path d="M12 2L22 8V18L12 24L2 18V8L12 2Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" fill="none" />
       <path d="M12 2V24M2 8L22 8M2 18L22 18" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
     </svg>
@@ -59,7 +59,7 @@ export default function Footer() {
         {/* Newsletter */}
         <div className="flex flex-col gap-6 border-b border-border py-10 sm:flex-row sm:items-center sm:justify-between">
           <div className="max-w-sm">
-            <h3 className="text-sm font-semibold tracking-tight">Stay in the loop</h3>
+            <h2 className="text-sm font-semibold tracking-tight">Stay in the loop</h2>
             <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
               Get the latest market insights, product updates, and platform announcements delivered to your inbox.
             </p>
@@ -74,11 +74,11 @@ export default function Footer() {
               id="footer-email"
               type="email"
               placeholder="your@email.com"
-              className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-shadow"
+              className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-shadow"
             />
             <button
               type="submit"
-              className="h-9 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors shrink-0"
+              className="h-9 rounded-md bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors shrink-0"
             >
               Subscribe
             </button>
@@ -117,9 +117,9 @@ export default function Footer() {
           {/* Link columns */}
           {linkGroups.map(({ title, links }) => (
             <div key={title}>
-              <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
                 {title}
-              </h4>
+              </h2>
               <ul className="space-y-2.5">
                 {links.map(({ href, label }) => (
                   <li key={href}>
@@ -138,19 +138,19 @@ export default function Footer() {
 
         {/* Bottom bar */}
         <div className="flex flex-col items-center justify-between gap-4 border-t border-border py-6 sm:flex-row">
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             &copy; {new Date().getFullYear()} PredictX. All rights reserved.
           </p>
           <div className="flex items-center gap-4">
-            <Link href="/legal/privacy" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/legal/privacy" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
               Privacy
             </Link>
-            <span className="text-[11px] text-muted-foreground/30" aria-hidden="true">&middot;</span>
-            <Link href="/legal/terms" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+            <span className="text-xs text-border" aria-hidden="true">&middot;</span>
+            <Link href="/legal/terms" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
               Terms
             </Link>
-            <span className="text-[11px] text-muted-foreground/30" aria-hidden="true">&middot;</span>
-            <Link href="/legal/risk" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+            <span className="text-xs text-border" aria-hidden="true">&middot;</span>
+            <Link href="/legal/risk" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
               Risks
             </Link>
           </div>
