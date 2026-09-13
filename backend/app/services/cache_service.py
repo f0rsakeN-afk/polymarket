@@ -182,7 +182,13 @@ async def build_orderbook(db: AsyncSession, market_id: str) -> dict:
         outcome_name = outcome_names.get(str(row.outcome_id), "unknown")
         if outcome_name not in orderbook:
             continue
-        entry = {"price": str(row.price), "size": str(row.total_size)}
+        # Unit convention: bid remainders are USDC budgets, ask remainders
+        # are shares. Normalize bids to shares at their price level so both
+        # sides quote size in shares.
+        size = row.total_size
+        if row.side == "buy" and row.price:
+            size = row.total_size / row.price
+        entry = {"price": str(row.price), "size": str(size)}
         if row.side == "buy":
             orderbook[outcome_name]["bids"].append(entry)
         else:

@@ -146,7 +146,7 @@ class MatchingEngine:
         if seller_wallet:
             seller_wallet.balance += usdc_value - fee
 
-        maker.remaining_amount -= match_shares
+        maker.remaining_amount -= usdc_value if maker.side == "buy" else match_shares
         if maker.remaining_amount <= 0:
             maker.status = "filled"
             maker.executed_at = datetime.now(UTC)
@@ -317,10 +317,13 @@ class MatchingEngine:
                 if match_qty == 0:
                     break
             else:
+                # Taker sells shares; makers here are always BUY orders whose
+                # remaining_amount is a USDC budget, not shares. Convert.
                 remaining_shares = amount - matched_shares
                 if remaining_shares <= 0:
                     break
-                match_qty = min(maker.remaining_amount, remaining_shares)
+                affordable = maker.remaining_amount / maker.price if maker.price > 0 else Decimal(0)
+                match_qty = min(affordable, remaining_shares)
                 if match_qty == 0:
                     break
 
@@ -342,6 +345,9 @@ class MatchingEngine:
         market: Market,
         outcome: Outcome,
     ) -> tuple[Decimal, list[dict]]:
+        # Unit convention: order.remaining_amount is USDC budget for BUY
+        # orders, share count for SELL orders. Makers are the opposite side.
+        is_buy = order.side == "buy"
         remaining = order.remaining_amount
         matched_details = []
 
@@ -353,7 +359,12 @@ class MatchingEngine:
         for maker in matches:
             if remaining <= 0:
                 break
-            match_qty = min(maker.remaining_amount, remaining)
+            if is_buy:
+                # Makers are sells (shares); cap by taker USDC budget.
+                affordable = remaining / maker.price if maker.price > 0 else Decimal(0)
+                match_qty = min(maker.remaining_amount, affordable)
+            else:
+                match_qty = min(maker.remaining_amount, remaining)
             if match_qty <= 0:
                 break
 
@@ -362,11 +373,13 @@ class MatchingEngine:
             )
             if result.get("skipped"):
                 continue
-            remaining -= result["match_shares"]
-
-            matched_details.append(result)
-
-            order.remaining_amount -= result["match_shares"]
+            fill_cost = result["match_usdc"]
+            if is_buy:
+                remaining -= fill_cost
+                order.remaining_amount -= fill_cost
+            else:
+                remaining -= result["match_shares"]
+                order.remaining_amount -= result["match_shares"]
             if order.remaining_amount <= 0:
                 order.status = "filled"
                 order.executed_at = datetime.now(UTC)
