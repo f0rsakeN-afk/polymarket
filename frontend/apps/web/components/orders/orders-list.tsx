@@ -33,7 +33,7 @@ const OrderRow = memo(function OrderRow({ order, onCancel, isCancelling }: Order
         <div className="mt-0.5 flex items-center gap-2 text-muted-foreground">
           <span
             className={`text-[10px] font-semibold uppercase ${
-              order.outcome === "yes" ? "text-green-500" : "text-red-500"
+              order.outcome === "yes" ? "text-green-700" : "text-red-700"
             }`}
           >
             {order.outcome}
@@ -50,19 +50,19 @@ const OrderRow = memo(function OrderRow({ order, onCancel, isCancelling }: Order
         <span
           className={`text-[10px] font-semibold uppercase ${
             order.status === "filled"
-              ? "text-green-500"
+              ? "text-green-700"
               : order.status === "cancelled" || order.status === "expired"
               ? "text-muted-foreground"
               : order.status === "partial"
-              ? "text-blue-500"
-              : "text-yellow-500"
+              ? "text-blue-700"
+              : "text-yellow-700"
           }`}
         >
           {order.status}
         </span>
         {(order.status === "pending" || order.status === "partial") && (
           <AlertDialog open={open} onOpenChange={handleDialogOpenChange}>
-            <AlertDialogTrigger render={<Button variant="ghost" size="sm" className="h-5 text-[10px] text-red-500 hover:text-red-400">Cancel</Button>} />
+            <AlertDialogTrigger render={<Button variant="ghost" size="sm" className="h-5 text-[10px] text-red-700 hover:text-red-400">Cancel</Button>} />
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Cancel Order</AlertDialogTitle>
@@ -92,7 +92,7 @@ interface OrdersListProps {
 }
 
 function OrdersList({ orders, loading, hasMore, onLoadMore }: OrdersListProps) {
-  const { mutateAsync: cancelOrder, isPending: isCancelling } = useCancelOrder()
+  const { mutateAsync: cancelOrder } = useCancelOrder()
   const [cancellingId, setCancellingId] = useState<string | null>(null)
 
   const handleCancel = useCallback(async (orderId: string) => {
@@ -131,8 +131,9 @@ function OrdersList({ orders, loading, hasMore, onLoadMore }: OrdersListProps) {
     <div className="rounded-xl border border-border bg-card p-4 text-xs/relaxed">
       <h3 className="mb-3 text-sm font-medium">Orders</h3>
       {loading && orders.length === 0 ? (
-        <div className="py-6 text-center text-muted-foreground">
+        <div role="status" className="py-6 text-center text-muted-foreground">
           <Spinner className="size-5" />
+          <span className="sr-only">Loading…</span>
         </div>
       ) : orders.length === 0 ? (
         <div className="py-6 text-center text-muted-foreground">No orders yet</div>

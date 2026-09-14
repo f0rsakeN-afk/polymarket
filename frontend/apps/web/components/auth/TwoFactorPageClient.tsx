@@ -136,7 +136,7 @@ export function TwoFactorPageClient() {
     <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
       <SettingsBreadcrumb page="Security" />
       <div>
-        <h1 className="text-2xl font-semibold">Two-Factor Authentication</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Two-Factor Authentication</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Add an extra layer of security to your account
         </p>

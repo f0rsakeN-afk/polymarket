@@ -327,7 +327,7 @@ class OrderService:
                         available = wallet.balance - wallet.locked_balance
                         if available < remaining_usdc:
                             raise InsufficientBalanceError({
-                                "available": float(wallet.balance),
+                                "available": float(available),
                                 "required": float(remaining_usdc),
                             })
                         wallet.locked_balance += remaining_usdc
@@ -340,7 +340,9 @@ class OrderService:
                         order_type=data.order_type,
                         amount=amount,
                         price=limit_price,
-                        remaining_amount=remaining_shares,
+                        # Unit convention: remaining_amount is USDC budget for
+                        # BUY orders, share count for SELL orders.
+                        remaining_amount=remaining_shares if data.side == "sell" else remaining_usdc,
                         status="pending" if matched_shares == 0 else "partial",
                         expires_at=data.expires_at,
                         client_order_id=data.client_order_id,
@@ -681,8 +683,10 @@ class OrderService:
         order.status = "cancelled"
         order.executed_at = datetime.now(UTC)
 
-        if order.side == "buy" and order.amount > 0:
-            wallet.locked_balance = max(Decimal(0), wallet.locked_balance - (order.amount - order.remaining_amount))
+        # Only BUY orders lock funds, and remaining_amount already tracks the
+        # unspent USDC remainder — release exactly that (never amount-spent).
+        if order.side == "buy":
+            wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.remaining_amount)
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")

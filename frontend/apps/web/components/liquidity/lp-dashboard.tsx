@@ -15,12 +15,13 @@ function formatPct(n: string | number) {
 
 export function LPDashboard() {
   const { data, isLoading, error, refetch } = useLPAnalytics()
-  const handleRetry = useCallback((_e: unknown) => { void refetch() }, [refetch])
+  const handleRetry = useCallback(() => { void refetch() }, [refetch])
 
   if (isLoading) {
     return (
-      <div className="flex h-32 items-center justify-center">
+      <div role="status" className="flex h-32 items-center justify-center">
         <Spinner className="size-5" />
+        <span className="sr-only">Loading…</span>
       </div>
     )
   }
@@ -53,7 +54,7 @@ export function LPDashboard() {
         </div>
         <div className="rounded-lg border border-border bg-card p-4 text-center">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">PnL</div>
-          <div className={`text-lg font-bold ${Number(data.total_pnl) >= 0 ? "text-green-500" : "text-red-500"}`}>
+          <div className={`text-lg font-bold ${Number(data.total_pnl) >= 0 ? "text-green-700" : "text-red-700"}`}>
             {formatCurrency(data.total_pnl)}
           </div>
         </div>
@@ -83,11 +84,11 @@ export function LPDashboard() {
                 <td className="text-right py-2 px-2 font-medium">{formatCurrency(pos.collateral_deposited)}</td>
                 <td className="text-right py-2 px-2 font-medium">{formatCurrency(pos.position_value)}</td>
                 <td className="text-right py-2 px-2 text-muted-foreground">{Number(pos.share_pct).toFixed(2)}%</td>
-                <td className="text-right py-2 px-2 text-green-500">{formatCurrency(pos.fees_earned)}</td>
-                <td className={`text-right py-2 px-2 font-medium ${Number(pos.net_pnl) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                <td className="text-right py-2 px-2 text-green-700">{formatCurrency(pos.fees_earned)}</td>
+                <td className={`text-right py-2 px-2 font-medium ${Number(pos.net_pnl) >= 0 ? "text-green-700" : "text-red-700"}`}>
                   {formatCurrency(pos.net_pnl)}
                 </td>
-                <td className={`text-right py-2 px-2 font-medium ${Number(pos.estimated_apr) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                <td className={`text-right py-2 px-2 font-medium ${Number(pos.estimated_apr) >= 0 ? "text-green-700" : "text-red-700"}`}>
                   {formatPct(pos.estimated_apr)}
                 </td>
               </tr>

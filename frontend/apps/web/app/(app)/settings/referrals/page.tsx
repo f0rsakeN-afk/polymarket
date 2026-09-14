@@ -21,13 +21,6 @@ import { cn } from "@workspace/ui/lib/utils"
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function formatDate(dateStr: string): string {
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(dateStr))
-}
-
 function formatDateShort(dateStr: string): string {
   return new Intl.DateTimeFormat("en", {
     dateStyle: "medium",
@@ -121,7 +114,7 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
               className={cn(
                 "size-8 rounded-md flex items-center justify-center transition-all",
                 codeCopied
-                  ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900 dark:text-emerald-300"
+                  ? "bg-emerald-100 text-green-700 dark:bg-emerald-900 dark:text-emerald-300"
                   : "bg-accent text-muted-foreground hover:bg-accent/80",
               )}
             >

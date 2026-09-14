@@ -29,20 +29,26 @@ const typeLabels: Record<string, string> = {
 }
 
 const statusColors: Record<string, string> = {
-  completed: "text-green-500",
-  pending: "text-yellow-500",
-  failed: "text-red-500",
+  completed: "text-green-700",
+  pending: "text-yellow-700",
+  failed: "text-red-700",
 }
 
 export function TransactionsPageClient() {
   const { data, isLoading, fetchNextPage, hasMore, isFetchingNextPage } = useTransactions() as ReturnType<typeof useTransactions> & { hasMore?: boolean }
 
-  const loadMore = useCallback((_e: unknown) => { void fetchNextPage() }, [fetchNextPage])
+  const loadMore = useCallback(() => { void fetchNextPage() }, [fetchNextPage])
 
   if (isLoading) {
     return (
-      <div className="flex justify-center p-8">
-        <Spinner className="size-6" />
+      <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Your transaction history</p>
+        </div>
+        <div className="flex h-48 items-center justify-center">
+          <Spinner className="size-6" />
+        </div>
       </div>
     )
   }
@@ -50,12 +56,19 @@ export function TransactionsPageClient() {
   const transactions = data?.transactions ?? []
 
   return (
-    <div className="p-8 max-w-lg space-y-6">
-      <h1 className="text-2xl font-semibold">Transactions</h1>
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">{transactions.length} transactions</p>
+      </div>
 
       {transactions.length === 0 ? (
-        <p className="text-muted-foreground">No transactions yet.</p>
+        <div className="flex h-48 flex-col items-center justify-center gap-2 rounded-xl border border-border bg-card text-center">
+          <p className="text-sm font-medium">No transactions yet</p>
+          <p className="max-w-52 text-xs text-muted-foreground">Deposits, withdrawals and trades will appear here.</p>
+        </div>
       ) : (
+        <div className="rounded-xl border border-border bg-card p-4">
         <ul className="divide-y divide-border">
           {transactions.map((tx) => (
             <li key={tx.id} className="flex items-center justify-between py-3 text-sm">
@@ -68,11 +81,12 @@ export function TransactionsPageClient() {
                   {tx.type === "deposit" || tx.type === "refund" ? "+" : "-"}
                   {formatUSD(tx.amount)}
                 </p>
-                <p className={`text-xs ${statusColors[tx.status] ?? ""}`}>{tx.status}</p>
+                <p className={`text-xs font-medium capitalize ${statusColors[tx.status] ?? ""}`}>{tx.status}</p>
               </div>
             </li>
           ))}
         </ul>
+        </div>
       )}
 
       {hasMore && (

@@ -10,14 +10,14 @@
   }
 }
 
-/* Shimmer utility for skeletons */
+/* Shimmer utility for skeletons — hue 145 matches theme green */
 @layer utilities {
   .animate-shimmer {
     background: linear-gradient(
       90deg,
-      oklch(0.965 0.002 286) 0%,
-      oklch(0.91 0.004 286) 50%,
-      oklch(0.965 0.002 286) 100%
+      oklch(0.965 0.003 145) 0%,
+      oklch(0.91 0.006 145) 50%,
+      oklch(0.965 0.003 145) 100%
     );
     background-size: 200% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
@@ -25,20 +25,25 @@
   .dark .animate-shimmer {
     background: linear-gradient(
       90deg,
-      oklch(0.22 0.007 275) 0%,
-      oklch(0.3 0.008 275) 50%,
-      oklch(0.22 0.007 275) 100%
+      oklch(0.22 0.005 145) 0%,
+      oklch(0.3 0.008 145) 50%,
+      oklch(0.22 0.005 145) 100%
     );
     background-size: 200% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
   }
 }
 
-* {
-  -ms-overflow-style: none; /* IE and Edge */
-  scrollbar-width: none; /* Firefox */
+/* Thin scrollbars for nested panels only — page scroll keeps native scrollbar */
+.nice-scroll {
+  scrollbar-width: thin;
 }
-
-*::-webkit-scrollbar {
-  display: none; /* Chrome, Safari, Opera */
+.nice-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
 }

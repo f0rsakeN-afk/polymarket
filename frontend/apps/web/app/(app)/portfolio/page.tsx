@@ -135,7 +135,7 @@ const WalletHero = memo(function WalletHero({
 
         <div className="mt-5 flex gap-3">
           <div className="flex items-center gap-2 rounded-lg border border-border bg-accent px-3 py-2">
-            <ArrowUpRight className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+            <ArrowUpRight className="size-3.5 text-green-700" />
             <div>
               <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                 Available
@@ -146,7 +146,7 @@ const WalletHero = memo(function WalletHero({
             </div>
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-border bg-accent px-3 py-2">
-            <Lock className="size-3.5 text-amber-600 dark:text-amber-400" />
+            <Lock className="size-3.5 text-yellow-700" />
             <div>
               <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                 Locked
@@ -169,7 +169,7 @@ const WalletHero = memo(function WalletHero({
               className={cn(
                 "text-lg font-bold tracking-tight tabular-nums",
                 totalUnrealized >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
+                  ? "text-green-700"
                   : "text-destructive"
               )}
             >
@@ -187,7 +187,7 @@ const WalletHero = memo(function WalletHero({
               className={cn(
                 "text-lg font-bold tracking-tight tabular-nums",
                 totalRealized >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
+                  ? "text-green-700"
                   : "text-destructive"
               )}
             >
@@ -202,7 +202,7 @@ const WalletHero = memo(function WalletHero({
               className={cn(
                 "text-lg font-bold tracking-tight tabular-nums",
                 totalPnL >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
+                  ? "text-green-700"
                   : "text-destructive"
               )}
             >
@@ -289,7 +289,7 @@ const PositionsSection = memo(function PositionsSection({
                     className={cn(
                       "text-sm font-semibold tabular-nums",
                       isUp
-                        ? "text-emerald-600 dark:text-emerald-400"
+                        ? "text-green-700"
                         : "text-destructive"
                     )}
                   >

@@ -3,6 +3,7 @@
 import { localPoint } from "@visx/event";
 import { ParentSize } from "@visx/responsive";
 import { sankey, sankeyCenter, sankeyLinkHorizontal } from "@visx/sankey";
+import type { SankeyLink as SankeyLinkType } from "d3-sankey";
 import type { Transition } from "motion/react";
 import {
   memo,
@@ -156,8 +157,7 @@ const SankeyChartCore = memo(function SankeyChartCore({
   }, [data, sankeyGenerator]);
 
   const createPath = useCallback(
-    // biome-ignore lint/suspicious/noExplicitAny: d3-sankey types are complex
-    (link: any) => {
+    (link: SankeyLinkType<SankeyNodeDatum, SankeyLinkDatum>) => {
       try {
         const pathGenerator = sankeyLinkHorizontal();
         return pathGenerator(link) || "";

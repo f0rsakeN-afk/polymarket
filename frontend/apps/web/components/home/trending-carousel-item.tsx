@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useState } from "react"
+import { memo, useCallback, useState } from "react"
 import Link from "next/link"
 import { useMarketSocket } from "@/hooks/use-market-socket"
 import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
@@ -13,7 +13,14 @@ interface TrendingCarouselItemProps {
 }
 
 function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
-  const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>([])
+  const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>(() => {
+    const now = Math.floor(Date.now() / 1000)
+    const seed = Number(market.yes_price)
+    return [
+      { time: now - 60, value: seed },
+      { time: now, value: seed },
+    ]
+  })
 
   const handleWSMessage = useCallback((data: unknown) => {
     const msg = data as { type?: string; yes_price?: number }
@@ -35,56 +42,45 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
     enabled: !!market.id,
   })
 
-  useEffect(() => {
-    const now = Math.floor(Date.now() / 1000)
-    const seed = Number(market.yes_price)
-    setPriceHistory([
-      { time: now - 300, value: seed * 0.97 },
-      { time: now - 240, value: seed * 1.01 },
-      { time: now - 180, value: seed * 0.99 },
-      { time: now - 120, value: seed * 1.02 },
-      { time: now - 60, value: seed * 0.98 },
-      { time: now, value: seed },
-    ])
-  }, [market.yes_price])
-
   const prob = Math.round(Number(market.yes_price) * 100)
-  const wsColor =
-    status === "connected"
-      ? "oklch(0.72 0.19 145)"
-      : status === "connecting"
-        ? "oklch(0.79 0.18 85)"
-        : "oklch(0.7 0.0 0)"
-  const yesColor = "oklch(0.63 0.15 145)"
-  const noColor = "oklch(0.63 0.24 27)"
 
   return (
     <Link
       href={`/markets/${market.slug}`}
       role="listitem"
       aria-label={`${market.question} — YES ${prob}%, NO ${100 - prob}%`}
-      className="flex w-[280px] shrink-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30"
+      className="flex w-[280px] shrink-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:shadow-md"
     >
       {/* Header row */}
       <div className="flex items-center gap-2">
-        <span className="text-[0.5rem] font-semibold tracking-widest text-muted-foreground uppercase">
-          POLYMARKET
+        <span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
+          PredictX
         </span>
         {market.category && (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.5rem] text-muted-foreground">
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {market.category}
           </span>
         )}
-        <span
-          className="ml-auto size-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: wsColor }}
-          role="status"
-          aria-label={`WebSocket ${status}`}
-        />
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <span
+            className={
+              status === "connected"
+                ? "size-1.5 rounded-full bg-green-600 dark:bg-green-400"
+                : status === "connecting"
+                  ? "size-1.5 animate-pulse rounded-full bg-yellow-600 dark:bg-yellow-400"
+                  : "size-1.5 rounded-full bg-muted-foreground/40"
+            }
+            role="status"
+            aria-label={`WebSocket ${status}`}
+          />
+          <span className="text-[10px] font-medium text-muted-foreground">
+            {status === "connected" ? "Live" : status === "connecting" ? "Sync" : "Off"}
+          </span>
+        </span>
       </div>
 
       {/* Question */}
-      <h3 className="line-clamp-2 flex-1 text-xs leading-snug font-medium text-foreground">
+      <h3 className="line-clamp-2 min-h-8 flex-1 text-sm leading-snug font-medium text-foreground">
         {market.question}
       </h3>
 
@@ -105,30 +101,28 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div>
-            <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
-              YES
+            <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
+              Yes
             </div>
             <div
-              className="text-sm font-bold tabular-nums"
-              style={{ color: yesColor }}
+              className="text-sm font-bold text-green-700 tabular-nums"
             >
               {prob}%
             </div>
           </div>
           <div>
-            <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
-              NO
+            <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
+              No
             </div>
             <div
-              className="text-sm font-bold tabular-nums"
-              style={{ color: noColor }}
+              className="text-sm font-bold text-red-700 tabular-nums"
             >
               {100 - prob}%
             </div>
           </div>
         </div>
         <div className="text-right">
-          <div className="mb-0.5 text-[0.5rem] tracking-wider text-muted-foreground uppercase">
+          <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
             Volume
           </div>
           <div className="text-xs font-medium text-foreground tabular-nums">

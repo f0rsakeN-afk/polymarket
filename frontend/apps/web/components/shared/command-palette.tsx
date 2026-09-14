@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@workspace/ui/components/command"
+import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@workspace/ui/components/command"
 import { Kbd } from "@workspace/ui/components/kbd"
 import { Badge } from "@workspace/ui/components/badge"
 import { cn } from "@workspace/ui/lib/utils"
@@ -109,12 +109,10 @@ export function CommandPalette({
     return groups
   }, [filteredItems, groupedItems, search])
 
-  const flatFiltered = search.trim() ? filteredItems : []
-
-  // Reset selection when search changes
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [search])
+  const flatFiltered = useMemo(
+    () => (search.trim() ? filteredItems : []),
+    [search, filteredItems]
+  )
 
   // Keyboard shortcut to open
   useEffect(() => {
@@ -172,9 +170,15 @@ export function CommandPalette({
     [flatFiltered, selectedIndex, handleSelect]
   )
 
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value)
+    setSelectedIndex(0)
+  }, [])
+
   const handleRecentClick = useCallback(
     (label: string) => {
       setSearch(label)
+      setSelectedIndex(0)
       inputRef.current?.focus()
     },
     []
@@ -198,7 +202,7 @@ export function CommandPalette({
           <CommandInput
             ref={inputRef as React.RefObject<HTMLInputElement>}
             value={search}
-            onValueChange={setSearch}
+            onValueChange={handleSearchChange}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             className="border-0! bg-transparent! pb-2!"
@@ -218,7 +222,7 @@ export function CommandPalette({
         <div className="flex items-center gap-4 px-3 py-2 border-b border-border/50">
           {KBD_SHORTCUTS.map((s) => (
             <div key={s.key} className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <Kbd className="size-4 text-[9px]">{s.key}</Kbd>
+              <Kbd className="size-4 text-[10px]">{s.key}</Kbd>
               <span>{s.label}</span>
             </div>
           ))}
@@ -250,7 +254,7 @@ export function CommandPalette({
 
           {Object.entries(filteredGrouped).map(([category, categoryItems]) => (
             <CommandGroup key={category} heading={category}>
-              {categoryItems.map((item, idx) => {
+              {categoryItems.map((item) => {
                 const flatIdx = flatFiltered.indexOf(item)
                 const isSelected = !search.trim() ? false : flatIdx === selectedIndex
                 return (
