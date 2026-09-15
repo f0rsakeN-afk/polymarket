@@ -73,6 +73,7 @@ export default function Footer() {
             <input
               id="footer-email"
               type="email"
+              autoComplete="email"
               placeholder="your@email.com"
               className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-shadow"
             />

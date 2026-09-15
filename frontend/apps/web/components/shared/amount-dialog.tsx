@@ -69,7 +69,10 @@ export function AmountDialog({ title, description, trigger, onConfirm }: AmountD
         <form onSubmit={handleSubmit(handleConfirm)} className="space-y-4 mt-4">
           <Field>
             <FieldContent>
+              <label htmlFor="amount-input" className="sr-only">Amount</label>
               <Input
+                id="amount-input"
+                aria-label="Amount"
                 type="number"
                 step="0.01"
                 min="0.01"

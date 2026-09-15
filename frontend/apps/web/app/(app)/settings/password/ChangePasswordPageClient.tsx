@@ -17,7 +17,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@workspace/ui/components/form";
-import { Alert, AlertDescription } from "@workspace/ui/components/alert";
+import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert";
 import {
   Card,
   CardContent,
@@ -86,11 +86,13 @@ export function ChangePasswordPageClient() {
         <CardContent>
           {form.formState.errors.root && (
             <Alert variant="destructive" className="mb-4">
+              <AlertTitle>Error</AlertTitle>
               <AlertDescription>{form.formState.errors.root.message}</AlertDescription>
             </Alert>
           )}
           {success && (
             <Alert className="mb-4 border-green-500/50 text-green-600">
+              <AlertTitle>Success</AlertTitle>
               <AlertDescription>Password updated successfully.</AlertDescription>
             </Alert>
           )}
@@ -104,7 +106,7 @@ export function ChangePasswordPageClient() {
                   <FormItem>
                     <FormLabel>Current password</FormLabel>
                     <FormControl>
-                      <Input type="password" autoFocus {...field} />
+                      <Input type="password" autoComplete="current-password" autoFocus {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -117,7 +119,7 @@ export function ChangePasswordPageClient() {
                   <FormItem>
                     <FormLabel>New password</FormLabel>
                     <FormControl>
-                      <Input type="password" placeholder="Min. 8 characters" {...field} />
+                      <Input type="password" autoComplete="new-password" placeholder="Min. 8 characters" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -130,7 +132,7 @@ export function ChangePasswordPageClient() {
                   <FormItem>
                     <FormLabel>Confirm new password</FormLabel>
                     <FormControl>
-                      <Input type="password" placeholder="Repeat password" {...field} />
+                      <Input type="password" autoComplete="new-password" placeholder="Repeat password" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

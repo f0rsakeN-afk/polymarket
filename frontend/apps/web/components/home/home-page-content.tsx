@@ -15,14 +15,24 @@ const LazyTradeFeed = dynamic(
   { ssr: false, loading: () => <SkeletonTradeFeed /> }
 )
 
-export default function HomePageContent() {
+import type { MarketListResponse, TradesResponse } from "@/hooks/api/types/market"
+
+export default function HomePageContent({
+  initialMarketsPage,
+  initialClosingPage,
+  initialTradesPage,
+}: {
+  initialMarketsPage?: MarketListResponse
+  initialClosingPage?: MarketListResponse
+  initialTradesPage?: TradesResponse
+}) {
   const searchParams = useSearchParams()
   const tag = searchParams.get("tag") ?? "All"
   const query = searchParams.get("q") ?? ""
 
-  const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined })
-  const { data: closingSoonData, isLoading: closingSoonLoading } = useMarkets({ sort: "closing_soon" })
-  const { data: tradesData } = useGlobalTrades()
+  const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined }, initialMarketsPage)
+  const { data: closingSoonData, isLoading: closingSoonLoading } = useMarkets({ sort: "closing_soon" }, initialClosingPage)
+  const { data: tradesData } = useGlobalTrades(undefined, initialTradesPage)
 
   const recentTrades = tradesData?.trades.slice(0, 15) ?? []
 

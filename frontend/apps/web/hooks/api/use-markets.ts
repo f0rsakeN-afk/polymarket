@@ -17,15 +17,19 @@ import {
 } from "@/lib/api/markets"
 import { api } from "@/lib/api/client"
 import { queryKeys } from "@/lib/api/queryKeys"
-import type { MarketResponse, MarketDetailResponse, MarketActivity, Trade } from "@/hooks/api/types/market"
+import type { MarketListResponse, MarketResponse, MarketDetailResponse, MarketActivity, Trade, TradesResponse } from "@/hooks/api/types/market"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
 
-export function useMarkets(params?: { q?: string; category?: string; status?: string; sort?: string }) {
+export function useMarkets(
+  params?: { q?: string; category?: string; status?: string; sort?: string },
+  initialPage?: MarketListResponse,
+) {
   return useInfiniteQuery({
     queryKey: queryKeys.markets(params),
     queryFn: ({ pageParam = 1 }) => listMarkets({ ...params, page: pageParam, page_size: 20 }),
     initialPageParam: 1,
+    ...(initialPage ? { initialData: { pages: [initialPage], pageParams: [1] } } : {}),
     getNextPageParam: (lastPage, _, lastPageParam) =>
       lastPage?.has_more ? lastPageParam + 1 : undefined,
     select: (data) => ({
@@ -86,10 +90,11 @@ export function useMarketTrades(slug: string) {
 
 // ─── Global Trades (infinite) ─────────────────────────────────────────────────
 
-export function useGlobalTrades(params?: { market_slug?: string }) {
+export function useGlobalTrades(params?: { market_slug?: string }, initialPage?: TradesResponse) {
   return useInfiniteQuery({
     queryKey: queryKeys.globalTrades(params?.market_slug ?? undefined),
     queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
+    ...(initialPage ? { initialData: { pages: [initialPage], pageParams: [1] } } : {}),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _, lastPageParam) => {
       const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades

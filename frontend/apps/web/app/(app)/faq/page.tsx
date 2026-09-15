@@ -148,6 +148,8 @@ function FAQItem({ q, a }: { q: string; a: string }) {
     <div className="border-b border-border last:border-0">
       <button
         onClick={toggle}
+        aria-label="Toggle FAQ item"
+        aria-expanded={open}
         className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
       >
         <span className="text-sm font-medium text-foreground/90">{q}</span>

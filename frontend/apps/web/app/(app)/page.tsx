@@ -1,22 +1,18 @@
-"use client"
-
-import { lazy, Suspense } from "react"
-import { useSearchParams } from "next/navigation"
-import CategoryTabs from "@/components/home/category-tabs"
+import { Suspense } from "react"
+import CategoryTabsSection from "@/components/home/category-tabs-section"
+import HomePageContent from "@/components/home/home-page-content"
 import {
   SkeletonMarketGrid,
   SkeletonTradeFeed,
   SkeletonTrendingCarousel,
 } from "@/components/shared/skeletons"
-
-const HomePageContent = lazy(
-  () => import("@/components/home/home-page-content")
-)
+import { getGlobalTrades, listMarkets } from "@/lib/api/markets"
+import type { MarketListResponse, TradesResponse } from "@/hooks/api/types/market"
 
 export const dynamic = "force-dynamic"
 
-// Same shell + section rhythm as HomePageContent so the lazy boundary
-// swaps skeletons for content without moving anything on screen.
+// Same shell + section rhythm as HomePageContent so the boundary swaps
+// skeletons for content without moving anything on screen.
 function HomePageSkeleton() {
   return (
     <div className="container mx-auto max-w-7xl px-4 py-6 space-y-10" aria-hidden="true">
@@ -42,13 +38,29 @@ function HomePageSkeleton() {
   )
 }
 
-function CategoryTabsSection() {
-  const searchParams = useSearchParams()
-  const tag = searchParams.get("tag") ?? "All"
-  return <CategoryTabs tag={tag} />
-}
+type SearchParams = { tag?: string; q?: string }
 
-export default function HomePage() {
+/**
+ * Server-rendered homepage shell. The three content queries run ON THE
+ * SERVER in parallel (one fast backend hop, no client waterfall) and seed
+ * React Query via initialData — first paint already contains real markets,
+ * which is what LCP measures. If the backend is unreachable, seeds are
+ * undefined and the client hooks fetch as before (graceful degradation).
+ */
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>
+}) {
+  const sp = await searchParams
+  const q = sp?.q ?? ""
+
+  const [marketsPage, closingPage, tradesPage] = await Promise.all([
+    listMarkets({ q: q || undefined, page: 1, page_size: 20 }).catch(() => undefined),
+    listMarkets({ sort: "closing_soon", page: 1, page_size: 8 }).catch(() => undefined),
+    getGlobalTrades({ page: 1, page_size: 15 }).catch(() => undefined),
+  ])
+
   return (
     <>
       <div className="sticky top-14 z-30 bg-background/80 backdrop-blur">
@@ -59,7 +71,11 @@ export default function HomePage() {
         </div>
       </div>
       <Suspense fallback={<HomePageSkeleton />}>
-        <HomePageContent />
+        <HomePageContent
+          initialMarketsPage={marketsPage as MarketListResponse | undefined}
+          initialClosingPage={closingPage as MarketListResponse | undefined}
+          initialTradesPage={tradesPage as TradesResponse | undefined}
+        />
       </Suspense>
     </>
   )

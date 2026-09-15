@@ -5,7 +5,7 @@ import dynamic from "next/dynamic"
 import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { Button } from "@workspace/ui/components/button"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
@@ -303,14 +303,17 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="text-xs font-semibold text-blue-700 mb-3 uppercase tracking-wider">Admin: Resolve Market</div>
             <div className="flex items-center gap-2">
+              <label htmlFor="resolve-outcome" className="sr-only">Select winning outcome</label>
               <Select value={selectedOutcomeId} onValueChange={handleOutcomeSelect}>
-                <SelectTrigger className="flex-1 h-9">
+                <SelectTrigger id="resolve-outcome" aria-label="Select winning outcome" className="flex-1 h-9">
                   <SelectValue placeholder="Select winning outcome..." />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectGroup>
                   {(market as MarketDetailResponse).outcomes.map((o) => (
                     <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>
                   ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
               <Button

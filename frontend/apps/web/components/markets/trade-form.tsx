@@ -9,7 +9,7 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Label } from "@workspace/ui/components/label"
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from "@workspace/ui/components/select"
 import {
   Field,
@@ -359,19 +359,21 @@ function TradeForm({
         </Field>
 
         <Field>
-          <FieldLabel>Order Type</FieldLabel>
+          <FieldLabel htmlFor="order-type">Order Type</FieldLabel>
           <FieldContent>
             <Select
               value={orderType as string}
               onValueChange={handleOrderTypeChange}
             >
-              <SelectTrigger>
+              <SelectTrigger id="order-type" aria-label="Order type">
                 <SelectValue placeholder="Market" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="market">Market</SelectItem>
-                <SelectItem value="limit">Limit</SelectItem>
-                <SelectItem value="fill_or_kill">Fill or Kill</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="market">Market</SelectItem>
+                  <SelectItem value="limit">Limit</SelectItem>
+                  <SelectItem value="fill_or_kill">Fill or Kill</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           </FieldContent>

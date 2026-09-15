@@ -77,7 +77,7 @@ export function LPDashboard() {
             {data.positions.map((pos) => (
               <tr key={pos.market_id} className="border-b border-border/50 hover:bg-muted/30">
                 <td className="py-2 px-2">
-                  <a href={`/markets/${pos.market_slug}`} className="text-primary hover:underline font-medium truncate block max-w-[200px]">
+                  <a href={`/markets/${pos.market_slug}`} aria-label="View market details" className="text-primary hover:underline font-medium truncate block max-w-[200px]">
                     {pos.market_question}
                   </a>
                 </td>
