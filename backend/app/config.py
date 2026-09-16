@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@polymarket.example.com"
 
     # Referral
-    referral_reward_amount: float = 1.0
+    referral_reward_amount: Decimal = Decimal("1.0")
 
     # Fees — all rates as decimals (0.02 = 2%).
     # A taker buy pays BOTH legs: trading fee (stays in the pool for LPs,

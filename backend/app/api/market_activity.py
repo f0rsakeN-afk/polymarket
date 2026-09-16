@@ -45,8 +45,8 @@ async def get_market_activity(
 
     if pool:
         total = float(pool.yes_shares) + float(pool.no_shares)
-        yes_price = float(pool.no_shares) / total if total > 0 else 0.5
-        no_price = float(pool.yes_shares) / total if total > 0 else 0.5
+        yes_price = float(pool.yes_shares) / total if total > 0 else 0.5
+        no_price = float(pool.no_shares) / total if total > 0 else 0.5
         yes_liquidity = float(pool.yes_shares)
         no_liquidity = float(pool.no_shares)
     else:

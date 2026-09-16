@@ -54,9 +54,9 @@ class LiquidityService:
                 details={"available": float(available), "requested": float(amount)},
             )
 
-        if float(pool.lp_token_supply) > 0:
+        if pool.lp_token_supply > 0:
             pool_total = pool.yes_shares + pool.no_shares
-            lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total
+            lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total if pool_total > 0 else amount * Decimal(2)
         else:
             lp_tokens_minted = amount * Decimal(2)
 
@@ -262,7 +262,7 @@ class LiquidityService:
         distributed = []
         total = Decimal(0)
         for pool, market in pools:
-            if float(pool.protocol_fees) <= 0:
+            if pool.protocol_fees <= 0:
                 continue
             amount = pool.protocol_fees
             treasury_wallet.balance += amount

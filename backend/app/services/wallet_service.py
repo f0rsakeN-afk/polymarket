@@ -115,8 +115,8 @@ class WalletService:
         if confirmed:
             tx.status = "completed"
             if blockchain_tx_hash:
-                tx.reference_id = blockchain_tx_hash
-                tx.reference_type = "blockchain_withdrawal"
+                # Keep reference_id (idempotency key) immutable — store on-chain hash in extra_data
+                tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
             logger.info(f"Withdrawal confirmed: id={withdrawal_id} tx={blockchain_tx_hash}")
         else:
             # Reject: reverse the balance that was debited at submission
@@ -128,8 +128,7 @@ class WalletService:
                 wallet.balance -= tx.amount  # amount is negative, so this adds back
             tx.status = "failed"
             if blockchain_tx_hash:
-                tx.reference_id = blockchain_tx_hash
-                tx.reference_type = "blockchain_withdrawal"
+                tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
             logger.warning(f"Withdrawal rejected: id={withdrawal_id} tx={blockchain_tx_hash}")
 
         await db.commit()
