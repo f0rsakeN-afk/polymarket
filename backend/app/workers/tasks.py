@@ -824,7 +824,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                         winners_credited += 1
 
                 # Extract protocol fees to treasury before LP redemption
-                if pool and float(pool.protocol_fees) > 0:
+                if pool and pool.protocol_fees > 0:
                     treasury_amount = pool.protocol_fees
                     treasury_wallet.balance += treasury_amount
                     pool.protocol_fees = Decimal(0)
@@ -841,6 +841,8 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                     db.add(treasury_tx)
 
                 # Settle LP shares — lock rows to prevent concurrent LP redemption
+                # NOTE: runs regardless of protocol_fees — LPs must be credited even on 0-fee markets (C1 fix)
+                if pool:
                     lp_result = await db.execute(
                         select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0).with_for_update()
                     )
