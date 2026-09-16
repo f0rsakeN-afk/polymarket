@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useState } from "react"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
@@ -28,7 +28,7 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
 
   const isMarketActive = marketStatus === "active"
   const availableBalance = Number(wallet?.available_balance ?? 0)
-  const parsedAmount = addForm.watch("amount") ?? 0
+  const parsedAmount = useWatch({ control: addForm.control, name: "amount" }) ?? 0
   const hasInsufficientBalance = parsedAmount > availableBalance
 
   const { mutateAsync: add, isPending: isAdding } = useMutation({
@@ -92,20 +92,23 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
   return (
     <div className="space-y-4">
       {hasInsufficientBalance && (
-        <p className="text-xs text-red-500">
+        <p role="alert" className="text-xs text-red-700">
           Insufficient balance — max ${availableBalance.toFixed(2)} available
         </p>
       )}
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
+        <label htmlFor="liquidity-amount" className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
           Add Liquidity
         </label>
         <div className="flex gap-2">
           <Input
+            id="liquidity-amount"
             type="number"
             step="0.01"
             min="0.01"
             placeholder="USDC amount"
+            required
+            aria-required="true"
             className="h-8 text-xs"
             {...addForm.register("amount", { valueAsNumber: true })}
           />
@@ -120,11 +123,12 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
         </div>
       </div>
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
+        <label htmlFor="liquidity-lp-tokens" className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 block">
           Remove Liquidity
         </label>
         <div className="flex gap-2">
           <Input
+            id="liquidity-lp-tokens"
             type="number"
             min="0"
             step="0.01"

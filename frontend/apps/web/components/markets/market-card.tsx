@@ -29,17 +29,16 @@ function TradePill({
   variant: "yes" | "no"
 }) {
   const isYes = variant === "yes"
-  // oklch matches our design system green/red — using CSS variables for consistency
-  const bg = isYes
-    ? "oklch(0.72 0.19 145 / 0.12)"
-    : "oklch(0.63 0.24 27 / 0.10)"
-  const textColor = isYes ? "oklch(0.63 0.15 145)" : "oklch(0.63 0.24 27)"
 
   return (
     <Link
       href={href}
-      className="flex h-7 w-11 items-center justify-center !rounded-xs text-xs font-semibold transition-colors duration-150 hover:opacity-80"
-      style={{ backgroundColor: bg, color: textColor }}
+      className="flex h-9 min-h-9 w-12 min-w-12 items-center justify-center rounded-md text-xs font-semibold transition-colors duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      style={
+        isYes
+          ? { backgroundColor: "var(--chart-1)", color: "var(--primary-foreground)" }
+          : { backgroundColor: "var(--destructive)", color: "var(--destructive-foreground)" }
+      }
     >
       {label}
     </Link>
@@ -60,7 +59,6 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
     outcome.name === "Yes" ||
     outcome.name === "yes" ||
     outcome.outcome_index === 0
-  const color = isYes ? "#22c55e" : "#ef4444"
 
   return (
     <div
@@ -77,8 +75,10 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span
-          className="text-base font-semibold tabular-nums"
-          style={{ color }}
+          className={cn(
+            "text-base font-semibold tabular-nums",
+            isYes ? "text-green-700" : "text-red-700"
+          )}
         >
           {pct}%
         </span>
@@ -99,17 +99,16 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
 
 // ─── Multi-outcome layout: compact 2-column grid ───────────────────────────────
 
+// Semantic chart tokens — adapts to light/dark automatically
 const MULTI_COLORS = [
-  "#22c55e",
-  "#ef4444",
-  "#3b82f6",
-  "#f59e0b",
-  "#a855f7",
-  "#06b6d4",
-  "#ec4899",
-  "#14b8a6",
-  "#f97316",
-  "#8b5cf6",
+  "var(--chart-1)",
+  "var(--destructive)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--primary)",
+  "var(--ring)",
 ]
 
 function MultiOutcomeCell({
@@ -133,8 +132,7 @@ function MultiOutcomeCell({
           {outcome.name}
         </span>
         <span
-          className="shrink-0 text-xs font-semibold tabular-nums"
-          style={{ color }}
+          className="shrink-0 text-xs font-semibold tabular-nums text-foreground"
         >
           {pct}%
         </span>
@@ -204,12 +202,12 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
   }, [isMulti, market.outcomes, market.yes_price, market.no_price])
 
   return (
-    <article className="mb-4 flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:-translate-y-px hover:border-primary/30 hover:shadow-md">
+    <article className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">
       {/* Header */}
-      <div className="flex items-start gap-2 px-4 pt-3 pb-2">
+      <div className="flex items-start gap-2 px-4 pt-4 pb-3">
         {market.status === "resolved" && (
-          <span className="shrink-0 rounded-full bg-yellow-500/10 px-2 py-0.5 text-[0.5rem] font-medium tracking-wider text-yellow-600 uppercase">
-            RESOLVED
+          <span className="shrink-0 rounded-full bg-yellow-500/10 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-yellow-700 uppercase">
+            Resolved
           </span>
         )}
         <Link
@@ -226,7 +224,7 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
       <div className="mx-4 border-t border-border/50" />
 
       {/* Outcomes */}
-      <div className="flex-1 px-4 py-2">
+      <div className="flex-1 px-4 py-3">
         {isMulti ? (
           <MultiOutcomeGrid
             outcomes={displayOutcomes}
@@ -245,9 +243,9 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
       </div>
 
       {/* Footer */}
-      <div className="mt-auto flex items-center justify-between border-t border-border/50 px-4 py-2">
+      <div className="mt-auto flex items-center justify-between border-t border-border/50 px-4 py-2.5">
         <span className="text-xs font-semibold text-muted-foreground uppercase">
-          ${formatVolume(market.total_volume)} Vol
+          {formatVolume(market.total_volume)} Vol
         </span>
         <span className="text-xs text-muted-foreground">
           {new Date(market.closes_at).toLocaleDateString("en-US", {
@@ -264,9 +262,9 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
 
 export function MarketCardSkeleton() {
   return (
-    <article className="mb-4 overflow-hidden rounded-xl border border-border bg-card">
+    <article className="overflow-hidden rounded-xl border border-border bg-card">
       {/* Header */}
-      <div className="flex items-start gap-2 px-4 pt-3 pb-2">
+      <div className="flex items-start gap-2 px-4 pt-4 pb-3">
         <Skeleton className="h-5 w-14 shrink-0 rounded-full" />
         <div className="flex-1 space-y-2">
           <Skeleton className="h-4 w-full" />
@@ -275,7 +273,7 @@ export function MarketCardSkeleton() {
       </div>
       <div className="mx-4 border-t border-border/50" />
       {/* Outcome rows */}
-      <div className="space-y-0 px-4 py-2">
+      <div className="space-y-0 px-4 py-3">
         {[1, 2].map((i) => (
           <div
             key={i}
@@ -283,13 +281,13 @@ export function MarketCardSkeleton() {
           >
             <Skeleton className="h-4 flex-1" />
             <Skeleton className="h-4 w-10 rounded" />
-            <Skeleton className="h-7 w-11 shrink-0 !rounded-xs" />
-            <Skeleton className="h-7 w-11 shrink-0 !rounded-xs" />
+            <Skeleton className="h-9 w-12 shrink-0 rounded-md" />
+            <Skeleton className="h-9 w-12 shrink-0 rounded-md" />
           </div>
         ))}
       </div>
       {/* Footer */}
-      <div className="flex items-center justify-between border-t border-border/50 px-4 py-2">
+      <div className="flex items-center justify-between border-t border-border/50 px-4 py-2.5">
         <Skeleton className="h-3 w-20" />
         <Skeleton className="h-3 w-16" />
       </div>

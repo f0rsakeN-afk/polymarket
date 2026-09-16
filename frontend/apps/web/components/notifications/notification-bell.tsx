@@ -17,18 +17,17 @@ import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import type { Notification } from "@/lib/schemas/notifications"
 import { Bell, BellRing, CheckCircle, XCircle, AlertTriangle, Clock, Info } from "lucide-react"
-import { Spinner } from "@workspace/ui/components/spinner"
 import { cn } from "@workspace/ui/lib/utils"
 
 type NotifType = Notification["type"]
 
 const TYPE_META: Record<NotifType, { icon: typeof Bell; color: string; label: string }> = {
   order_filled: { icon: CheckCircle, color: "text-emerald-500", label: "Order Filled" },
-  order_cancelled: { icon: XCircle, color: "text-red-500", label: "Order Cancelled" },
+  order_cancelled: { icon: XCircle, color: "text-red-700", label: "Order Cancelled" },
   alert_triggered: { icon: AlertTriangle, color: "text-amber-500", label: "Alert" },
   market_resolved: { icon: CheckCircle, color: "text-violet-500", label: "Market Resolved" },
   market_closing_soon: { icon: Clock, color: "text-orange-500", label: "Closing Soon" },
-  weekly_digest: { icon: Info, color: "text-blue-500", label: "Weekly Digest" },
+  weekly_digest: { icon: Info, color: "text-blue-700", label: "Weekly Digest" },
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -74,7 +73,7 @@ const NotificationItem = React.memo(function NotificationItem({
         isUnread ? "bg-muted/40" : "hover:bg-muted/30"
       )}
     >
-      <div className={cn("mt-0.5 shrink-0", color)}>
+      <div className={cn("mt-0.5 shrink-0", color)} aria-hidden="true">
         <Icon className="size-4" />
       </div>
       <div className="flex-1 min-w-0">
@@ -83,7 +82,7 @@ const NotificationItem = React.memo(function NotificationItem({
             {notif.title}
           </p>
           {isUnread && (
-            <span className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
+            <span aria-hidden="true" className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
           )}
         </div>
         {notif.body && (
@@ -91,7 +90,7 @@ const NotificationItem = React.memo(function NotificationItem({
             {notif.body}
           </p>
         )}
-        <p className="text-[11px] text-muted-foreground/60 mt-1">
+        <p className="text-xs text-muted-foreground/60 mt-1">
           {label} · {formatRelativeTime(notif.created_at)}
         </p>
       </div>
@@ -120,7 +119,7 @@ const EmptyState = React.memo(function EmptyState() {
       </div>
       <p className="text-sm font-medium">No notifications</p>
       <p className="text-xs text-muted-foreground mt-1 max-w-44">
-        You'll see order updates, market alerts, and more here
+        You&apos;ll see order updates, market alerts, and more here
       </p>
     </div>
   )
@@ -221,7 +220,7 @@ export function NotificationBell() {
           {unreadCount > 0 && (
             <button
               onClick={handleMarkAllRead}
-              className="text-[11px] text-muted-foreground hover:text-foreground transition-colors font-medium"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
             >
               Mark all read
             </button>

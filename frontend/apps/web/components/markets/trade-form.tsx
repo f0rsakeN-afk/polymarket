@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
@@ -63,7 +63,7 @@ function NotLoggedIn() {
 
 function MarketClosedBanner({ status }: { status: string }) {
   return (
-    <div className="rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
+    <div role="alert" className="rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700">
       Market is <span className="font-medium">{status}</span> — trading is disabled
     </div>
   )
@@ -71,7 +71,7 @@ function MarketClosedBanner({ status }: { status: string }) {
 
 function InsufficientBalanceBanner({ balance }: { balance: number }) {
   return (
-    <div className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+    <div role="alert" className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600">
       Insufficient balance — you have{" "}
       <span className="font-medium">${balance.toFixed(2)}</span> available
     </div>
@@ -95,17 +95,18 @@ const OutcomeButton = memo(function OutcomeButton({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={selected}
       className={cn(
-        "rounded-lg border p-2.5 text-center transition-colors",
+        "min-h-11 rounded-xl border p-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected
           ? color === "green"
-            ? "border-green-500/50 bg-green-500/10 text-green-500"
-            : "border-red-500/50 bg-red-500/10 text-red-500"
+            ? "border-green-600/50 bg-green-600/10 text-green-700 dark:text-green-400"
+            : "border-red-600/50 bg-red-600/10 text-red-700 dark:text-red-400"
           : "border-border bg-card text-muted-foreground hover:bg-muted"
       )}
     >
       <div className="text-sm font-bold">{label}</div>
-      <div className="text-xs">${price.toFixed(2)}</div>
+      <div className="text-xs tabular-nums">${price.toFixed(2)}</div>
     </button>
   )
 })
@@ -123,12 +124,13 @@ const SideButton = memo(function SideButton({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={side === current}
       className={cn(
-        "rounded-md border py-1.5 text-xs font-semibold uppercase transition-colors",
+        "min-h-9 rounded-xl border py-1.5 text-xs font-semibold uppercase transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         side === current
           ? side === "buy"
-            ? "border-green-500/50 bg-green-500/10 text-green-500"
-            : "border-red-500/50 bg-red-500/10 text-red-500"
+            ? "border-green-600/50 bg-green-600/10 text-green-700 dark:text-green-400"
+            : "border-red-600/50 bg-red-600/10 text-red-700 dark:text-red-400"
           : "border-border text-muted-foreground hover:bg-muted"
       )}
     >
@@ -154,6 +156,9 @@ function TradeForm({
   )
   const [side, setSide] = useState<"buy" | "sell">("buy")
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
+  // Params the cached quote was fetched for — render gates on match so a
+  // stale quote never shows for different inputs (no sync clear in effect).
+  const [quoteMeta, setQuoteMeta] = useState<{ marketId: string; outcome: string; side: "buy" | "sell"; amount: number } | null>(null)
   const [quoteLoading, setQuoteLoading] = useState(false)
   const quoteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -162,8 +167,8 @@ function TradeForm({
   const {
     register,
     handleSubmit,
-    watch,
     setValue,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormInput, unknown, PlaceOrderInput>({
     resolver: zodResolver(placeOrderSchema),
@@ -180,9 +185,11 @@ function TradeForm({
     },
   })
 
-  const amount = watch("amount")
-  const price = watch("price")
-  const orderType = watch("order_type")
+  const amount = useWatch({ control, name: "amount" })
+  const price = useWatch({ control, name: "price" })
+  const orderType = useWatch({ control, name: "order_type" })
+  const maxSlippage = useWatch({ control, name: "max_slippage" })
+  const postOnly = useWatch({ control, name: "post_only" })
 
   const effectivePrice = isMultiOutcome
     ? outcome === "yes"
@@ -194,10 +201,20 @@ function TradeForm({
     ? currentYesPrice
     : currentNoPrice
 
+  // Only use the cached quote when it matches current inputs
+  const quoteVisible =
+    orderType === "market" &&
+    quote !== null &&
+    quoteMeta !== null &&
+    quoteMeta.marketId === marketId &&
+    quoteMeta.outcome === outcome &&
+    quoteMeta.side === side &&
+    Number(quoteMeta.amount) === Number(amount)
+
   const displayPrice =
     orderType === "limit"
-      ? price ?? quote?.price ?? effectivePrice
-      : quote?.price ?? effectivePrice
+      ? price ?? effectivePrice
+      : quoteVisible && quote ? quote.price : effectivePrice
 
   const total = amount && displayPrice ? Number(amount) * Number(displayPrice) : 0
 
@@ -209,8 +226,8 @@ function TradeForm({
 
   useEffect(() => {
     if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
+    // Invalid inputs: skip fetch; quoteVisible gate below hides any cached quote.
     if (!amount || Number(amount) <= 0 || orderType !== "market") {
-      setQuote(null)
       return
     }
     const timeoutId = setTimeout(async () => {
@@ -218,8 +235,10 @@ function TradeForm({
       try {
         const res = await getQuote({ market_id: marketId, outcome, side, amount })
         setQuote(res.data)
+        setQuoteMeta({ marketId, outcome, side, amount: Number(amount) })
       } catch {
         setQuote(null)
+        setQuoteMeta(null)
       } finally {
         setQuoteLoading(false)
       }
@@ -256,12 +275,13 @@ function TradeForm({
       const payload: PlaceOrderInput = {
         ...data,
         client_order_id: clientOrderId,
-        quote_id: quote?.quote_id,
+        quote_id: quoteVisible ? quote?.quote_id : undefined,
       }
       setQuote(null)
+      setQuoteMeta(null)
       await onSubmit(payload)
     },
-    [onSubmit, clientOrderId, quote]
+    [onSubmit, clientOrderId, quote, quoteVisible]
   )
 
   const handleOrderTypeChange = useCallback((v: string | null) => {
@@ -359,7 +379,7 @@ function TradeForm({
 
         <Field>
           <FieldLabel htmlFor="max_slippage">
-            Slippage Tolerance — {(Number(watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
+            Slippage Tolerance — {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
           </FieldLabel>
           <FieldContent>
             <Input
@@ -373,7 +393,7 @@ function TradeForm({
             <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
               <span>0.1%</span>
               <span className="font-medium text-foreground">
-                {(Number(watch("max_slippage") ?? 0.005) * 100).toFixed(1)}%
+                {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
               </span>
               <span>10%</span>
             </div>
@@ -406,12 +426,12 @@ function TradeForm({
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="post_only"
-                    checked={watch("post_only")}
+                    checked={postOnly}
                     onCheckedChange={(c) => setValue("post_only", c === true)}
                   />
                   <Label
                     htmlFor="post_only"
-                    className="text-[11px] text-muted-foreground cursor-pointer select-none"
+                    className="text-xs text-muted-foreground cursor-pointer select-none"
                   >
                     Post-only (never executes immediately)
                   </Label>
@@ -429,18 +449,18 @@ function TradeForm({
         )}
 
         {Number(amount) > 0 && (
-          <div className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
+          <div aria-live="polite" aria-atomic="true" className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Price</span>
               <span>${Number(displayPrice).toFixed(4)}</span>
             </div>
-            {quote && (
+            {quoteVisible && quote && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Slippage</span>
                 <span
                   className={cn(
                     "font-medium",
-                    Number(quote.slippage) > 0.01 ? "text-yellow-500" : "text-green-500"
+                    Number(quote.slippage) > 0.01 ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"
                   )}
                 >
                   {(Number(quote.slippage) * 100).toFixed(2)}%

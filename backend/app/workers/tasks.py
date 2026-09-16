@@ -94,13 +94,15 @@ def expire_stale_orders(self):
                     for order in orders:
                         order.status = "expired"
                         order.executed_at = datetime.now(UTC)
-                        if order.side == "buy" and order.amount:
+                        # Only BUY orders lock funds; remaining_amount is the
+                        # unspent USDC remainder, so release exactly that.
+                        if order.side == "buy":
                             wallet_result = await db.execute(
                                 select(Wallet).where(Wallet.user_id == order.user_id).with_for_update()
                             )
                             wallet = wallet_result.scalar_one_or_none()
                             if wallet:
-                                wallet.locked_balance = max(wallet.locked_balance - order.amount, 0)
+                                wallet.locked_balance = max(wallet.locked_balance - order.remaining_amount, 0)
                         expired_count += 1
                         expired_by_market.setdefault(str(order.market_id), []).append(order)
 
@@ -170,7 +172,10 @@ def check_limit_order_execution(self):
                 )
                 if dirty:
                     query = query.where(Order.market_id.in_(dirty))
-                result = await db.execute(query.with_for_update())
+                # SKIP LOCKED: a concurrent placement/trade holding some of
+                # these rows doesn't stall the whole sweep; leftovers are
+                # picked up next minute.
+                result = await db.execute(query.with_for_update(skip_locked=True))
                 orders = result.scalars().all()
 
                 if not orders:

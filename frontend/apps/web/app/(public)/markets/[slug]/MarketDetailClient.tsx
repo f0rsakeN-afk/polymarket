@@ -43,7 +43,7 @@ export function MarketDetailClient() {
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8">
-      <MarketDetail slug={slug} onTrade={handleTrade} />
+      <MarketDetail key={slug} slug={slug} onTrade={handleTrade} />
     </div>
   )
 }

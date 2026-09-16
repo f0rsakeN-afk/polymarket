@@ -106,8 +106,11 @@ export function WalletPageClient() {
   const openWithdraw = useCallback(() => setWithdrawOpen(true), [])
 
   return (
-    <div className="max-w-md space-y-6 p-8">
-      <h1 className="text-2xl font-semibold">Wallet</h1>
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Wallet</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">Manage deposits and withdrawals</p>
+      </div>
 
       <WalletBalance wallet={wallet ?? null} loading={isLoading} />
 

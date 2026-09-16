@@ -29,7 +29,7 @@ const PositionRow = memo(function PositionRow({ position }: { position: Position
         <div className="mt-0.5 flex items-center gap-2 text-muted-foreground">
           <span
             className={`text-[10px] font-semibold uppercase ${
-              position.outcome === "yes" ? "text-green-500" : "text-red-500"
+              position.outcome === "yes" ? "text-green-700" : "text-red-700"
             }`}
           >
             {position.outcome}
@@ -40,7 +40,7 @@ const PositionRow = memo(function PositionRow({ position }: { position: Position
         </div>
       </div>
       <div className="text-right shrink-0 ml-4">
-        <span className={`text-xs font-bold ${isProfit ? "text-green-500" : "text-red-500"}`}>
+        <span className={`text-xs font-bold ${isProfit ? "text-green-700" : "text-red-700"}`}>
           {isProfit ? "+" : "-"}{formatUSD(pnl)}
         </span>
       </div>
@@ -73,8 +73,9 @@ function PositionsList({ positions, loading, hasMore, onLoadMore }: PositionsLis
     <div className="rounded-xl border border-border bg-card p-4 text-xs/relaxed">
       <h3 className="mb-3 text-sm font-medium">Positions</h3>
       {loading && positions.length === 0 ? (
-        <div className="py-6 text-center text-muted-foreground">
+        <div role="status" className="py-6 text-center text-muted-foreground">
           <Spinner className="size-5" />
+          <span className="sr-only">Loading…</span>
         </div>
       ) : positions.length === 0 ? (
         <div className="py-6 text-center text-muted-foreground">No positions</div>

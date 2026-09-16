@@ -59,9 +59,11 @@ export function SearchInput({ className }: SearchInputProps) {
   }, [])
 
   return (
-    <div className={`relative ${className ?? ""}`}>
-      <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+    <div role="search" className={`relative ${className ?? ""}`}>
+      <label htmlFor="market-search" className="sr-only">Search markets</label>
+      <SearchIcon aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
       <input
+        id="market-search"
         type="text"
         value={value}
         onChange={handleChange}

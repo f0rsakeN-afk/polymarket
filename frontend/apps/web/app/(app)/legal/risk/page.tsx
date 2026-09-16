@@ -29,8 +29,8 @@ export default function RiskPage() {
           id="warning"
           className="not-prose rounded-xl border border-amber-500/30 bg-amber-500/5 p-4"
         >
-          <p className="mb-1 text-xs font-semibold text-amber-600">Important</p>
-          <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+          <p className="mb-1 text-xs font-semibold text-yellow-700">Important</p>
+          <p className="text-xs leading-relaxed text-amber-700">
             Trading on prediction markets involves substantial risk. You should
             carefully consider whether such trading is appropriate for you based
             on your financial situation, risk tolerance, and experience. You may

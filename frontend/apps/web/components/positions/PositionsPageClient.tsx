@@ -32,8 +32,11 @@ export function PositionsPageClient() {
   })
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-4">
-      <h1 className="text-2xl font-semibold">Positions</h1>
+    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Positions</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">{positions.length} open positions</p>
+      </div>
       <Card className="p-4">
         <PositionsList
           positions={positions}

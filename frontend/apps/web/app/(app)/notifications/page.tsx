@@ -1,10 +1,9 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   notificationsApi,
-  type PaginatedNotifications,
 } from "@/lib/api/notifications"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
@@ -14,7 +13,6 @@ import { Button } from "@workspace/ui/components/button"
 import { Spinner } from "@workspace/ui/components/spinner"
 import {
   Bell,
-  BellRing,
   CheckCircle,
   XCircle,
   AlertTriangle,
@@ -37,7 +35,7 @@ const TYPE_META: Record<
   },
   order_cancelled: {
     icon: XCircle,
-    color: "text-red-500",
+    color: "text-red-700",
     label: "Order Cancelled",
   },
   alert_triggered: {
@@ -55,7 +53,7 @@ const TYPE_META: Record<
     color: "text-orange-500",
     label: "Closing Soon",
   },
-  weekly_digest: { icon: Info, color: "text-blue-500", label: "Weekly Digest" },
+  weekly_digest: { icon: Info, color: "text-blue-700", label: "Weekly Digest" },
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -115,7 +113,7 @@ function NotificationItem({ notif }: { notif: Notification }) {
             {notif.body}
           </p>
         )}
-        <p className="mt-1 text-[11px] text-muted-foreground/60">
+        <p className="mt-1 text-xs text-muted-foreground/60">
           {label} · {formatRelativeTime(notif.created_at)}
         </p>
       </div>
@@ -133,11 +131,6 @@ export default function NotificationsPage() {
     queryKey: ["notifications-list", page] as const,
     queryFn: () => notificationsApi.list({ page, page_size: 30 }),
     enabled: !!user,
-  })
-
-  const { mutate: markRead } = useMutation({
-    mutationFn: (id: string) => notificationsApi.markRead(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications-list"] }),
   })
 
   const { mutate: markAllRead } = useMutation({
@@ -185,7 +178,7 @@ export default function NotificationsPage() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Notifications</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Notifications</h1>
           {unreadCount > 0 && (
             <p className="mt-0.5 text-sm text-muted-foreground">
               {unreadCount} unread
@@ -215,7 +208,7 @@ export default function NotificationsPage() {
               </div>
               <p className="text-sm font-medium">No notifications</p>
               <p className="mt-1 max-w-52 text-xs text-muted-foreground">
-                You'll see order updates, market alerts, and more here
+                You&apos;ll see order updates, market alerts, and more here
               </p>
             </div>
           ) : (

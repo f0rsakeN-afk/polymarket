@@ -2,6 +2,7 @@
 
 import { scaleLinear } from "@visx/scale";
 import { AreaClosed, LinePath } from "@visx/shape";
+import type { CurveFactory } from "d3-shape";
 import { motion, useReducedMotion } from "motion/react";
 import {
   useCallback,
@@ -25,11 +26,7 @@ import {
  * without warping mid-sweep. Used as the `loadingStyle="sweep"` alternative to
  * the traveling pulse on `<Line>` and `<Area>`, and as the skeleton for
  * `<BarChart status="loading">`.
- */
-
-// CurveFactory type - simplified version compatible with visx
-// biome-ignore lint/suspicious/noExplicitAny: d3 curve factory type
-type CurveFactory = any;
+  */
 
 /** One shimmer sweep, in seconds. */
 const DEFAULT_SWEEP_DURATION_S = 2;

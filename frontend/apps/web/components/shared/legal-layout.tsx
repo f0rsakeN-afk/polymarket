@@ -17,7 +17,7 @@ interface LegalLayoutProps {
 }
 
 export function LegalLayout({ title, lastUpdated, sections, children }: LegalLayoutProps) {
-  const [active, setActive] = useState<string>("")
+  const [active, setActive] = useState<string>(() => sections[0]?.id ?? "")
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const handleScroll = useCallback(() => {
@@ -39,7 +39,6 @@ export function LegalLayout({ title, lastUpdated, sections, children }: LegalLay
 
   useEffect(() => {
     window.addEventListener("scroll", handleScroll, { passive: true })
-    handleScroll()
     return () => window.removeEventListener("scroll", handleScroll)
   }, [handleScroll])
 
