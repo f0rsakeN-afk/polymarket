@@ -1,5 +1,4 @@
 import logging
-import threading
 
 logger = logging.getLogger("polymarket")
 
@@ -72,18 +71,17 @@ class EmailService:
             subject = f"Your PredictX code: {code}"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
-        # Try Celery first, fall back to sync thread
-        def _via_celery():
-            try:
-                from app.workers.tasks import send_auth_email as task
-                task.delay(email=email, purpose=purpose, code=code, magic_url=magic_url)
-                logger.info(f"[EMAIL] enqueued for {email}, purpose={purpose}")
-            except Exception as exc:
-                logger.warning(f"[EMAIL] Celery unavailable ({exc}), sending sync")
-                _send_email_sync(email, subject, body)
+        # Try Celery first, fall back to direct sync send
+        # C7 fix: removed daemon thread — fire-and-forget thread is lost on gunicorn restart
+        # and bursts create unbounded threads. Celery delay is non-blocking (Redis push).
+        try:
+            from app.workers.tasks import send_auth_email as task
 
-        t = threading.Thread(target=_via_celery, daemon=True)
-        t.start()
+            task.delay(email=email, purpose=purpose, code=code, magic_url=magic_url)
+            logger.info(f"[EMAIL] enqueued for {email}, purpose={purpose}")
+        except Exception as exc:
+            logger.warning(f"[EMAIL] Celery unavailable ({exc}), sending sync")
+            _send_email_sync(email, subject, body)
 
     # Convenience wrappers
     def send_verification_code(e: str, c: str) -> None:  # noqa: N805

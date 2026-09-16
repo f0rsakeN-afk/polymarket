@@ -66,13 +66,14 @@ def _parse_sentinel_urls() -> list[str]:
     return [url.strip() for url in raw.split(",") if url.strip()]
 
 
-def get_redis_sync() -> redis.Redis:
+def get_redis_sync():
     """Sync Redis client for Celery tasks and non-async contexts. Sentinel-aware."""
     global _redis_client_sync
     if _redis_client_sync is None:
+        import redis as sync_redis
+
         sentinel_urls = _parse_sentinel_urls()
         if sentinel_urls:
-            import redis as sync_redis
             sentinel = sync_redis.Sentinel(
                 sentinel_urls,
                 socket_connect_timeout=2,
@@ -86,7 +87,7 @@ def get_redis_sync() -> redis.Redis:
                 },
             )
         else:
-            _redis_client_sync = redis.Redis.from_url(
+            _redis_client_sync = sync_redis.Redis.from_url(
                 settings.redis_url,
                 decode_responses=True,
                 max_connections=settings.celery_worker_redis_max_connections,
