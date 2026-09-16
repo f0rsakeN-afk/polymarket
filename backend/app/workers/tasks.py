@@ -766,9 +766,11 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 )
                 yes_outcome = yes_outcome_result.scalar_one_or_none()
 
-                # Settle positions — lock all position rows to prevent concurrent settlement
+                # Settle positions — lock only unsettled rows to prevent double settlement with claim_winnings (C9 fix)
                 pos_result = await db.execute(
-                    select(Position).where(Position.market_id == market.id).with_for_update()
+                    select(Position)
+                    .where(Position.market_id == market.id, Position.settled_at.is_(None))
+                    .with_for_update()
                 )
                 positions = pos_result.scalars().all()
 
@@ -784,6 +786,9 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
 
                 winners_credited = 0
                 for pos in positions:
+                    # Extra guard: skip if raced with claim_winnings (defense in depth)
+                    if pos.settled_at is not None:
+                        continue
                     wallet = wallet_map.get(str(pos.user_id))
                     if not wallet:
                         continue
