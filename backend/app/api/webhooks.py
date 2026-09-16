@@ -77,7 +77,10 @@ async def stripe_webhook(
     if event_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id", "")
         amount_cents = data.get("amount", 0)
-        data.get("currency", "usd")
+        currency = data.get("currency", "usd")
+        if currency.lower() != "usd":
+            logger.warning(f"Stripe webhook: unexpected currency {currency} for PI {payment_intent_id}")
+            return success_response({"status": "ignored_currency"})
         metadata = data.get("metadata", {})
 
         user_id = metadata.get("user_id")
@@ -95,7 +98,7 @@ async def stripe_webhook(
             logger.error(f"Wallet not found for user {user_id}")
             raise HTTPException(status_code=500, detail="Wallet not found, will retry")
 
-        amount = Decimal(str(amount_cents)) / 100  # cents to dollars
+        amount = (Decimal(amount_cents) / Decimal(100)).quantize(Decimal("0.01"))  # cents to dollars, Decimal-safe
 
         # Build transaction record BEFORE updating balance — balance_after is set
         # after the amount is added so the record is always consistent.

@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import stripe
 from fastapi import APIRouter, Depends, Query, Request
@@ -56,9 +57,16 @@ async def create_deposit(
 
     stripe.api_key = settings.stripe_secret_key
 
-    intent = stripe.PaymentIntent.create(
-        amount=int(data.amount * 100),  # cents
-        currency="usdc",  # must match wallet currency exactly
+    # Decimal-safe cents conversion — quantize to 2dp with HALF_UP, then to int
+    cents = int(
+        (data.amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100).to_integral_value(
+            rounding=ROUND_HALF_UP
+        )
+    )
+    intent = await asyncio.to_thread(
+        stripe.PaymentIntent.create,
+        amount=cents,
+        currency="usd",
         metadata={"user_id": str(user.id)},
         automatic_payment_methods={"enabled": True},
     )
