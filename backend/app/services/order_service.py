@@ -152,7 +152,10 @@ class OrderService:
         user: User,
         data: OrderRequest,
     ):
-        amount = Decimal(str(data.amount))
+        # data.amount is already Decimal (PositiveMoney) — keep Decimal end-to-end (C5 fix)
+        amount = data.amount if isinstance(data.amount, Decimal) else Decimal(str(data.amount))
+        if data.price is not None and data.price <= 0:
+            raise ValidationError("Price must be > 0")
 
         # ── Step 1: Lock Market + Pool + Wallet (serialization point) ──
 
@@ -246,10 +249,11 @@ class OrderService:
                 ).with_for_update()
             )
             position = pos_result.scalar_one_or_none()
-            if not position or float(position.shares_held or 0) < float(amount):
+            held = position.shares_held if position and position.shares_held is not None else Decimal(0)
+            if not position or held < amount:
                 raise ValidationError(
                     f"Insufficient {data.outcome} shares. "
-                    f"Position: {float(position.shares_held) if position else 0}, "
+                    f"Position: {float(held) if position else 0}, "
                     f"Requested: {float(amount)}"
                 )
 
@@ -262,7 +266,7 @@ class OrderService:
         )
 
         price_before = amm.price(data.outcome)
-        limit_price = Decimal(str(data.price)) if data.price is not None else None
+        limit_price = data.price if isinstance(data.price, Decimal) else (Decimal(str(data.price)) if data.price is not None else None)
 
         matched_shares, matched_usdc, match_details = await MatchingEngine.match_order_against_book(
             db, market, outcome, data.side, amount, limit_price, str(user.id),
@@ -285,8 +289,11 @@ class OrderService:
 
         # For BUY: remaining shares to fill via AMM = remaining USDC budget / AMM price
         # For SELL: remaining shares = amount - matched_shares (already computed above)
+        # C6 fix: price 0 is invalid — reject instead of silent 0
         if data.side == "buy":
-            buy_remaining_shares = remaining_usdc / price_before if price_before > 0 else Decimal(0)
+            if price_before <= 0:
+                raise ValidationError("AMM price is 0 — cannot compute buy size")
+            buy_remaining_shares = remaining_usdc / price_before
         else:
             buy_remaining_shares = Decimal(0)
 

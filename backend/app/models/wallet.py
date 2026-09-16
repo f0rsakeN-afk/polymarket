@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
@@ -15,7 +16,12 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class Wallet(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "wallets"
-    __table_args__ = (UniqueConstraint("user_id", "currency"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "currency"),
+        CheckConstraint("balance >= 0", name="ck_wallets_balance_nonneg"),
+        CheckConstraint("locked_balance >= 0", name="ck_wallets_locked_nonneg"),
+        CheckConstraint("locked_balance <= balance", name="ck_wallets_locked_lte_balance"),
+    )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     balance = Column(Numeric(20, 8), default=0, nullable=False)
