@@ -1,14 +1,11 @@
 "use client"
 
 import { memo, useCallback, useMemo, useState } from "react"
+import dynamic from "next/dynamic"
 import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
-import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
-import { LiveXAxis } from "@workspace/ui/components/charts/live-x-axis"
-import { LiveYAxis } from "@workspace/ui/components/charts/live-y-axis"
-import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@workspace/ui/components/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select"
 import { Button } from "@workspace/ui/components/button"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
@@ -17,16 +14,46 @@ import { useMarketSocket } from "@/hooks/use-market-socket"
 import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
-import { AlertDialog } from "@/components/alerts/alert-dialog"
 import { OrderBook } from "./order-book"
 import { CommentList, CommentForm } from "./comment-list"
-import { AddLiquidityForm } from "@/components/liquidity/add-liquidity-form"
 import { LiveTradeTicker } from "./live-trade-ticker"
 import { SkeletonMarketDetail } from "@/components/shared/skeletons"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
 import type { MarketDetailResponse, PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
+
+// visx/d3 chart code splits into its own chunk and never SSR-renders —
+// the detail page paints text/orderbook first, charts hydrate after.
+function ChartFallback() {
+  return <div className="h-[220px] animate-pulse rounded-md bg-muted/60" aria-hidden="true" />
+}
+
+const LiveLineChart = dynamic(
+  () => import("@workspace/ui/components/charts/live-line-chart").then((m) => ({ default: m.LiveLineChart })),
+  { ssr: false, loading: ChartFallback }
+)
+const LiveXAxis = dynamic(
+  () => import("@workspace/ui/components/charts/live-x-axis").then((m) => ({ default: m.LiveXAxis })),
+  { ssr: false }
+)
+const LiveYAxis = dynamic(
+  () => import("@workspace/ui/components/charts/live-y-axis").then((m) => ({ default: m.LiveYAxis })),
+  { ssr: false }
+)
+const LiveLine = dynamic(
+  () => import("@workspace/ui/components/charts/live-line").then((m) => ({ default: m.LiveLine })),
+  { ssr: false }
+)
+// Below-fold dialogs hydrate on demand instead of riding first paint.
+const AlertDialog = dynamic(
+  () => import("@/components/alerts/alert-dialog").then((m) => ({ default: m.AlertDialog })),
+  { ssr: false }
+)
+const AddLiquidityForm = dynamic(
+  () => import("@/components/liquidity/add-liquidity-form").then((m) => ({ default: m.AddLiquidityForm })),
+  { ssr: false }
+)
 
 interface MarketDetailProps {
   slug: string
@@ -276,14 +303,17 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="text-xs font-semibold text-blue-700 mb-3 uppercase tracking-wider">Admin: Resolve Market</div>
             <div className="flex items-center gap-2">
+              <label htmlFor="resolve-outcome" className="sr-only">Select winning outcome</label>
               <Select value={selectedOutcomeId} onValueChange={handleOutcomeSelect}>
-                <SelectTrigger className="flex-1 h-9">
+                <SelectTrigger id="resolve-outcome" aria-label="Select winning outcome" className="flex-1 h-9">
                   <SelectValue placeholder="Select winning outcome..." />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectGroup>
                   {(market as MarketDetailResponse).outcomes.map((o) => (
                     <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>
                   ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
               <Button

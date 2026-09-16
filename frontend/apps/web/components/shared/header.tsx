@@ -4,12 +4,13 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useCallback, useSyncExternalStore, memo } from "react"
 import { cn } from "@workspace/ui/lib/utils"
-import { Sheet, SheetContent, SheetTrigger } from "@workspace/ui/components/sheet"
+import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetHeader, SheetDescription } from "@workspace/ui/components/sheet"
 import { MenuIcon, SunIcon, MoonIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { UserMenu } from "@/components/auth/user-menu"
 import { NotificationBell } from "@/components/notifications/notification-bell"
 import { SearchInput } from "@/components/shared/search-input"
+import { AppCommandMenu } from "@/components/shared/app-command-menu"
 
 const navLinks: { href: string; label: string }[] = [
   { href: "/markets", label: "Markets" },
@@ -112,6 +113,7 @@ export default function Header() {
 
         {/* Right: Theme + Bell + User */}
         <div className="flex items-center gap-2 shrink-0">
+          <AppCommandMenu />
           <ThemeToggle />
           <NotificationBell />
           <UserMenu />
@@ -122,6 +124,10 @@ export default function Header() {
               <MenuIcon className="size-5" aria-hidden="true" />
             </SheetTrigger>
             <SheetContent side="right" className="w-64 p-0">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Navigation menu</SheetTitle>
+                <SheetDescription>Primary navigation links</SheetDescription>
+              </SheetHeader>
               <nav aria-label="Mobile" className="flex flex-col p-6 gap-1">
                 {navLinks.map(({ href, label }) => (
                   <NavLink key={href} href={href} label={label} isActive={isActive(href)} />

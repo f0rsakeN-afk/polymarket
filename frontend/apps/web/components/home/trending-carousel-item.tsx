@@ -1,12 +1,26 @@
 "use client"
 
 import { memo, useCallback, useState } from "react"
+import dynamic from "next/dynamic"
 import Link from "next/link"
 import { useMarketSocket } from "@/hooks/use-market-socket"
-import { LiveLineChart } from "@workspace/ui/components/charts/live-line-chart"
-import { LiveLine } from "@workspace/ui/components/charts/live-line"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { MarketResponse } from "@/hooks/api/types/market"
+
+// visx/d3 chart code splits into its own chunk and never SSR-renders —
+// the carousel ships without it and hydrates charts after first paint.
+function ChartFallback() {
+  return <div className="h-24 animate-pulse rounded-md bg-muted/60" aria-hidden="true" />
+}
+
+const LiveLineChart = dynamic(
+  () => import("@workspace/ui/components/charts/live-line-chart").then((m) => ({ default: m.LiveLineChart })),
+  { ssr: false, loading: ChartFallback }
+)
+const LiveLine = dynamic(
+  () => import("@workspace/ui/components/charts/live-line").then((m) => ({ default: m.LiveLine })),
+  { ssr: false }
+)
 
 interface TrendingCarouselItemProps {
   market: MarketResponse

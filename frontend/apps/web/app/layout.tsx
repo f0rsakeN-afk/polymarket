@@ -7,6 +7,8 @@ import "sileo/styles.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Providers } from "@/components/providers"
 import { Toaster } from "@/components/toaster"
+import { Toaster as SonnerToaster } from "sonner"
+import { AppCommandMenu } from "@/components/shared/app-command-menu"
 import { cn } from "@workspace/ui/lib/utils"
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" })
@@ -91,6 +93,8 @@ export default function RootLayout({
         <ThemeProvider>
           <Providers>
             <Toaster />
+            <SonnerToaster position="top-right" richColors />
+            <AppCommandMenu />
             <a
               href="#main-content"
               className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-ring"
