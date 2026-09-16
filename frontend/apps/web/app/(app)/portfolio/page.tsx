@@ -505,6 +505,9 @@ export default function PortfolioPage() {
 
   return (
     <div className="container mx-auto max-w-7xl space-y-6 px-4 py-8">
+      <div aria-live="polite" aria-atomic="true" role="status" className="sr-only">
+        {positions.length} positions, {orders.length} orders
+      </div>
       {/* Top: Wallet (3/4) + Liquidity (1/4) */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
         <div className="lg:col-span-3">

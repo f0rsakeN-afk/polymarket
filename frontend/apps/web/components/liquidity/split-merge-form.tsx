@@ -9,7 +9,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@workspace/ui/components/select"
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup } from "@workspace/ui/components/select"
 import Link from "next/link"
 
 export function SplitMergeForm() {
@@ -86,13 +86,15 @@ export function SplitMergeForm() {
           Market
         </label>
         <Select value={marketId} onValueChange={(v) => { if (v) setMarketId(v) }}>
-          <SelectTrigger>
+          <SelectTrigger aria-label="Select market">
             <SelectValue placeholder="Select market" />
           </SelectTrigger>
           <SelectContent>
-            {marketsData?.markets.map((m) => (
-              <SelectItem key={m.id} value={m.id}>{m.question.slice(0, 60)}{m.question.length > 60 ? "…" : ""}</SelectItem>
-            ))}
+            <SelectGroup>
+              {marketsData?.markets.map((m) => (
+                <SelectItem key={m.id} value={m.id}>{m.question.slice(0, 60)}{m.question.length > 60 ? "…" : ""}</SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
         {selectedMarket && (

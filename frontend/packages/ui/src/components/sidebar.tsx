@@ -323,6 +323,7 @@ function SidebarInput({
     <Input
       data-slot="sidebar-input"
       data-sidebar="input"
+      aria-label="Search"
       className={cn(
         "h-8 w-full border-input bg-muted/20 dark:bg-muted/30",
         className

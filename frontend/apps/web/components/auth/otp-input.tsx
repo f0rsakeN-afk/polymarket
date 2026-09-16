@@ -21,8 +21,14 @@ export function OtpInput({
   disabled = false,
 }: OtpInputProps) {
   return (
-    <div className="flex justify-center">
+    <div className="flex flex-col items-center gap-2">
+      <label htmlFor="otp-input" className="text-xs font-medium text-foreground">
+        Verification code
+      </label>
       <InputOTP
+        id="otp-input"
+        aria-label="Verification code"
+        containerClassName="justify-center"
         maxLength={maxLength}
         value={value}
         onChange={onChange}

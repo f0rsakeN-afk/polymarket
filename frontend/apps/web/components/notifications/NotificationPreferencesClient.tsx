@@ -23,7 +23,7 @@ function ToggleRow({ label, description, checked, onChange, disabled }: ToggleRo
         <p className="text-sm font-medium">{label}</p>
         <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} disabled={disabled} />
+      <Switch aria-label="Toggle notification preference" checked={checked} onCheckedChange={onChange} disabled={disabled} />
     </div>
   )
 }

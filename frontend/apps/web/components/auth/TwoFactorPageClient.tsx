@@ -203,7 +203,7 @@ export function TwoFactorPageClient() {
                     <FormItem>
                       <FormLabel>Password</FormLabel>
                       <FormControl>
-                        <Input type="password" placeholder="Your password" {...field} />
+                        <Input type="password" autoComplete="current-password" placeholder="Your password" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -279,7 +279,7 @@ export function TwoFactorPageClient() {
                     <FormItem>
                       <FormLabel>Confirm with password</FormLabel>
                       <FormControl>
-                        <Input type="password" placeholder="Your password" {...field} />
+                        <Input type="password" autoComplete="current-password" placeholder="Your password" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

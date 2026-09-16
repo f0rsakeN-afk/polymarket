@@ -188,7 +188,7 @@ export function DataTable<T>({
           <p className="text-sm text-destructive">Failed to load data</p>
           {onRetry && (
             <Button size="sm" variant="outline" onClick={onRetry}>
-              <RotateCcw className="size-3 mr-1" />
+              <RotateCcw data-icon="inline-start" className="size-3 mr-1" />
               Retry
             </Button>
           )}
@@ -223,7 +223,7 @@ export function DataTable<T>({
                     <Checkbox
                       checked={allSelected}
                       onCheckedChange={handleSelectAll}
-                      aria-label="Select all"
+                      aria-label="Select all rows"
                     />
                   </TableHead>
                 )}
@@ -259,7 +259,7 @@ export function DataTable<T>({
                         <Checkbox
                           checked={isSelected}
                           onCheckedChange={(checked) => handleSelectRow(id, Boolean(checked))}
-                          aria-label={`Select row ${id}`}
+                          aria-label="Select row"
                         />
                       </TableCell>
                     )}

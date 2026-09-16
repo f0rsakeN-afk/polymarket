@@ -126,8 +126,9 @@ function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
   if (sessions.length === 0) {
     return (
       <Card className="overflow-hidden pt-0">
-        <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-          No active sessions found
+        <CardContent className="flex h-48 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">No active sessions found</p>
+          <p className="text-xs">You have no other active devices.</p>
         </CardContent>
       </Card>
     )
@@ -228,9 +229,10 @@ export function SessionsPageClient() {
             size="sm"
             onClick={handleRevokeAll}
             disabled={revokeAllMutation.isPending}
+            aria-busy={revokeAllMutation.isPending}
             className="text-destructive hover:text-destructive hover:bg-destructive/10"
           >
-            Revoke all other sessions
+            {revokeAllMutation.isPending ? "Revoking..." : "Revoke all other sessions"}
           </Button>
         )}
       </div>

@@ -82,7 +82,10 @@ function ReplyForm({ onReply, isPending, onCancel }: {
 
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+      <label htmlFor="reply-textarea" className="sr-only">Reply</label>
       <Textarea
+        id="reply-textarea"
+        aria-label="Write a reply"
         placeholder="Write a reply..."
         className="min-h-[64px] resize-none text-xs"
         value={value}
@@ -121,7 +124,10 @@ function EditForm({ comment, onEdit, isPending, onCancel }: {
 
   return (
     <div className="mt-1 flex flex-col gap-2">
+      <label htmlFor="edit-comment-textarea" className="sr-only">Edit comment</label>
       <Textarea
+        id="edit-comment-textarea"
+        aria-label="Edit comment"
         className="min-h-[64px] resize-none text-xs"
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -362,7 +368,10 @@ function CommentForm({ slug }: { slug: string }) {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex gap-2 items-center" aria-label="Post a comment">
       <Avatar username={currentUser?.username ?? "you"} />
+      <label htmlFor="comment-input" className="sr-only">Add a comment</label>
       <Input
+        id="comment-input"
+        aria-label="Add a comment"
         {...register("content")}
         placeholder={currentUser ? "Add a comment..." : "Sign in to comment..."}
         className="h-7 text-xs flex-1"

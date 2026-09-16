@@ -133,7 +133,7 @@ export default function NotificationsPage() {
     enabled: !!user,
   })
 
-  const { mutate: markAllRead } = useMutation({
+  const { mutate: markAllRead, isPending: isMarkingRead } = useMutation({
     mutationFn: notificationsApi.markAllRead,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications-list"] })
@@ -186,19 +186,24 @@ export default function NotificationsPage() {
           )}
         </div>
         {unreadCount > 0 && (
-          <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
-            Mark all read
+          <Button variant="outline" size="sm" onClick={handleMarkAllRead} disabled={isMarkingRead} aria-busy={isMarkingRead}>
+            {isMarkingRead ? "Marking..." : "Mark all read"}
           </Button>
         )}
       </div>
 
+      <div aria-live="polite" aria-atomic="true" className="sr-only" role="status">
+        {isMarkingRead ? "Marking all notifications as read" : unreadCount > 0 ? `${unreadCount} unread notifications` : "All notifications read"}
+      </div>
       <Card className="overflow-hidden pt-0">
         <div
           className="overflow-auto"
           style={{ maxHeight: "600px", minHeight: "200px" }}
+          role="status"
+          aria-live="polite"
         >
           {isLoading ? (
-            <div className="flex h-48 items-center justify-center">
+            <div className="flex h-48 items-center justify-center" role="status" aria-label="Loading notifications">
               <Spinner className="size-5" />
             </div>
           ) : notifications.length === 0 ? (
@@ -212,7 +217,7 @@ export default function NotificationsPage() {
               </p>
             </div>
           ) : (
-            <div className="divide-y">
+            <div className="divide-y" role="feed" aria-label="Notifications">
               {notifications.map((n) => (
                 <NotificationItem key={n.id} notif={n} />
               ))}

@@ -94,8 +94,10 @@ export function CreateMarketForm() {
 
       <Field>
         <FieldContent>
-          <label className="text-xs font-medium text-foreground mb-1.5 block">Question *</label>
+          <label htmlFor="create-question" className="text-xs font-medium text-foreground mb-1.5 block">Question *</label>
           <Input
+            id="create-question"
+            aria-label="Question"
             {...form.register("question")}
             placeholder="Will X happen by Y date?"
             className={cn(form.formState.errors.question && "border-destructive")}
@@ -108,8 +110,10 @@ export function CreateMarketForm() {
 
       <Field>
         <FieldContent>
-          <label className="text-xs font-medium text-foreground mb-1.5 block">Description</label>
+          <label htmlFor="create-description" className="text-xs font-medium text-foreground mb-1.5 block">Description</label>
           <textarea
+            id="create-description"
+            aria-label="Description"
             {...form.register("description")}
             placeholder="Additional context (optional)"
             rows={3}
@@ -124,8 +128,10 @@ export function CreateMarketForm() {
       <div className="grid grid-cols-2 gap-3">
         <Field>
           <FieldContent>
-            <label className="text-xs font-medium text-foreground mb-1.5 block">Slug *</label>
+            <label htmlFor="create-slug" className="text-xs font-medium text-foreground mb-1.5 block">Slug *</label>
             <Input
+              id="create-slug"
+              aria-label="Slug"
               {...form.register("slug")}
               placeholder="will-x-happen"
               className={cn(form.formState.errors.slug && "border-destructive")}
@@ -138,8 +144,10 @@ export function CreateMarketForm() {
 
         <Field>
           <FieldContent>
-            <label className="text-xs font-medium text-foreground mb-1.5 block">Category</label>
+            <label htmlFor="create-category" className="text-xs font-medium text-foreground mb-1.5 block">Category</label>
             <Input
+              id="create-category"
+              aria-label="Category"
               {...form.register("category")}
               placeholder="e.g. Politics, Sports"
               className={cn(form.formState.errors.category && "border-destructive")}
@@ -150,8 +158,10 @@ export function CreateMarketForm() {
 
       <Field>
         <FieldContent>
-          <label className="text-xs font-medium text-foreground mb-1.5 block">Close Date *</label>
+          <label htmlFor="create-closes-at" className="text-xs font-medium text-foreground mb-1.5 block">Close Date *</label>
           <Input
+            id="create-closes-at"
+            aria-label="Close date"
             type="datetime-local"
             {...form.register("closes_at")}
             className={cn(form.formState.errors.closes_at && "border-destructive")}
@@ -165,8 +175,10 @@ export function CreateMarketForm() {
       <div className="grid grid-cols-2 gap-3">
         <Field>
           <FieldContent>
-            <label className="text-xs font-medium text-foreground mb-1.5 block">Initial Liquidity</label>
+            <label htmlFor="create-liquidity" className="text-xs font-medium text-foreground mb-1.5 block">Initial Liquidity</label>
             <Input
+              id="create-liquidity"
+              aria-label="Initial liquidity"
               type="number"
               step="any"
               min="0"
@@ -178,8 +190,10 @@ export function CreateMarketForm() {
 
         <Field>
           <FieldContent>
-            <label className="text-xs font-medium text-foreground mb-1.5 block">Initial Probability (Yes)</label>
+            <label htmlFor="create-probability" className="text-xs font-medium text-foreground mb-1.5 block">Initial Probability (Yes)</label>
             <Input
+              id="create-probability"
+              aria-label="Initial probability"
               type="number"
               step="any"
               min="0.01"
@@ -198,7 +212,10 @@ export function CreateMarketForm() {
           <div className="space-y-2">
             {fields.map((field, index) => (
               <div key={field.id} className="flex items-center gap-2">
+                <label htmlFor={`outcome-${index}`} className="sr-only">{`Outcome ${index + 1}`}</label>
                 <Input
+                  id={`outcome-${index}`}
+                  aria-label={`Outcome ${index + 1}`}
                   {...form.register(`outcomes.${index}.name`)}
                   placeholder={`Outcome ${index + 1}`}
                   className={cn(

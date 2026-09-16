@@ -30,6 +30,88 @@ class MarketService:
         return pool.yes_shares / total
 
     @staticmethod
+    async def get_market_prices_batch(market_ids: list[str]) -> dict[str, tuple[float, float]]:
+        """Fetch prices for many markets with O(1) round trips.
+
+        Single Redis pipeline for cache reads, a single SELECT for all cache
+        misses, one pipeline for cache writes. Replaces N sequential
+        get_market_prices() calls (each opening its own DB session) that made
+        cold list pages fan out and stall.
+        """
+        if not market_ids:
+            return {}
+        r = await get_redis()
+
+        async def _read_all():
+            pipe = r.pipeline()
+            for mid in market_ids:
+                pipe.hgetall(f"market:{mid}:price")
+            return await pipe.execute()
+
+        try:
+            cached_rows = await redis_cb.call(_read_all)
+        except Exception:
+            cached_rows = [None] * len(market_ids)
+
+        prices: dict[str, tuple[float, float]] = {}
+        missing: list[str] = []
+        for mid, data in zip(market_ids, cached_rows):
+            if data and "yes_price" in data and "no_price" in data:
+                try:
+                    prices[str(mid)] = (float(data["yes_price"]), float(data["no_price"]))
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            missing.append(str(mid))
+
+        if missing:
+            from app.database import async_session
+            async with async_session() as db:
+                pool_result = await db.execute(
+                    select(LiquidityPool).where(LiquidityPool.market_id.in_(missing))
+                )
+                pools = {str(p.market_id): p for p in pool_result.scalars().all()}
+            now = time.time()
+
+            async def _write_all():
+                pipe = r.pipeline()
+                for mid in missing:
+                    pool = pools.get(mid)
+                    if pool is None:
+                        continue
+                    total = pool.yes_shares + pool.no_shares
+                    y, n = (
+                        (float(pool.yes_shares / total), float(pool.no_shares / total))
+                        if total > 0 else (0.5, 0.5)
+                    )
+                    prices[mid] = (y, n)
+                    key = f"market:{mid}:price"
+                    pipe.hset(key, mapping={
+                        "yes_price": str(y), "no_price": str(n),
+                        "updated_at": str(now),
+                    })
+                    pipe.expire(key, 300)
+                await pipe.execute()
+
+            try:
+                await redis_cb.call(_write_all)
+            except Exception:
+                for mid in missing:
+                    pool = pools.get(mid)
+                    if pool is None:
+                        prices.setdefault(mid, (0.5, 0.5))
+                        continue
+                    total = pool.yes_shares + pool.no_shares
+                    prices[mid] = (
+                        (float(pool.yes_shares / total), float(pool.no_shares / total))
+                        if total > 0 else (0.5, 0.5)
+                    )
+
+        for mid in market_ids:
+            prices.setdefault(str(mid), (0.5, 0.5))
+        return prices
+
+    @staticmethod
     async def get_market_prices_from_db(market_id: str) -> tuple[float, float]:
         from app.database import async_session
         async with async_session() as db:
