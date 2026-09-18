@@ -20,8 +20,9 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 class Market(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "markets"
     __table_args__ = (
-        CheckConstraint("total_liquidity >= 0"),
-        CheckConstraint("total_volume >= 0"),
+        CheckConstraint("total_liquidity >= 0", name="ck_markets_liquidity_nonneg"),
+        CheckConstraint("total_volume >= 0", name="ck_markets_volume_nonneg"),
+        Index("ix_markets_status_closes_at", "status", "closes_at"),
     )
 
     slug = Column(String(255), unique=True, nullable=False, index=True)
@@ -41,11 +42,6 @@ class Market(Base, UUIDMixin, TimestampMixin):
     resolution_criteria = Column(String(2000))
     resolution_source = Column(String(1000))  # URL or data feed for resolution
     winning_outcome_id = Column(UUID(as_uuid=True), nullable=True)
-
-    # Composite indexes for hot queries
-    __table_args__ = (
-        Index("ix_markets_status_closes_at", "status", "closes_at"),
-    )
 
     # Dispute window
     proposed_outcome_id = Column(UUID(as_uuid=True), nullable=True)
