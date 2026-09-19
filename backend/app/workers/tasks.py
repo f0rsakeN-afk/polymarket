@@ -383,7 +383,7 @@ def check_limit_order_execution(self):
                                  )
                                  db.add(trade)
 
-                                 trade_amount = -float(remaining) if order_side == "buy" else float(sell_proceeds_amm)
+                                  trade_amount = -remaining if order_side == "buy" else sell_proceeds_amm  # Decimal, no float (H10 fix)
                                  tx = Transaction(
                                      user_id=re_locked_order.user_id,
                                      wallet_id=wallet.id,
