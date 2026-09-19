@@ -37,6 +37,8 @@ COPY --from=builder /app/.venv /app/.venv
 
 COPY . .
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s CMD curl -f http://localhost:8000/health || exit 1
+
 RUN chown -R appuser:appuser /app
 
 USER appuser
