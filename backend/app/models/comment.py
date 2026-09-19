@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -7,6 +7,11 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class Comment(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "comments"
+    __table_args__ = (
+        Index("ix_comments_market_id", "market_id"),
+        Index("ix_comments_parent_id", "parent_id"),
+        Index("ix_comments_market_parent", "market_id", "parent_id"),
+    )
 
     market_id = Column(UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
