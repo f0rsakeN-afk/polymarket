@@ -6,8 +6,8 @@ bind = "0.0.0.0:8000"
 workers = 8  # one per core; each runs its own event loop + Redis listener
 worker_class = "uvicorn.workers.UvicornWorker"
 keepalive = 120
-timeout = 30
-graceful_timeout = 10
+timeout = 120  # must be >= keepalive for WebSocket long-lived conns (M4 fix)
+graceful_timeout = 30
 max_requests = 10000
 max_requests_jitter = 1000
 
