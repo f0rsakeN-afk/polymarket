@@ -26,6 +26,7 @@ class Order(Base, UUIDMixin, TimestampMixin):
         Index("ix_orders_market_status_type", "market_id", "status", "order_type"),
         Index("ix_orders_status_expires", "status", "expires_at"),
         Index("ix_orders_type_status_remaining", "order_type", "status", "remaining_amount"),
+        Index("ix_orders_market_outcome_side_price", "market_id", "outcome_id", "side", "price"),
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
