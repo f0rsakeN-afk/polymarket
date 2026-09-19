@@ -72,7 +72,20 @@ async def stripe_webhook(
         raise ValidationError("Invalid JSON payload")
 
     event_type = event.get("type", "")
+    event_id = event.get("id", "")
     data = event.get("data", {}).get("object", {})
+
+    # Event-level dedup: if same Stripe event.id delivered twice
+    if event_id:
+        existing_event = await db.execute(
+            select(Transaction).where(
+                Transaction.reference_id == event_id,
+                Transaction.reference_type == "stripe_event",
+            )
+        )
+        if existing_event.scalar_one_or_none():
+            logger.info(f"Stripe event already processed: {event_id}")
+            return success_response({"status": "already_processed"})
 
     if event_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id", "")
