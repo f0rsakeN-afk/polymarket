@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase"
     database_replica_url: str = ""  # leave empty to use primary for reads
-    db_pool_size: int = 20
-    db_max_overflow: int = 10
+    db_pool_size: int = 5  # per worker; 5*8 workers=40 < postgres max 100 (H7 fix)
+    db_max_overflow: int = 5
     db_pool_timeout: int = 30  # seconds to wait for a connection from pool
 
     # Redis

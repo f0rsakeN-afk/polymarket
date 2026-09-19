@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Numeric, String
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -8,9 +8,12 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 class Treasury(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "treasury"
     __table_args__ = (
-        CheckConstraint("balance >= 0"),
+        CheckConstraint("balance >= 0", name="ck_treasury_balance_nonneg"),
+        UniqueConstraint("singleton", name="uq_treasury_singleton"),
+        CheckConstraint("singleton = true", name="ck_treasury_singleton_true"),
     )
 
+    singleton = Column(Boolean, default=True, nullable=False, unique=True)
     balance = Column(Numeric(20, 8), default=0, nullable=False)
     total_fees_collected = Column(Numeric(20, 8), default=0, nullable=False)
     total_fees_distributed = Column(Numeric(20, 8), default=0, nullable=False)

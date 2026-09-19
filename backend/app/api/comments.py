@@ -162,7 +162,12 @@ async def get_replies(
     result = await db.execute(
         select(Comment, User.username)
         .join(User, Comment.user_id == User.id)
-        .where(Comment.parent_id == comment_id, Comment.market_id == market.id)
+        .where(
+            Comment.parent_id == comment_id,
+            Comment.market_id == market.id,
+            Comment.depth <= MAX_DEPTH,
+            Comment.is_deleted.is_(False),
+        )
         .order_by(Comment.created_at.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)

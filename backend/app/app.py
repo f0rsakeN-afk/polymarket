@@ -208,7 +208,9 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.app_env != "production" else None,
 )
 
-origins = [o.strip() for o in settings.cors_origins.split(",")]
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if not origins:
+    raise ValueError("CORS_ORIGINS cannot be empty — set explicit origins (e.g. CORS_ORIGINS=http://localhost:3000)")
 if "*" in origins:
     raise ValueError(
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
