@@ -371,7 +371,7 @@ async def get_price_history(
         filters.append(PriceHistory.snapshot_at <= datetime.fromisoformat(to_date))
 
     raw = await db.execute(
-        select(PriceHistory).where(*filters).order_by(PriceHistory.snapshot_at.asc())
+        select(PriceHistory).where(*filters).order_by(PriceHistory.snapshot_at.asc()).limit(5000)
     )
     rows = raw.scalars().all()
 

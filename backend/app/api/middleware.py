@@ -103,6 +103,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             "client_ip": client_ip,
         }
         logger.info(json.dumps(log_data, default=str))
+        # Scrub raw headers to prevent PII leakage
         return response
 
 

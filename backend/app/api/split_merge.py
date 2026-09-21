@@ -190,8 +190,15 @@ async def merge(
     if market.status != "active":
         raise ValidationError("Market is not active")
 
-    # Lock order market -> pool -> position -> wallet matches the trading
-    # path (pool before positions) to avoid deadlocks with concurrent trades.
+    # Lock order market -> pool -> wallet -> position matches the trading
+    # path and standardizes lock ordering to prevent deadlocks.
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+    )
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise NotFoundError("Wallet not found")
+
     pool_result = await db.execute(
         select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
     )
@@ -224,18 +231,6 @@ async def merge(
         ).with_for_update()
     )
     no_pos = no_pos_result.scalar_one_or_none()
-
-    if not yes_pos or yes_pos.shares_held < amount_dec:
-        raise ValidationError(f"Insufficient YES shares (held: {float(yes_pos.shares_held) if yes_pos else 0}, needed: {amount})")
-    if not no_pos or no_pos.shares_held < amount_dec:
-        raise ValidationError(f"Insufficient NO shares (held: {float(no_pos.shares_held) if no_pos else 0}, needed: {amount})")
-
-    wallet_result = await db.execute(
-        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
-    )
-    wallet = wallet_result.scalar_one_or_none()
-    if not wallet:
-        raise NotFoundError("Wallet not found")
 
     fee = amount_dec * settings.split_merge_fee_rate
     amount_after_fee = amount_dec - fee
