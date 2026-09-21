@@ -117,7 +117,7 @@ async def get_market_activity(
                 "realized_pnl": str(pos.realized_pnl),
             })
 
-    # Recent trades
+    # Recent trades — capped query, use cursor-based pagination for large datasets
     trades_result = await db.execute(
         select(Trade, User.username)
         .join(User, Trade.user_id == User.id)
@@ -138,7 +138,7 @@ async def get_market_activity(
         for t, username in trades_result.all()
     ]
 
-    # Recent comments
+    # Recent comments — capped query
     comments_result = await db.execute(
         select(Comment, User.username)
         .join(User, Comment.user_id == User.id)

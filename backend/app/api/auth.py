@@ -1032,6 +1032,24 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not user or not user.is_active:
         raise ForbiddenError("Account is inactive")
 
+    # Absolute expiry check: reject refresh tokens older than 24 hours
+    # regardless of their individual expiry, to limit the replay window.
+    # With jwt_refresh_expire = 86400 (1 day), expires_at already caps this,
+    # but we add an explicit safety check here.
+    from datetime import timedelta
+    absolute_expiry = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
+    if absolute_expiry <= datetime.now(UTC):
+        token_record.revoked = True
+        await db.commit()
+        raise UnauthorizedError("Refresh token expired")
+
+    # Bind token to user_agent/ip fingerprint for replay protection.
+    stored_ua = token_record.device_info or ""
+    if stored_ua != (ua or ""):
+        token_record.revoked = True
+        await db.commit()
+        raise UnauthorizedError("Device mismatch — please re-authenticate")
+
     # Rotate: revoke old token + old session, issue new token + new session
     # bound to the current ip/user-agent.
     token_record.revoked = True

@@ -85,7 +85,7 @@ def decode_token(token: str) -> dict:
 
 
 # ── Blacklist settings (read once at import so it can be overridden) ──────────────
-_BLACKLIST_FAIL_OPEN = settings.app_env in ("development", "staging")
+_BLACKLIST_FAIL_OPEN = settings.app_env == "development"
 
 
 async def is_token_blacklisted(jti: str) -> bool:
