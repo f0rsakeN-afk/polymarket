@@ -1,6 +1,26 @@
 import logging
+import time
 
 logger = logging.getLogger("polymarket")
+
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX = 100  # max emails per window per purpose
+
+# Track sending rate per purpose for backpressure
+_rate_limit_counters: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(purpose: str) -> bool:
+    """Check if sending is within rate limit for this purpose."""
+    now = time.time()
+    window_start = now - _RATE_LIMIT_WINDOW
+    timestamps = _rate_limit_counters.get(purpose, [])
+    # Keep only timestamps within the window
+    _rate_limit_counters[purpose] = [t for t in timestamps if t > window_start]
+    if len(_rate_limit_counters[purpose]) >= _RATE_LIMIT_MAX:
+        return False
+    _rate_limit_counters[purpose].append(now)
+    return True
 
 
 def _send_email_sync(to_email: str, subject: str, body: str):
@@ -74,6 +94,9 @@ class EmailService:
         # Try Celery first, fall back to direct sync send
         # C7 fix: removed daemon thread — fire-and-forget thread is lost on gunicorn restart
         # and bursts create unbounded threads. Celery delay is non-blocking (Redis push).
+        if not _check_rate_limit(purpose):
+            logger.warning(f"[EMAIL] Rate limit exceeded for purpose={purpose}, queuing for retry")
+            raise RuntimeError("Rate limit exceeded")
         try:
             from app.workers.tasks import send_auth_email as task
 

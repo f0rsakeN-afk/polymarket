@@ -2,8 +2,9 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.api.responses import success_response
 from app.database import get_db
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/referrals", tags=["referrals"])
 
 
 def _generate_code() -> str:
-    return str(uuid.uuid4())[:8].upper()
+    return str(uuid.uuid4())[:12].upper()
 
 
 @router.get("/code", summary="Get referral code", description="Get current user's referral code, generating one if missing.")
@@ -26,9 +27,19 @@ async def get_referral_code(
     user = await get_current_user(request, db)
 
     if not user.referral_code:
-        user.referral_code = _generate_code()
-        await db.commit()
-        await db.refresh(user)
+        for _ in range(5):
+            code = _generate_code()
+            user.referral_code = code
+            try:
+                await db.commit()
+                await db.refresh(user)
+                break
+            except IntegrityError:
+                await db.rollback()
+                user.referral_code = None
+                continue
+        else:
+            raise Exception("Unable to generate unique referral code after retries")
 
     return success_response({"referral_code": user.referral_code})
 

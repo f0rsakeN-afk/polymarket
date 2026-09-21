@@ -139,19 +139,20 @@ class LiquidityService:
         if not pool:
             raise ValidationError("Market has no liquidity pool")
 
-        lp_result = await db.execute(
-            select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id).with_for_update()
-        )
-        lp_share = lp_result.scalar_one_or_none()
-        if not lp_share or lp_share.lp_tokens < lp_tokens:
-            raise ValidationError("Insufficient LP tokens")
-
+        # Standardize lock order: Market → Pool → Wallet → LPShare
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
         )
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
             raise ValidationError("Wallet not found")
+
+        lp_result = await db.execute(
+            select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id).with_for_update()
+        )
+        lp_share = lp_result.scalar_one_or_none()
+        if not lp_share or lp_share.lp_tokens < lp_tokens:
+            raise ValidationError("Insufficient LP tokens")
 
         if pool.lp_token_supply == 0:
             raise ValidationError("No LP tokens outstanding")
