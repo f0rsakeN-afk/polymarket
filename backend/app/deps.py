@@ -145,6 +145,14 @@ async def get_current_user(
         raise UnauthorizedError("User not found")
     if not user.is_active:
         raise ForbiddenError("Account is inactive")
+    # Also check if all of the user's sessions have been revoked.
+    # This ensures logout_all invalidates tokens from all sessions,
+    # not just the one whose cookie is present in the current request.
+    sessions = await db.execute(
+        select(Session).where(Session.user_id == user.id, Session.revoked.is_(False))
+    )
+    if not sessions.scalars().first():
+        raise UnauthorizedError("All sessions have been revoked")
     return user
 
 
