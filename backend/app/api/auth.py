@@ -2,6 +2,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -133,20 +134,29 @@ async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_
 
 
 def _get_client_ip(request: Request) -> str:
-    """Get real client IP, accounting for X-Forwarded-For. Port is always stripped."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        raw = forwarded.split(",")[0].strip()
-    else:
-        raw = request.client.host if request.client else "unknown"
-    # Strip port: handle both "ip:port" and "[ipv6]:port" forms
-    if raw.startswith("["):
-        bracket_end = raw.find("]")
-        if bracket_end != -1:
-            return raw[:bracket_end + 1]
-    elif ":" in raw and raw.count(":") == 1:
-        return raw.rsplit(":", 1)[0]
-    return raw
+    """
+    Get real client IP. X-Forwarded-For is only trusted when the direct
+    connection is from a known proxy IP -- spoofing is otherwise trivially easy.
+    In production behind nginx, TRUSTED_PROXY_IPS must be set, otherwise all
+    users share the proxy IP bucket and rate limiting is ineffective.
+    """
+    # If request came from a trusted proxy, use X-Forwarded-For; otherwise ignore it.
+    direct_ip = request.client.host if request.client else None
+
+    trusted_proxies = os.environ.get("TRUSTED_PROXY_IPS", "").split(",")
+    trusted_proxies = [ip.strip() for ip in trusted_proxies if ip.strip()]
+
+    if direct_ip in trusted_proxies:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # Cap at 45 chars to prevent logging/storage abuse
+            raw = forwarded.split(",")[0].strip()[:45]
+            from app.services.rate_limit_service import RateLimitService
+            return RateLimitService._normalize_ip(raw)
+
+    # Fall back to direct connection IP (or "unknown" for Unix sockets)
+    from app.services.rate_limit_service import RateLimitService
+    return RateLimitService._normalize_ip(direct_ip or "unknown")
 
 
 def _ip_matches(stored_ip: str, current_ip: str) -> bool:
@@ -795,6 +805,11 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
 
     user_result = await db.execute(select(User).where(User.email == data.email))
     user = user_result.scalar_one_or_none()
+
+    # Always record failure to track progressive friction / lockout,
+    # even when the user doesn't exist (prevents email enumeration
+    # and ensures lockout works across attempts).
+    await RateLimitService.record_failure(data.email, ip)
 
     if not user:
         await AuthAuditService.log_login_fail(db, data.email, ip, ua, "user_not_found")
