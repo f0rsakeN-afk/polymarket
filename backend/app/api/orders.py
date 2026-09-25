@@ -21,9 +21,9 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 @router.post("/quote", summary="Get a firm quote with price and slippage estimate")
 async def get_quote(data: QuoteRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    await get_current_user(request, db)
+    user = await get_current_user(request, db)
     result = await OrderService.compute_quote(
-        db, data.market_id, data.outcome, data.side, Decimal(str(data.amount))
+        db, str(user.id), data.market_id, data.outcome, data.side, Decimal(str(data.amount))
     )
     return success_response(result, message="Quote computed")
 
