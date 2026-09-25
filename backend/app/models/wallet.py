@@ -68,6 +68,10 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
     reference_type = Column(String(50), nullable=True)  # order, withdrawal, liquidity_pool
 
     status = Column(String(20), default="completed", nullable=False)  # pending, completed, failed
+    # blockchain_tx_hash is populated when the on-chain transaction is broadcast.
+    # Used to track withdrawal confirmation status on the blockchain.
+    blockchain_tx_hash = Column(String(66), nullable=True, index=True)  # 0x-prefixed 64-char hash
+    confirmations = Column(Integer, default=0, nullable=False)  # number of blockchain confirmations
     extra_data = Column(JSONB, default={})
 
     wallet = relationship("Wallet", back_populates="transactions")

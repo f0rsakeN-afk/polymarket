@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # Maximum single deposit amount in USDC (0 = no limit)
+    max_deposit: Decimal = Decimal("100000")
+    # Maximum single withdrawal amount in USDC (0 = no limit)
+    max_withdrawal: Decimal = Decimal("10000")
 
     # Celery
     celery_broker_url: str = "redis://localhost:6382/1"
