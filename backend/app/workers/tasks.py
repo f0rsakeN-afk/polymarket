@@ -482,7 +482,10 @@ def check_limit_order_execution(self):
 
 @shared_task(bind=True, name="app.workers.tasks.sync_amm_prices")
 def sync_amm_prices(self):
-    """Sync AMM prices from DB to Redis for fast reads."""
+    """Sync AMM prices from DB to Redis for fast reads.
+    Only publishes WS updates when prices actually changed to avoid
+    unnecessary network traffic and client-side chart redraws.
+    """
     task_id = uuid.uuid4().hex
     logger.info(json.dumps({
         "event": "task_start",
@@ -519,6 +522,14 @@ def sync_amm_prices(self):
                     yes_price, no_price = 0.5, 0.5
 
                 key = f"market:{market.id}:price"
+                # Check if prices actually changed before updating.
+                # This avoids unnecessary WS fan-out when prices haven't moved.
+                cached = await r.hgetall(key)
+                prev_yes = float(cached.get(b"yes_price", b"0.5")) if cached else 0.5
+                prev_no = float(cached.get(b"no_price", b"0.5")) if cached else 0.5
+                price_changed = (abs(yes_price - prev_yes) > 0.0001 or
+                                 abs(no_price - prev_no) > 0.0001)
+
                 pipe.hset(key, mapping={
                     "yes_price": str(yes_price),
                     "no_price": str(no_price),
@@ -526,9 +537,10 @@ def sync_amm_prices(self):
                 })
                 pipe.expire(key, 300)  # 5 min TTL
 
-                # Push WS update for every active market — extends chart lines in real-time
-                await redis_pubsub.publish_price_update(
-                    str(market.id), yes_price, no_price, float(market.total_volume))
+                # Only push WS updates when prices actually changed.
+                if price_changed:
+                    await redis_pubsub.publish_price_update(
+                        str(market.id), yes_price, no_price, float(market.total_volume))
 
             await pipe.execute()
             return f"Synced prices for {len(rows)} markets"
@@ -548,7 +560,10 @@ def sync_amm_prices(self):
 
 @shared_task(bind=True, name="app.workers.tasks.snapshot_price_history")
 def snapshot_price_history(self):
-    """Snapshot current prices to price_history table for charting."""
+    """Snapshot current prices to price_history table for charting.
+    Deduplicates: skips snapshots that already exist for the current
+    minute window to prevent duplicate entries on task retries.
+    """
     task_id = uuid.uuid4().hex
     logger.info(json.dumps({
         "event": "task_start",
@@ -579,41 +594,52 @@ def snapshot_price_history(self):
                     outcomes_by_market.setdefault(o.market_id, []).append(o)
 
                 now = datetime.now(UTC)
+                # Dedup: check which market/outcome combinations already
+                # have a snapshot for this minute window.
+                minute_floor = now.replace(second=0, microsecond=0)
+                existing_result = await db.execute(
+                    select(PriceHistory.market_id, PriceHistory.outcome_id).where(
+                        PriceHistory.snapshot_at >= minute_floor,
+                        PriceHistory.snapshot_at < minute_floor + timedelta(minutes=1),
+                    ).distinct()
+                )
+                existing_pairs = {(r[0], r[1]) for r in existing_result.scalars().all()}
+
                 snapshots = []
                 for market, pool in rows:
                     total = pool.yes_shares + pool.no_shares
                     yes_price = pool.yes_shares / total if total > 0 else Decimal("0.5")
                     no_price = pool.no_shares / total if total > 0 else Decimal("0.5")
 
-                market_outcomes = outcomes_by_market.get(market.id, [])
-                if len(market_outcomes) == 2:
-                    snapshots.append(PriceHistory(
-                        market_id=market.id,
-                        outcome_id=market_outcomes[0].id,
-                        price=yes_price,
-                        total_volume=market.total_volume,
-                        snapshot_at=now,
-                    ))
-                    snapshots.append(PriceHistory(
-                        market_id=market.id,
-                        outcome_id=market_outcomes[1].id,
-                        price=no_price,
-                        total_volume=market.total_volume,
-                        snapshot_at=now,
-                    ))
-                else:
-                    uniform_price = Decimal(1) / Decimal(str(len(market_outcomes))) if market_outcomes else Decimal("0.5")
-                    for o in market_outcomes:
-                        snapshots.append(PriceHistory(
-                            market_id=market.id,
-                            outcome_id=o.id,
-                            price=uniform_price,
-                            total_volume=market.total_volume,
-                            snapshot_at=now,
-                        ))
+                    market_outcomes = outcomes_by_market.get(market.id, [])
+                    if len(market_outcomes) == 2:
+                        for outcome in market_outcomes:
+                            if (market.id, outcome.id) in existing_pairs:
+                                continue  # Skip duplicate snapshot
+                            price = yes_price if outcome.name.lower() == "yes" else no_price
+                            snapshots.append(PriceHistory(
+                                market_id=market.id,
+                                outcome_id=outcome.id,
+                                price=price,
+                                total_volume=market.total_volume,
+                                snapshot_at=now,
+                            ))
+                    else:
+                        uniform_price = Decimal(1) / Decimal(str(len(market_outcomes))) if market_outcomes else Decimal("0.5")
+                        for o in market_outcomes:
+                            if (market.id, o.id) in existing_pairs:
+                                continue
+                            snapshots.append(PriceHistory(
+                                market_id=market.id,
+                                outcome_id=o.id,
+                                price=uniform_price,
+                                total_volume=market.total_volume,
+                                snapshot_at=now,
+                            ))
 
-                db.add_all(snapshots)
-                await db.commit()
+                if snapshots:
+                    db.add_all(snapshots)
+                    await db.commit()
                 return f"Snapshotted {len(snapshots)} price records for {len(rows)} markets"
 
         result = celery_run(_run())
@@ -627,7 +653,6 @@ def snapshot_price_history(self):
             "result": str(result)[:200],
         }))
     return result
-
 
 @shared_task(bind=True, name="app.workers.tasks.check_markets_ready_to_resolve")
 def check_markets_ready_to_resolve(self):
