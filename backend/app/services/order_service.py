@@ -71,6 +71,7 @@ class OrderService:
     @staticmethod
     async def compute_quote(
         db: AsyncSession,
+        user_id: str,
         market_id: str,
         outcome_name: str,
         side: str,
@@ -122,6 +123,7 @@ class OrderService:
         now = time.time()
         payload = {
             "quote_id": quote_id,
+            "user_id": user_id,
             "market_id": market_id,
             "outcome": outcome_name,
             "side": side,
@@ -137,7 +139,7 @@ class OrderService:
         try:
             r = await get_redis()
             await redis_cb.call(lambda: r.set(
-                f"quote:{quote_id}",
+                f"quote:{user_id}:{quote_id}",
                 json.dumps(payload),
                 ex=OrderService.QUOTE_TTL,
             ))
@@ -225,7 +227,7 @@ class OrderService:
         if data.quote_id:
             try:
                 r = await get_redis()
-                raw = await redis_cb.call(lambda: r.get(f"quote:{data.quote_id}"))
+                raw = await redis_cb.call(lambda: r.get(f"quote:{user.id}:{data.quote_id}"))
             except Exception:
                 raise ValidationError("Quote validation unavailable — please retry")
             if not raw:
@@ -236,6 +238,9 @@ class OrderService:
                 raise ValidationError("Quote corrupted — please refresh")
             if quote.get("expires_at", 0) < time.time():
                 raise ValidationError("Quote expired — please refresh")
+            # Bind check: quote must belong to the same user placing the order.
+            if quote.get("user_id") != str(user.id):
+                raise ValidationError("Quote does not belong to this user")
 
         # ── Step 4: Position check for sells ──
 
@@ -671,14 +676,16 @@ class OrderService:
         user: User,
         order_id: str,
     ):
-        # Lock order + wallet together in deterministic order to prevent deadlocks
+        # Lock order + wallet together in deterministic order to prevent deadlocks.
+        # Accept both "pending" and "partial" — partial orders also have
+        # remaining_amount that needs to be released back to the wallet.
         result = await db.execute(
             select(Order, Wallet)
             .join(Wallet, Wallet.user_id == Order.user_id)
             .where(
                 Order.id == order_id,
                 Order.user_id == user.id,
-                Order.status == "pending",
+                Order.status.in_(["pending", "partial"]),
             )
             .with_for_update()
         )
