@@ -74,7 +74,7 @@ class ConnectionManager:
     7. Async dead-socket cleanup — doesn't block active broadcasts
     """
 
-    MAX_CONNECTIONS_PER_IP = 10
+    MAX_CONNECTIONS_PER_IP = 50  # raised from 10 — NAT users share IPs
     MAX_CONNECTIONS_PER_USER = 5
     MAX_SUBSCRIPTIONS_PER_SOCKET = 50  # cap per connection to prevent abuse
     # Slow-client protection: a socket that can't accept a frame within this

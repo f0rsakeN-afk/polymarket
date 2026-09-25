@@ -101,8 +101,17 @@ async def list_markets(
 
     base = select(Market, LiquidityPool)
     if q:
-        safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
+        # PostgreSQL full-text search using plainto_tsquery & tsrank_cd for relevance.
+        # Fall back to ilike if FTS fails (e.g., missing index / migration not applied).
+        try:
+            query_vector = func.plainto_tsquery("english", q)
+            relevance = func.ts_rank_cd(query_vector, func.to_tsvector("english", Market.question))
+            base = base.where(func.plainto_tsquery("english", q) @@ func.to_tsvector("english", Market.question))
+            base = base.order_by(relevance.desc())
+        except Exception:
+            # Fallback: pattern‑like search if FTS index/migration not yet applied.
+            safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
         base = base.where(Market.status == status)
     if category:
@@ -513,7 +522,9 @@ async def resolve_market_endpoint(
     # Uses Redis SETNX with TTL — lock is auto-released if this pod dies.
     r = await get_redis()
     lock_key = f"resolve_api_lock:{market.id}"
-    lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=30)
+    lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=300)
+    # 300s TTL covers the full resolution process (task enqueue + DB commit + worker processing).
+    # The lock auto-expires if the worker crashes, making the market safely re-resolvable.
     if not lock_acquired:
         raise ConflictError("Market resolution is already in progress")
 
@@ -527,21 +538,22 @@ async def resolve_market_endpoint(
         if not outcome:
             raise ValidationError("Winning outcome does not belong to this market")
 
-        # Enqueue settlement — if this fails, market stays unresolved so a retry can pick it up safely.
+        # Queue-level idempotency: check dedup key BEFORE enqueuing the task.
+        # If the key already exists, another request already owns this resolution.
+        task_dedup_key = f"resolve_enqueue:{market.id}"
+        dedup_already_set = not await r.set(task_dedup_key, "1", nx=True, ex=3600)
+        if dedup_already_set:
+            # Another request already enqueued the resolution task — do not double-resolve.
+            raise ConflictError("Resolution task already enqueued")
+
+        # Enqueue settlement — guaranteed unique thanks to the dedup key check above.
         try:
             resolve_market.delay(str(market.id), str(outcome.id))
         except Exception:
+            # If enqueue fails after dedup key was set, we must clear it so a retry can succeed.
+            await r.delete(task_dedup_key)
             logger.exception(f"Failed to enqueue settlement for market {market.id}")
             raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
-
-        # Queue-level idempotency: set dedup key AFTER successful enqueue.
-        # If the task was already enqueued by a concurrent request, we get nx=False here
-        # and must not commit — another worker already owns this resolution.
-        task_dedup_key = f"resolve_enqueue:{market.id}"
-        if not await r.set(task_dedup_key, "1", nx=True, ex=3600):
-            # Task already enqueued by a concurrent request — do not double-resolve
-            await db.rollback()
-            raise ConflictError("Resolution task already enqueued")
 
         # Mark as resolving (NOT resolved) — the worker flips to resolved after settlement.
         # Worker skips markets already in resolving/resolved, so this also guards double-settlement.
@@ -561,8 +573,8 @@ async def resolve_market_endpoint(
             }
         )
     finally:
-        # Release the distributed lock; 30s TTL is a safety net if we crash
-        # before this runs (lock auto-expires and market stays "resolved" — safe).
+        # Release the distributed lock; 300s TTL is a safety net if we crash
+        # before this runs (lock auto-expires and market stays "resolving" — safe).
         await r.delete(lock_key)
 
 

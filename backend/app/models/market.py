@@ -22,6 +22,8 @@ class Market(Base, UUIDMixin, TimestampMixin):
     __table_args__ = (
         CheckConstraint("total_liquidity >= 0", name="ck_markets_liquidity_nonneg"),
         CheckConstraint("total_volume >= 0", name="ck_markets_volume_nonneg"),
+        # Full-text search index on question (GIN index for @@ tsquery operator)
+        Index("ix_markets_question_fts", "question", postgresql_using="gin"),
         Index("ix_markets_status_closes_at", "status", "closes_at"),
     )
 
