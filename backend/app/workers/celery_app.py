@@ -32,6 +32,9 @@ celery_app.conf.update(
     # Declare the DLX so RabbitMQ creates it automatically
     broker_transport_options={
         "master_name": "rabbitmq-master",
+        "visibility_timeout": 7200,  # 2h — must exceed max task duration
+        # (resolve_market lock uses ex=3600; tasks with long-running
+        # settlement need room for retry + completion without re-delivery)
     },
     # Fallback: Redis broker doesn't support DLX natively — this is a no-op there,
     # but docker-compose / production should use RabbitMQ with the dlx arguments above.

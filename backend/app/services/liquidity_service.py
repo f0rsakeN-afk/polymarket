@@ -1,10 +1,13 @@
 import logging
+import secrets
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import NotFoundError, ValidationError
+from app.config import settings
+from app.deps import hash_password
 from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
 from app.models.user import User
@@ -23,6 +26,7 @@ class LiquidityService:
         user: User,
         market_id: str,
         amount: Decimal,
+        slippage_tolerance: Decimal = Decimal("0.05"),  # 5% default slippage tolerance
     ) -> dict:
         market_result = await db.execute(
             select(Market).where(Market.id == market_id).with_for_update()
@@ -54,6 +58,11 @@ class LiquidityService:
                 details={"available": float(available), "requested": float(amount)},
             )
 
+        # Capture pre-operation prices to detect adverse price movement.
+        pre_total = pool.yes_shares + pool.no_shares
+        pre_yes_price = float(pool.yes_shares) / pre_total if pre_total > 0 else 0.5
+        pre_no_price = float(pool.no_shares) / pre_total if pre_total > 0 else 0.5
+
         if pool.lp_token_supply > 0:
             pool_total = pool.yes_shares + pool.no_shares
             lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total if pool_total > 0 else amount * Decimal(2)
@@ -84,6 +93,18 @@ class LiquidityService:
         pool.lp_token_supply += lp_tokens_minted
         market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount
         wallet.balance -= amount
+
+        # Validate slippage: check if prices moved adversely beyond tolerance.
+        post_total = pool.yes_shares + pool.no_shares
+        post_yes_price = float(pool.yes_shares) / post_total if post_total > 0 else 0.5
+        post_no_price = float(pool.no_shares) / post_total if post_total > 0 else 0.5
+        max_price_change = max(abs(post_yes_price - pre_yes_price), abs(post_no_price - pre_no_price))
+        if max_price_change > float(slippage_tolerance):
+            await db.rollback()
+            raise ValidationError(
+                f"Adverse price movement detected: {max_price_change:.2%} exceeds slippage tolerance of {float(slippage_tolerance):.2%}. "
+                "Please try again when prices are more stable."
+            )
 
         tx = Transaction(
             user_id=user.id,
@@ -127,6 +148,7 @@ class LiquidityService:
         user: User,
         market_id: str,
         lp_tokens: Decimal,
+        slippage_tolerance: Decimal = Decimal("0.05"),  # 5% default slippage tolerance
     ) -> dict:
         market = await db.get(Market, market_id)
         if not market:
@@ -139,13 +161,7 @@ class LiquidityService:
         if not pool:
             raise ValidationError("Market has no liquidity pool")
 
-        lp_result = await db.execute(
-            select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id).with_for_update()
-        )
-        lp_share = lp_result.scalar_one_or_none()
-        if not lp_share or lp_share.lp_tokens < lp_tokens:
-            raise ValidationError("Insufficient LP tokens")
-
+        # Standardize lock order: Market → Pool → Wallet → LPShare
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
         )
@@ -153,8 +169,21 @@ class LiquidityService:
         if not wallet:
             raise ValidationError("Wallet not found")
 
+        lp_result = await db.execute(
+            select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id).with_for_update()
+        )
+        lp_share = lp_result.scalar_one_or_none()
+        if not lp_share or lp_share.lp_tokens < lp_tokens:
+            raise ValidationError("Insufficient LP tokens")
+
         if pool.lp_token_supply == 0:
             raise ValidationError("No LP tokens outstanding")
+
+        # Capture pre-operation prices for slippage detection.
+        pre_total = pool.yes_shares + pool.no_shares
+        pre_yes_price = float(pool.yes_shares) / pre_total if pre_total > 0 else 0.5
+        pre_no_price = float(pool.no_shares) / pre_total if pre_total > 0 else 0.5
+
         lp_fraction = lp_tokens / pool.lp_token_supply
         yes_redeemed = pool.yes_shares * lp_fraction
         no_redeemed = pool.no_shares * lp_fraction
@@ -168,6 +197,18 @@ class LiquidityService:
         lp_share.lp_tokens -= lp_tokens
         lp_share.collateral_deposited -= total_redeemed
         wallet.balance += total_redeemed
+
+        # Validate slippage: check if prices moved adversely beyond tolerance.
+        post_total = pool.yes_shares + pool.no_shares
+        post_yes_price = float(pool.yes_shares) / post_total if post_total > 0 else 0.5
+        post_no_price = float(pool.no_shares) / post_total if post_total > 0 else 0.5
+        max_price_change = max(abs(post_yes_price - pre_yes_price), abs(post_no_price - pre_no_price))
+        if max_price_change > float(slippage_tolerance):
+            await db.rollback()
+            raise ValidationError(
+                f"Adverse price movement detected: {max_price_change:.2%} exceeds slippage tolerance of {float(slippage_tolerance):.2%}. "
+                "Please try again when prices are more stable."
+            )
 
         tx = Transaction(
             user_id=user.id,
@@ -221,16 +262,21 @@ class LiquidityService:
         if not pools:
             return {"markets": [], "total_distributed": "0.0"}
 
-        # Get or create system treasury user with row lock to prevent concurrent creation
+        # Get or create system treasury user with row lock to prevent concurrent creation.
+        # System users use a cryptographically random password_hash derived from
+        # the application's JWT secret — they cannot be used for human authentication.
         treasury_result = await db.execute(
             select(User).where(User.is_system.is_(True)).with_for_update().limit(1)
         )
         treasury_user = treasury_result.scalar_one_or_none()
         if not treasury_user:
+            # Generate a non-guessable hash using the application's JWT secret as entropy.
+            # This ensures the system account cannot be brute-forced via login.
+            system_secret = settings.jwt_secret + str(secrets.token_hex(32))
             treasury_user = User(
                 email="treasury@system",
                 username="treasury",
-                password_hash="",
+                password_hash=hash_password(system_secret),
                 is_system=True,
                 is_active=True,
             )

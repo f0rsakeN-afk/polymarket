@@ -181,11 +181,13 @@ class MarketService:
                         pipe.expire(cache_key, 300)
                         await pipe.execute()
                     await redis_cb.call(_write_cache)
-                    await r.delete(lock_key)
                     return prices
-                except Exception:
-                    await r.delete(lock_key)
-                    raise
+                finally:
+                    # Always release lock even if cache write fails or breaker open (H6 fix)
+                    try:
+                        await r.delete(lock_key)
+                    except Exception:
+                        pass
             else:
                 for _ in range(50):
                     await asyncio.sleep(0.1)

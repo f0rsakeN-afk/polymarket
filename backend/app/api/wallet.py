@@ -55,6 +55,14 @@ async def create_deposit(
     if not settings.stripe_secret_key:
         raise NotFoundError("Payment provider not configured")
 
+    # Validate against max deposit limit
+    if settings.max_deposit > 0 and data.amount > settings.max_deposit:
+        raise ValidationError(
+            f"Deposit amount exceeds maximum of {settings.max_deposit} USDC"
+        )
+
+    stripe.api_key = settings.stripe_secret_key
+
     stripe.api_key = settings.stripe_secret_key
 
     # Decimal-safe cents conversion — quantize to 2dp with HALF_UP, then to int
@@ -87,6 +95,12 @@ async def withdraw(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
+
+    # Validate against max withdrawal limit
+    if settings.max_withdrawal > 0 and data.amount > settings.max_withdrawal:
+        raise ValidationError(
+            f"Withdrawal amount exceeds maximum of {settings.max_withdrawal} USDC"
+        )
     result = await WalletService.withdraw(db, user, Decimal(str(data.amount)), data.idempotency_key)
     return success_response(result, message="Withdrawal submitted")
 

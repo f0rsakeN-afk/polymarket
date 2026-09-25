@@ -19,6 +19,15 @@ import logging
 import time
 from collections import defaultdict
 
+# Bound concurrent broadcast tasks to avoid OOM at 5k msg/s (H9 fix)
+_broadcast_sem = asyncio.Semaphore(200)
+
+
+async def _bounded_broadcast(coro):
+    async with _broadcast_sem:
+        return await coro
+
+
 import redis.asyncio as redis
 from fastapi import WebSocket
 
@@ -537,11 +546,11 @@ class RedisPubSub:
                     if len(parts) >= 2:
                         prefix, target = parts[0], parts[1]
                         if prefix == "market":
-                            asyncio.create_task(manager.broadcast_to_market(target, data))
+                            asyncio.create_task(_bounded_broadcast(manager.broadcast_to_market(target, data)))
                         elif prefix == "user":
-                            asyncio.create_task(user_manager.broadcast_to_user(target, data))
+                            asyncio.create_task(_bounded_broadcast(user_manager.broadcast_to_user(target, data)))
                     elif channel == "global:trades":
-                        asyncio.create_task(manager.broadcast_global(data))
+                        asyncio.create_task(_bounded_broadcast(manager.broadcast_global(data)))
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON from Redis: {message['data'][:100]}")
                 except Exception:

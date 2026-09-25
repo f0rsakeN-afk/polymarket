@@ -85,11 +85,16 @@ async def list_markets(
     category: str | None = None,
     status: str | None = None,
     sort: str = Query("volume", pattern="^(volume|newest|closing_soon|liquidity)$"),
+    cursor: str | None = Query(None, description="Cursor for stable pagination: base64 encoding of (created_at, id). Overrides page."),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
-    cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}:{page}:{page_size}"
+    # Cache key no longer includes page/page_size when cursor is used
+    if cursor:
+        cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}"
+    else:
+        cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}:{page}:{page_size}"
     cached = await cache_get_market_list(cache_key)
     if cached is not None:
         return MarketListResponse(**cached)
@@ -103,6 +108,7 @@ async def list_markets(
     if category:
         base = base.where(Market.category == category)
 
+    # Build order by sort parameter
     if sort == "closing_soon":
         base = base.where(Market.status != "resolved")
         order = Market.closes_at.asc().nullslast()
@@ -113,12 +119,34 @@ async def list_markets(
     else:
         order = Market.total_volume.desc()
 
-    query = (
-        base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
-        .order_by(order)
-        .offset((page - 1) * page_size)
-        .limit(page_size + 1)
-    )
+    # Keyset (cursor-based) pagination: uses (created_at, id) as the tiebreak pair.
+    # This avoids the performance degradation of OFFSET at large page numbers.
+    if cursor:
+        import base64
+        try:
+            raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+            ts_str, market_id = raw.rsplit("|", 1)
+            cursor_ts = datetime.fromisoformat(ts_str)
+            base = base.where(Market.created_at < cursor_ts)
+        except Exception:
+            raise ValidationError("Invalid cursor")
+        query = (
+            base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
+            .order_by(order)
+            .limit(page_size + 1)
+        )
+    else:
+        # Offset-based pagination with safety limit — avoid > 1000 row skip
+        if (page - 1) * page_size > 1000:
+            raise ValidationError(
+                "Pagination offset exceeds 1000. Use cursor pagination instead."
+            )
+        query = (
+            base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
+            .order_by(order)
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
+        )
 
     result = await db.execute(query)
     rows = result.all()
@@ -244,8 +272,8 @@ async def create_market(
     data: CreateMarketRequest, request: Request, db: AsyncSession = Depends(get_db)
 ):
     user = await get_current_user(request, db)
-    if not user.is_admin:
-        raise ForbiddenError("Only admins can create markets")
+    if not user.is_admin and not user.is_email_verified:
+        raise ForbiddenError("Only admins or email-verified users can create markets")
 
     if data.closes_at <= datetime.now(UTC):
         raise ValidationError("closes_at must be in the future")
@@ -371,7 +399,7 @@ async def get_price_history(
         filters.append(PriceHistory.snapshot_at <= datetime.fromisoformat(to_date))
 
     raw = await db.execute(
-        select(PriceHistory).where(*filters).order_by(PriceHistory.snapshot_at.asc())
+        select(PriceHistory).where(*filters).order_by(PriceHistory.snapshot_at.asc()).limit(5000)
     )
     rows = raw.scalars().all()
 

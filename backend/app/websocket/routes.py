@@ -31,7 +31,9 @@ def _get_real_client_ip(websocket: WebSocket) -> str:
 
 
 async def verify_ws_token(token: str | None) -> str | None:
-    """Verify WS token and return user_id or None. Token may be None (optional auth)."""
+    """Verify WS token and return user_id. Authentication is required —
+    returns None only when no token is provided at all (which means
+    the connection must be rejected)."""
     if not token:
         return None
     try:
@@ -69,11 +71,15 @@ async def market_websocket(websocket: WebSocket, market_id: str):
       - {type: "ping"}                         — server replies {type: "pong"}
 
     The server enforces MAX_SUBSCRIPTIONS_PER_SOCKET (50) per connection.
+
+    Authentication is required — unauthenticated connections are rejected.
     """
     client_ip = _get_real_client_ip(websocket)
     token = _get_token_from_request(websocket)
     user_id = await verify_ws_token(token)
-    # user_id may be None — market data is public; only require auth for user-specific features
+    if not user_id:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
 
     accepted = await manager.connect(websocket, market_id, client_ip=client_ip, user_id=user_id)
     if not accepted:
@@ -128,10 +134,17 @@ async def market_websocket(websocket: WebSocket, market_id: str):
 
 @router.websocket("/ws/trades")
 async def global_trades_websocket(websocket: WebSocket):
-    """Global trades feed — streams all new trades across the platform."""
+    """Global trades feed — streams all new trades across the platform.
+
+    Authentication is required.
+    """
     client_ip = _get_real_client_ip(websocket)
     token = _get_token_from_request(websocket)
     user_id = await verify_ws_token(token)
+    if not user_id:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
     accepted = await manager.connect(
         websocket, "__global_trades__", client_ip=client_ip, user_id=user_id
     )

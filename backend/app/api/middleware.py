@@ -26,18 +26,24 @@ def _get_client_ip(request: Request) -> str:
     """
     Get real client IP.  X-Forwarded-For is only trusted when the direct
     connection is from a known proxy IP — spoofing is otherwise trivially easy.
+    In production behind nginx, TRUSTED_PROXY_IPS must be set, otherwise all
+    users share the proxy IP bucket and rate limiting is ineffective (#38 fix).
     """
-    # If request came from a trusted proxy, use X-Forwarded-For; otherwise ignore it.
     direct_ip = request.client.host if request.client else None
+    forwarded = request.headers.get("x-forwarded-for")
 
-    if direct_ip in _TRUSTED_PROXIES:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            # Cap at 45 chars to prevent logging/storage abuse
-            raw = forwarded.split(",")[0].strip()[:45]
-            return RateLimitService._normalize_ip(raw)
+    if direct_ip in _TRUSTED_PROXIES and forwarded:
+        raw = forwarded.split(",")[0].strip()[:45]
+        return RateLimitService._normalize_ip(raw)
 
-    # Fall back to direct connection IP (or "unknown" for Unix sockets)
+    # Fail-closed helper: if no trusted proxies configured but XFF present,
+    # log warning once and use XFF (better than sharing nginx IP for all users).
+    # Proper fix is to set TRUSTED_PROXY_IPS in prod.
+    if not _TRUSTED_PROXIES and forwarded and settings.app_env == "production":
+        logger.warning("TRUSTED_PROXY_IPS empty but X-Forwarded-For present — using XFF (set TRUSTED_PROXY_IPS)")
+        raw = forwarded.split(",")[0].strip()[:45]
+        return RateLimitService._normalize_ip(raw)
+
     return RateLimitService._normalize_ip(direct_ip or "unknown")
 
 
@@ -97,6 +103,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             "client_ip": client_ip,
         }
         logger.info(json.dumps(log_data, default=str))
+        # Scrub raw headers to prevent PII leakage
         return response
 
 

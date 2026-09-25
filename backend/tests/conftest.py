@@ -1,11 +1,13 @@
 """
 Production-grade pytest configuration.
 Set env vars BEFORE any app imports so settings singletons get correct values.
-Each test gets a completely fresh database (tables recreated).
+Each test gets a completely fresh database (TRUNCATE CASCADE between tests).
 """
 # ruff: noqa: E402 -- imports intentionally trail env setup (see below).
 import os
 import uuid
+
+from sqlalchemy import text
 
 # MUST be before any app imports.
 # Credentials follow the local stack (.env): POSTGRES_USER/PASSWORD/PORT and
@@ -58,8 +60,7 @@ db_module._get_replica_engine.cache_clear()
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def _fresh_db():
     async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda sa_conn: sa_conn.execute(text("TRUNCATE TABLE users, wallets, transactions, markets, outcomes, liquidity_pools, lp_shares, positions, trades, orders, referrals, sessions, refresh_tokens, comments, price_history, notifications, alerts, auth_audit_events CASCADE")))
     yield
 
 
