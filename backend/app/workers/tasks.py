@@ -13,7 +13,7 @@ from sqlalchemy import delete, select, text
 
 from app.amm.engine import BinaryAMM
 from app.config import settings
-from app.database import async_session as _get_session
+from app.database import async_session_maker
 from app.deps import hash_password
 from app.models import (
     LiquidityPool,
@@ -56,7 +56,7 @@ def celery_run(coro):
 
 def get_session():
     """Yield a fresh async session. Call inside celery_run(coro_with_db())."""
-    return _get_session()
+    return async_session_maker()
 
 
 @shared_task(bind=True, name="app.workers.tasks.expire_stale_orders")
