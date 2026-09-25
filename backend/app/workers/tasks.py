@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import secrets
 import threading
 import time
 import uuid
@@ -13,6 +14,7 @@ from sqlalchemy import delete, select, text
 from app.amm.engine import BinaryAMM
 from app.config import settings
 from app.database import async_session as _get_session
+from app.deps import hash_password
 from app.models import (
     LiquidityPool,
     LPShare,
@@ -729,16 +731,19 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 )
                 pool = pool_result.scalar_one_or_none()
 
-                # Get or create system treasury user with row lock to prevent concurrent creation
+                # Get or create system treasury user with row lock to prevent concurrent creation.
+                # System users use a cryptographically random password_hash derived from
+                # the application's JWT secret — they cannot be used for human authentication.
                 treasury_result = await db.execute(
                     select(User).where(User.is_system).with_for_update().limit(1)
                 )
                 treasury_user = treasury_result.scalar_one_or_none()
                 if not treasury_user:
+                    system_secret = settings.jwt_secret + str(secrets.token_hex(32))
                     treasury_user = User(
                         email="treasury@system",
                         username="treasury",
-                        password_hash="",
+                        password_hash=hash_password(system_secret),
                         is_system=True,
                         is_active=True,
                     )

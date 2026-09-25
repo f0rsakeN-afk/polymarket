@@ -1,10 +1,13 @@
 import logging
+import secrets
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import NotFoundError, ValidationError
+from app.config import settings
+from app.deps import hash_password
 from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
 from app.models.user import User
@@ -259,16 +262,21 @@ class LiquidityService:
         if not pools:
             return {"markets": [], "total_distributed": "0.0"}
 
-        # Get or create system treasury user with row lock to prevent concurrent creation
+        # Get or create system treasury user with row lock to prevent concurrent creation.
+        # System users use a cryptographically random password_hash derived from
+        # the application's JWT secret — they cannot be used for human authentication.
         treasury_result = await db.execute(
             select(User).where(User.is_system.is_(True)).with_for_update().limit(1)
         )
         treasury_user = treasury_result.scalar_one_or_none()
         if not treasury_user:
+            # Generate a non-guessable hash using the application's JWT secret as entropy.
+            # This ensures the system account cannot be brute-forced via login.
+            system_secret = settings.jwt_secret + str(secrets.token_hex(32))
             treasury_user = User(
                 email="treasury@system",
                 username="treasury",
-                password_hash="",
+                password_hash=hash_password(system_secret),
                 is_system=True,
                 is_active=True,
             )
