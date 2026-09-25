@@ -731,7 +731,7 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
                 # NOTE: distinct from the API enqueue dedup key (resolve_enqueue:{id}).
                 # The worker owns this lock; the endpoint must not pre-set it.
                 lock_key = f"resolve_lock:{market_id}"
-                acquired = await r.set(lock_key, self.request.id, nx=True, ex=3600)
+                acquired = await r.set(lock_key, self.request.id, nx=True, ex=7200)
                 if not acquired:
                     return f"Market {market_id} resolution task already running"
 
