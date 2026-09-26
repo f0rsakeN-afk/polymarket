@@ -1,10 +1,6 @@
-import hashlib
-import hmac
-import json
 import logging
-import time
-from decimal import Decimal
 
+import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -22,37 +18,27 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 STRIPE_TOLERANCE = 300  # 5 minutes
 
 
-async def verify_stripe_signature(payload: bytes, sig: str, secret: str) -> bool:
-    """Verify Stripe webhook signature using HMAC."""
+async def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) -> stripe.Event:
+    """Verify Stripe webhook signature using stripe.Webhook.construct_event.
+
+    Returns the parsed Event object on success, raises ValidationError on failure.
+    """
     if not secret:
         raise ValueError("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
-
     try:
-        # Parse signature header: "t=timestamp,v1=signature"
-        parts = dict(p.split("=", 1) for p in sig.split(","))
-        timestamp = parts.get("t", "")
-        v1_signature = parts.get("v1", "")
-
-        if not timestamp or not v1_signature:
-            return False
-
-        # Check timestamp is within tolerance
-        if abs(time.time() - int(timestamp)) > STRIPE_TOLERANCE:
-            logger.warning(f"Stripe webhook timestamp outside tolerance: {timestamp}")
-            return False
-
-        # Compute expected signature
-        signed_payload = f"{timestamp}.{payload.decode()}"
-        expected = hmac.new(
-            secret.encode(),
-            signed_payload.encode(),
-            hashlib.sha256,
-        ).hexdigest()
-
-        return hmac.compare_digest(expected, v1_signature)
+        event = stripe.Webhook.construct_event(
+            payload,
+            sig_header,
+            secret,
+            tolerance=STRIPE_TOLERANCE,
+        )
+        return event
+    except stripe.SignatureVerificationError as e:
+        logger.warning(f"Stripe signature verification failed: {e}")
+        raise ValidationError("Invalid Stripe signature")
     except Exception as e:
-        logger.error(f"Stripe signature verification error: {e}")
-        return False
+        logger.error(f"Stripe webhook parsing error: {e}")
+        raise ValidationError("Invalid webhook payload")
 
 
 @router.post("/stripe", summary="Stripe webhook", description="Handle Stripe webhook events. Currently processes payment_intent.succeeded to credit user wallets idempotently.")
@@ -63,14 +49,14 @@ async def stripe_webhook(
 ):
     payload = await request.body()
 
-    if not await verify_stripe_signature(payload, stripe_signature or "", settings.stripe_webhook_secret):
+    try:
+        event = await verify_stripe_signature(
+            payload, stripe_signature or "", settings.stripe_webhook_secret
+        )
+    except ValidationError:
         raise HTTPException(status_code=401, detail="Invalid Stripe signature")
 
-    try:
-        event = json.loads(payload)
-    except json.JSONDecodeError:
-        raise ValidationError("Invalid JSON payload")
-
+    # stripe.Event is a dict-like object
     event_type = event.get("type", "")
     event_id = event.get("id", "")
     data = event.get("data", {}).get("object", {})

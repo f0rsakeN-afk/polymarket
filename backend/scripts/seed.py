@@ -44,7 +44,7 @@ TEST_USERS = [
     {"email": "jack@test.com", "username": "jack_degen"},
 ]
 
-TEST_PASSWORD = "testpass123"
+TEST_PASSWORD = os.environ.get("SEED_PASSWORD", "testpass123")
 
 MARKETS_DATA = [
     # Politics
