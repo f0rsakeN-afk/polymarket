@@ -28,7 +28,7 @@ from locust.contrib.fasthttp import FastHttpUser
 
 # ── Shared test user credentials ────────────────────────────────────────────────
 _SHARED_EMAIL = "loadtest@example.com"
-_SHARED_PASSWORD = "TstPsX79!bQ"
+_SHARED_PASSWORD = os.environ.get("LOCUST_PASSWORD", "TstPsX79!bQ")
 _cached_token = None
 _cached_user_id = None
 _auth_lock = None  # threading.Lock set lazily
