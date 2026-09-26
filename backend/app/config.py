@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     secret_key: str = "change-me-in-production"
     jwt_access_expire: int = 900
-    jwt_refresh_expire: int = 86400
+    jwt_refresh_expire: int = 2592000  # 30 days — standard refresh token TTL
 
     # Stripe
     stripe_secret_key: str = ""

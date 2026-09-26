@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -19,6 +20,14 @@ _TRUSTED_PROXIES: list[str] = [
     ip.strip()
     for ip in os.environ.get("TRUSTED_PROXY_IPS", "").split(",")
     if ip.strip()
+]
+
+# In production, only allow requests from trusted proxy IPs or localhost for dev.
+# Reject all other origins to prevent CORS-based attacks.
+_PRODUCTION_ALLOWED_ORIGINS: list[str] = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
 ]
 
 
@@ -65,10 +74,11 @@ def _get_auth_limit_type(path: str) -> LimitType:
 # Security headers applied to every response
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",          # Prevent MIME sniffing
-    "X-Frame-Options": "DENY",                     # Disable iframe embedding
-    "X-XSS-Protection": "1; mode=block",           # XSS filter (legacy but still sent)
+    "X-Frame-Options": "DENY",                      # Disable iframe embedding
+    "X-XSS-Protection": "1; mode=block",            # XSS filter (legacy but still sent)
     "Referrer-Policy": "strict-origin-when-cross-origin",  # Don't leak referrer cross-origin
     "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",  # Disable dangerous APIs
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'none'",  # Prevent XSS and data injection
 }
 
 
@@ -111,10 +121,35 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, enabled: bool = True):
         super().__init__(app)
         self.enabled = enabled
+        # Build allowed origins set once at init
+        self._allowed_origins = set(
+            o.strip().lower() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+        )
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if not self.enabled:
             return await call_next(request)
+
+        # ── CORS origin validation in production ──
+        # Reject requests from untrusted origins to prevent CORS attacks.
+        # localhost/127.0.0.1 are always allowed for local development.
+        origin = request.headers.get("origin")
+        if origin and settings.app_env == "production":
+            is_allowed = False
+            if not self._allowed_origins:
+                # No ALLOWED_ORIGINS configured — deny all cross-origin requests
+                is_allowed = False
+            elif "*" in self._allowed_origins:
+                is_allowed = True
+            else:
+                is_allowed = origin.lower() in self._allowed_origins
+            if not is_allowed and not origin.startswith("http://localhost") and not origin.startswith("http://127.0.0.1"):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=403,
+                    content={"error_code": "ORIGIN_NOT_ALLOWED", "message": "CORS origin not permitted in production"},
+                    headers={**SECURITY_HEADERS, **{"Access-Control-Allow-Origin": "none"}},
+                )
 
         path = request.url.path
         method = request.method
