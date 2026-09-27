@@ -117,9 +117,17 @@ async def list_orders(
     if market_id:
         filters.append(Order.market_id == market_id)
     if date_from:
-        filters.append(Order.created_at >= datetime.fromisoformat(date_from))
+        try:
+            date_from_parsed = datetime.fromisoformat(date_from)
+        except ValueError:
+            raise ValidationError(f"Invalid date_from format: {date_from}")
+        filters.append(Order.created_at >= date_from_parsed)
     if date_to:
-        filters.append(Order.created_at <= datetime.fromisoformat(date_to))
+        try:
+            date_to_parsed = datetime.fromisoformat(date_to)
+        except ValueError:
+            raise ValidationError(f"Invalid date_to format: {date_to}")
+        filters.append(Order.created_at <= date_to_parsed)
 
     count_q = select(func.count()).select_from(Order).where(*filters)
     total_result = await db.execute(count_q)

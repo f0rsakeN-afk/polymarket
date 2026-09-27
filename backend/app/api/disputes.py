@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -197,8 +198,15 @@ async def adjudicate_dispute(
 
             # Queue settlement BEFORE commit — if broker is down we fail before
             # the market is marked resolved in the DB, preventing orphaned resolution
+            # Propagate X-Request-ID for tracing across service boundaries.
             try:
-                resolve_market.delay(str(market.id), str(market.proposed_outcome_id))
+                request_id = getattr(request, "state", None)
+                request_id = getattr(request_id, "request_id", None) or str(uuid.uuid4())
+                resolve_market.apply_async(
+                    args=(str(market.id), str(market.proposed_outcome_id)),
+                    task_id=request_id,
+                    priority=5,
+                )
             except Exception as e:
                 logger.error(f"Failed to enqueue settlement task for market {market.id}: {e}")
                 raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
