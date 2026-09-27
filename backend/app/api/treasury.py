@@ -18,22 +18,23 @@ router = APIRouter(prefix="/treasury", tags=["treasury"])
 
 
 async def _get_or_create_treasury(db: AsyncSession) -> Treasury:
-    result = await db.execute(select(Treasury).with_for_update().limit(1))
+    """Get or create the singleton treasury row.
+
+    Uses INSERT ... ON CONFLICT DO NOTHING to eliminate the race condition
+    between SELECT and INSERT that existed in the previous implementation.
+    """
+    from sqlalchemy import insert
+
+    # Try INSERT directly — if singleton row already exists, conflict is ignored.
+    await db.execute(
+        insert(Treasury).values(singleton=True).on_conflict_do_nothing(index_elements=["singleton"])
+    )
+    # Always re-read: either we just inserted it or it already existed.
+    result = await db.execute(select(Treasury).limit(1))
     treasury = result.scalar_one_or_none()
     if not treasury:
-        treasury = Treasury()
-        db.add(treasury)
-        try:
-            await db.flush()
-        except Exception:
-            # Race: another request inserted treasury between our SELECT and INSERT.
-            # Roll back and re-fetch.
-            await db.rollback()
-            result = await db.execute(select(Treasury).limit(1))
-            treasury = result.scalar_one_or_none()
-            if not treasury:
-                raise  # truly gone — propagate
-        await db.refresh(treasury)
+        raise RuntimeError("Failed to create treasury singleton")
+    await db.refresh(treasury)
     return treasury
 
 
