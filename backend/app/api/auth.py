@@ -139,23 +139,27 @@ def _get_client_ip(request: Request) -> str:
     connection is from a known proxy IP -- spoofing is otherwise trivially easy.
     In production behind nginx, TRUSTED_PROXY_IPS must be set, otherwise all
     users share the proxy IP bucket and rate limiting is ineffective.
+    Uses the same TRUSTED_PROXY_IPS logic as app/api/middleware.py.
     """
-    # If request came from a trusted proxy, use X-Forwarded-For; otherwise ignore it.
     direct_ip = request.client.host if request.client else None
+    forwarded = request.headers.get("x-forwarded-for")
 
-    trusted_proxies = os.environ.get("TRUSTED_PROXY_IPS", "").split(",")
-    trusted_proxies = [ip.strip() for ip in trusted_proxies if ip.strip()]
+    # Read TRUSTED_PROXY_IPS once — consistent with middleware.py
+    trusted_proxies: list[str] = [
+        ip.strip() for ip in os.environ.get("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
+    ]
 
-    if direct_ip in trusted_proxies:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            # Cap at 45 chars to prevent logging/storage abuse
-            raw = forwarded.split(",")[0].strip()[:45]
-            from app.services.rate_limit_service import RateLimitService
-            return RateLimitService._normalize_ip(raw)
+    if direct_ip in trusted_proxies and forwarded:
+        raw = forwarded.split(",")[0].strip()[:45]
+        return RateLimitService._normalize_ip(raw)
 
-    # Fall back to direct connection IP (or "unknown" for Unix sockets)
-    from app.services.rate_limit_service import RateLimitService
+    # If no trusted proxies configured but XFF present in production,
+    # log warning and use XFF (proper fix: set TRUSTED_PROXY_IPS)
+    if not trusted_proxies and forwarded and settings.app_env == "production":
+        logger.warning("TRUSTED_PROXY_IPS empty but X-Forwarded-For present")
+        raw = forwarded.split(",")[0].strip()[:45]
+        return RateLimitService._normalize_ip(raw)
+
     return RateLimitService._normalize_ip(direct_ip or "unknown")
 
 

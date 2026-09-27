@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -547,8 +548,14 @@ async def resolve_market_endpoint(
             raise ConflictError("Resolution task already enqueued")
 
         # Enqueue settlement — guaranteed unique thanks to the dedup key check above.
+        # Propagate X-Request-ID for tracing across service boundaries.
         try:
-            resolve_market.delay(str(market.id), str(outcome.id))
+            request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+            resolve_market.apply_async(
+                args=(str(market.id), str(outcome.id)),
+                task_id=request_id,
+                priority=5,
+            )
         except Exception:
             # If enqueue fails after dedup key was set, we must clear it so a retry can succeed.
             await r.delete(task_dedup_key)
