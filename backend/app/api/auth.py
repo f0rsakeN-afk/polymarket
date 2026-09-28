@@ -254,14 +254,24 @@ async def _blacklist_access_token(request: Request):
 
 @router.post("/register", summary="Register")
 async def register(data: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    ip = _get_client_ip(request)
+
     if len(data.username) < 3:
+        await RateLimitService.record_failure(data.email, ip)
         raise ValidationError("Username must be at least 3 characters")
 
     strong, reason = PasswordStrengthService.check(data.password)
     if not strong:
+        await RateLimitService.record_failure(data.email, ip)
         raise ValidationError(reason)
 
-    ip = _get_client_ip(request)
+    # ── Rate limiting for registration ──
+    rl_result, is_slowed = await RateLimitService.check_with_friction(data.email, ip)
+    if is_slowed and rl_result.retry_after:
+        raise HTTPException(status_code=429, detail="Too many registration attempts. Slow down.", headers={"Retry-After": str(int(rl_result.retry_after))})
+    if not rl_result.allowed:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
+
     ua = request.headers.get("user-agent")
 
     # Check email — if verified, tell them to login; if not, resend code silently
@@ -364,6 +374,7 @@ async def resend_verification(data: ResendVerificationRequest, db: AsyncSession 
 async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
     strong, reason = PasswordStrengthService.check(data.password)
     if not strong:
+        await RateLimitService.record_failure(data.email, ip)
         raise ValidationError(reason)
 
     user = await get_current_user(request, db)
