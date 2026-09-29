@@ -14,13 +14,16 @@ logger = logging.getLogger("polymarket")
 class MarketService:
 
     @staticmethod
-    def compute_prices(pool: LiquidityPool | None) -> tuple[float, float]:
+    def compute_prices(pool: LiquidityPool | None) -> tuple[Decimal, Decimal]:
         if pool is None:
-            return 0.5, 0.5
+            return Decimal("0.5"), Decimal("0.5")
         total = pool.yes_shares + pool.no_shares
         if total == 0:
-            return 0.5, 0.5
-        return float(pool.yes_shares / total), float(pool.no_shares / total)
+            return Decimal("0.5"), Decimal("0.5")
+        # Use Decimal division to preserve precision instead of float()
+        yes_price = pool.yes_shares / total
+        no_price = pool.no_shares / total
+        return (yes_price, no_price)
 
     @staticmethod
     def pool_price(pool: LiquidityPool) -> Decimal:

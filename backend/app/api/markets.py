@@ -51,8 +51,8 @@ router = APIRouter(prefix="/markets", tags=["markets"])
 
 def market_to_response(
     market: Market,
-    yes_price: float = 0.5,
-    no_price: float = 0.5,
+    yes_price: Decimal = Decimal("0.5"),
+    no_price: Decimal = Decimal("0.5"),
     outcomes: list | None = None,
 ) -> MarketResponse:
     resp = MarketResponse(
@@ -107,7 +107,11 @@ async def list_markets(
         try:
             query_vector = func.plainto_tsquery("english", q)
             relevance = func.ts_rank_cd(query_vector, func.to_tsvector("english", Market.question))
-            base = base.where(func.plainto_tsquery("english", q) @@ func.to_tsvector("english", Market.question))
+            base = base.where(
+                func.plainto_tsquery("english", q).op("@@")(
+                    func.to_tsvector("english", Market.question)
+                )
+            )
             base = base.order_by(relevance.desc())
         except Exception:
             # Fallback: pattern‑like search if FTS index/migration not yet applied.
