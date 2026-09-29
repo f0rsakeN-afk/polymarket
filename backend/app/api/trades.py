@@ -53,10 +53,13 @@ async def list_trades(
     cursor: str | None = Query(None, description="Opaque cursor from a previous response for stable pagination. Overrides page."),
     db: AsyncSession = Depends(get_db_replica),
 ):
-    # Enforce keyset pagination when offset would exceed 1000
-    use_cursor = cursor is not None or (page - 1) * page_size > 1000
-    if not use_cursor and (page - 1) * page_size > 1000:
+    # Enforce keyset pagination when offset would exceed 1000.
+    # Previously the check was dead code (use_cursor was already True when
+    # offset > 1000), so deep offsets silently returned the first page.
+    offset = (page - 1) * page_size
+    if cursor is None and offset > 1000:
         raise ValidationError("Pagination offset exceeds 1000. Use cursor pagination instead.")
+    use_cursor = cursor is not None
     query = (
         select(Trade, Market.slug, Market.question, User.username)
         .join(Market, Trade.market_id == Market.id)

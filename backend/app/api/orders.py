@@ -96,7 +96,7 @@ async def get_order(order_id: str, request: Request, db: AsyncSession = Depends(
 @router.get("/", summary="List orders")
 async def list_orders(
     request: Request,
-    page: int = Query(1, ge=1),
+    cursor: str | None = Query(None, description="Cursor for keyset pagination — order created_at ISO string"),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     side: str | None = None,
@@ -129,10 +129,20 @@ async def list_orders(
             raise ValidationError(f"Invalid date_to format: {date_to}")
         filters.append(Order.created_at <= date_to_parsed)
 
+    # Keyset pagination: if cursor provided, filter by created_at < cursor_created_at
+    # and limit to page_size + 1 to detect if there's a next page
+    if cursor:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+            filters.append(Order.created_at < cursor_dt)
+        except ValueError:
+            raise ValidationError(f"Invalid cursor format: {cursor}")
+
     count_q = select(func.count()).select_from(Order).where(*filters)
     total_result = await db.execute(count_q)
     total = total_result.scalar() or 0
 
+    # Fetch page_size + 1 to detect next page
     result = await db.execute(
         select(Order, Outcome, Market)
         .where(
@@ -141,10 +151,13 @@ async def list_orders(
             Order.market_id == Market.id,
         )
         .order_by(Order.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        .limit(page_size + 1)
     )
     rows = result.all()
+    has_more = len(rows) > page_size  # fetched page_size + 1 rows
+    rows = rows[:page_size]
+    # Next cursor = created_at of last row (ISO format)
+    next_cursor = rows[-1][0].created_at.isoformat() if has_more and rows else None
     orders = [
         {
             "id": str(order.id),
@@ -169,7 +182,7 @@ async def list_orders(
     return success_response({
         "orders": orders,
         "total": total,
-        "page": page,
         "page_size": page_size,
-        "has_more": (page * page_size) < total,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
     })
