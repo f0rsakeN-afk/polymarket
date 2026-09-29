@@ -43,6 +43,8 @@ class LiquidityService:
         pool = pool_result.scalar_one_or_none()
         if not pool:
             raise ValidationError("Market has no liquidity pool")
+        if market.status != "active":
+            raise ValidationError("Market is not active for liquidity removal")
 
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -54,8 +56,8 @@ class LiquidityService:
         available = wallet.balance - wallet.locked_balance
         if amount > available:
             raise ValidationError(
-                f"Insufficient balance: available={float(available)}, requested={float(amount)}",
-                details={"available": float(available), "requested": float(amount)},
+                f"Insufficient balance: available={available}, requested={amount}",
+                details={"available": str(available), "requested": str(amount)},
             )
 
         # Capture pre-operation prices to detect adverse price movement.
@@ -160,6 +162,8 @@ class LiquidityService:
         pool = pool_result.scalar_one_or_none()
         if not pool:
             raise ValidationError("Market has no liquidity pool")
+        if market.status != "active":
+            raise ValidationError("Market is not active for liquidity removal")
 
         # Standardize lock order: Market → Pool → Wallet → LPShare
         wallet_result = await db.execute(
