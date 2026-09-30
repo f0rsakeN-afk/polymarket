@@ -43,7 +43,11 @@ logger = logging.getLogger("polymarket")
 @dataclass
 class OrderResult:
     order_id: str
-    status: str
+    status: str  # 'pending' | 'partial' | 'filled' | 'cancelled' | 'expired'
+    #            # or 'duplicate' — returned when a client_order_id that was
+    #            # already placed is re-submitted (idempotency hit). The
+    #            # duplicate result references the EXISTING order; no new row
+    #            # is written to the orders table for it.
     side: str
     outcome: str
     shares: Decimal

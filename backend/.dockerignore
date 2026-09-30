@@ -45,3 +45,12 @@ docker-compose*
 # Tests / scripts not needed at runtime
 tests/
 e2e_api_test.py
+pytest.ini
+pyrightconfig.json
+
+# Dev-only tooling / ops artifacts
+scripts/
+deploy/
+docs/
+.github/
+*.sh

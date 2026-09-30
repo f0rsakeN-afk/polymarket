@@ -10,6 +10,8 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    func,
+    literal_column,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -19,16 +21,6 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class Market(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "markets"
-    __table_args__ = (
-        CheckConstraint("total_liquidity >= 0", name="ck_markets_liquidity_nonneg"),
-        CheckConstraint("total_volume >= 0", name="ck_markets_volume_nonneg"),
-    )
-    # Full-text search index on question (GIN index for @@ tsquery operator)
-    # Defined separately to avoid overwriting CheckConstraint entries.
-    __table_args__ += (
-        Index("ix_markets_question_fts", "question", postgresql_using="gin"),
-        Index("ix_markets_status_closes_at", "status", "closes_at"),
-    )
 
     slug = Column(String(255), unique=True, nullable=False, index=True)
     question = Column(String(1000), nullable=False)
@@ -72,6 +64,25 @@ class Market(Base, UUIDMixin, TimestampMixin):
     faqs = relationship("MarketFAQ", back_populates="market", cascade="all, delete-orphan")
     disputes = relationship("Dispute", back_populates="market", cascade="all, delete-orphan")
     flags = relationship("MarketFlag", back_populates="market", cascade="all, delete-orphan")
+
+    # Constraints and indexes — declared after the columns so the full-text
+    # expression index can reference `question` directly.
+    __table_args__ = (
+        CheckConstraint("total_liquidity >= 0", name="ck_markets_liquidity_nonneg"),
+        CheckConstraint("total_volume >= 0", name="ck_markets_volume_nonneg"),
+        Index("ix_markets_status_closes_at", "status", "closes_at"),
+        # Full-text search index backing `list_markets`:
+        #     plainto_tsquery('english', q) @@ to_tsvector('english', question)
+        # PostgreSQL has no default GIN opclass for varchar/text, so a plain
+        # GIN index on `question` cannot be created — the index must be on the
+        # exact same to_tsvector() expression the query uses ('english' as a
+        # literal, not a bind param, so the planner can match it).
+        Index(
+            "ix_markets_question_fts",
+            func.to_tsvector(literal_column("'english'"), question),
+            postgresql_using="gin",
+        ),
+    )
 
 
 class Outcome(Base, UUIDMixin, TimestampMixin):
