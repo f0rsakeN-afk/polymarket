@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import (
@@ -103,18 +103,18 @@ async def list_markets(
     base = select(Market, LiquidityPool)
     if q:
         # PostgreSQL full-text search using plainto_tsquery & tsrank_cd for relevance.
-        # Fall back to ilike if FTS fails (e.g., missing index / migration not applied).
+        # The to_tsvector('english', question) expression must match the
+        # ix_markets_question_fts GIN expression index exactly (literal config,
+        # not a bind param) so the planner can use it.
+        # Fall back to ilike if FTS fails at execution time.
         try:
+            fts_vector = func.to_tsvector(literal_column("'english'"), Market.question)
             query_vector = func.plainto_tsquery("english", q)
-            relevance = func.ts_rank_cd(query_vector, func.to_tsvector("english", Market.question))
-            base = base.where(
-                func.plainto_tsquery("english", q).op("@@")(
-                    func.to_tsvector("english", Market.question)
-                )
-            )
+            relevance = func.ts_rank_cd(query_vector, fts_vector)
+            base = base.where(func.plainto_tsquery("english", q).op("@@")(fts_vector))
             base = base.order_by(relevance.desc())
         except Exception:
-            # Fallback: pattern‑like search if FTS index/migration not yet applied.
+            # Fallback: pattern‑like search if FTS is unavailable.
             safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
@@ -174,7 +174,9 @@ async def list_markets(
     # Batched price fetch: one Redis pipeline + one SELECT for all misses.
     # (Never N sequential per-market lookups — that fanned out DB sessions
     # and stalled cold list pages.)
-    price_map = await MarketService.get_market_prices_batch([str(m.id) for m in page_markets])
+    price_map = await MarketService.get_market_prices_batch(
+        [str(m.id) for m in page_markets], db=db,
+    )
 
     market_responses = []
     for i, (market, pool) in enumerate(rows):
@@ -239,7 +241,7 @@ async def get_market(slug: str, db: AsyncSession = Depends(get_db_replica)):
     if cached is not None:
         return success_response(cached)
 
-    yes_price, no_price = await MarketService.get_market_prices(str(market.id))
+    yes_price, no_price = await MarketService.get_market_prices(str(market.id), db=db)
     spread = abs(yes_price - no_price)
 
     outcomes_result = await db.execute(

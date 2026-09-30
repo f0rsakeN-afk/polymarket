@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.liquidity import LiquidityPool
 from app.redis import get_redis, redis_cb
@@ -12,6 +14,25 @@ logger = logging.getLogger("polymarket")
 
 
 class MarketService:
+
+    @staticmethod
+    @asynccontextmanager
+    async def _session(db: AsyncSession | None = None):
+        """Reuse the caller's session when one is provided.
+
+        Passing the request-scoped ``get_db``/``get_db_replica`` session avoids
+        opening a nested connection inside an already-open request session
+        (doubled connection usage per request). Callers without a request
+        context (WebSocket fan-out, background jobs) fall back to the shared
+        pooled session factory in ``app.database``.
+        """
+        if db is not None:
+            yield db
+        else:
+            from app.database import async_session
+            async with async_session() as own_session:
+                yield own_session
+
 
     @staticmethod
     def compute_prices(pool: LiquidityPool | None) -> tuple[Decimal, Decimal]:
@@ -33,7 +54,10 @@ class MarketService:
         return pool.yes_shares / total
 
     @staticmethod
-    async def get_market_prices_batch(market_ids: list[str]) -> dict[str, tuple[float, float]]:
+    async def get_market_prices_batch(
+        market_ids: list[str],
+        db: AsyncSession | None = None,
+    ) -> dict[str, tuple[float, float]]:
         """Fetch prices for many markets with O(1) round trips.
 
         Single Redis pipeline for cache reads, a single SELECT for all cache
@@ -68,9 +92,9 @@ class MarketService:
             missing.append(str(mid))
 
         if missing:
-            from app.database import async_session
-            async with async_session() as db:
-                pool_result = await db.execute(
+            # Reuse the caller's session when provided (no nested connection).
+            async with MarketService._session(db) as session:
+                pool_result = await session.execute(
                     select(LiquidityPool).where(LiquidityPool.market_id.in_(missing))
                 )
                 pools = {str(p.market_id): p for p in pool_result.scalars().all()}
@@ -115,10 +139,12 @@ class MarketService:
         return prices
 
     @staticmethod
-    async def get_market_prices_from_db(market_id: str) -> tuple[float, float]:
-        from app.database import async_session
-        async with async_session() as db:
-            pool_result = await db.execute(
+    async def get_market_prices_from_db(
+        market_id: str,
+        db: AsyncSession | None = None,
+    ) -> tuple[float, float]:
+        async with MarketService._session(db) as session:
+            pool_result = await session.execute(
                 select(LiquidityPool).where(LiquidityPool.market_id == market_id)
             )
             pool = pool_result.scalar_one_or_none()
@@ -159,7 +185,10 @@ class MarketService:
             return None
 
     @staticmethod
-    async def get_market_prices(market_id: str) -> tuple[float, float]:
+    async def get_market_prices(
+        market_id: str,
+        db: AsyncSession | None = None,
+    ) -> tuple[float, float]:
         cached = await MarketService.get_cached_market_prices(market_id)
         if cached:
             return cached
@@ -172,7 +201,7 @@ class MarketService:
             acquired = await redis_cb.call(lambda: r.set(lock_key, "1", nx=True, ex=30))
             if acquired:
                 try:
-                    prices = await MarketService.get_market_prices_from_db(market_id)
+                    prices = await MarketService.get_market_prices_from_db(market_id, db=db)
                     cache_key = f"market:{market_id}:price"
                     async def _write_cache():
                         pipe = r.pipeline()
@@ -197,6 +226,6 @@ class MarketService:
                     cached = await MarketService.get_cached_market_prices(market_id)
                     if cached:
                         return cached
-                return await MarketService.get_market_prices_from_db(market_id)
+                return await MarketService.get_market_prices_from_db(market_id, db=db)
         except Exception:
-            return await MarketService.get_market_prices_from_db(market_id)
+            return await MarketService.get_market_prices_from_db(market_id, db=db)

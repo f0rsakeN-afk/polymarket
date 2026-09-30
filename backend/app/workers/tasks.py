@@ -5,7 +5,7 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
@@ -13,7 +13,7 @@ from sqlalchemy import delete, select, text
 
 from app.amm.engine import BinaryAMM
 from app.config import settings
-from app.database import async_session_maker
+from app.database import async_session
 from app.deps import hash_password
 from app.models import (
     LiquidityPool,
@@ -55,8 +55,15 @@ def celery_run(coro):
 
 
 def get_session():
-    """Yield a fresh async session. Call inside celery_run(coro_with_db())."""
-    return async_session_maker()
+    """Fresh AsyncSession from the shared pooled session factory.
+
+    Note: ``async_session_maker`` is the cached sessionmaker *getter* — calling
+    it returns the maker itself, not a session (``async with`` on it raises
+    TypeError). ``app.database.async_session()`` returns an actual session
+    bound to the pooled engine and honours the test-session patching in
+    tests/conftest.py, so it is the correct entry point here.
+    """
+    return async_session()
 
 
 @shared_task(bind=True, name="app.workers.tasks.expire_stale_orders")
