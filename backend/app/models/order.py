@@ -27,6 +27,7 @@ class Order(Base, UUIDMixin, TimestampMixin):
         Index("ix_orders_status_expires", "status", "expires_at"),
         Index("ix_orders_type_status_remaining", "order_type", "status", "remaining_amount"),
         Index("ix_orders_market_outcome_side_price", "market_id", "outcome_id", "side", "price"),
+        Index("ix_orders_market_outcome_price", "market_id", "outcome_id", "price"),
     )
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -43,7 +44,7 @@ class Order(Base, UUIDMixin, TimestampMixin):
     remaining_amount = Column(Numeric(20, 8), nullable=True)
     status = Column(
         String(20), default="pending", nullable=False, index=True
-    )  # pending, partial, filled, cancelled, expired
+    )  # pending, partial, filled, cancelled, expired (+ transient 'duplicate')
     expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Execution results

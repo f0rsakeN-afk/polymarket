@@ -23,9 +23,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "stripe>=10.0.0",
     "httpx>=0.28.0",
-    "requests>=2.32.0",
     "bcrypt>=5.0.0",
-    "psycopg2-binary>=2.9.12",
     "resend>=0.8.0",
     "pytest>=9.0.0",
     "pytest-cov>=6.0.0",
@@ -34,6 +32,14 @@ dependencies = [
     "pip-audit>=2.7.0",
     "prometheus-client>=0.26.0",
     "sentry-sdk>=2.69.1",
+]
+
+# Dev-only packages — excluded from the production image via `uv sync --no-dev`.
+# psycopg2 (sync driver) is never imported by app code (asyncpg is the runtime
+# driver); it is kept here only for ad-hoc psql/psycopg tooling during dev.
+[dependency-groups]
+dev = [
+    "psycopg2-binary>=2.9.12",
 ]
 
 [tool.ruff]

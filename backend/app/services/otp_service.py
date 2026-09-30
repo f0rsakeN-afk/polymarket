@@ -50,9 +50,9 @@ class OTPService:
             logger.warning(f"OTP send rate limit exceeded for {email}, purpose={purpose}")
             from app.api.exceptions import ValidationError
             raise ValidationError("Too many codes sent. Please wait before requesting another.")
-        elif send_result == -2:
-            # key didn't exist, set TTL first
-            await redis_cb.call(lambda: r.expire(send_key, RATE_LIMIT_KEY_TTL))
+        # Note: _RATE_LIMIT_SCRIPT returns -1 when rate limited, otherwise the
+        # positive counter value. It never returns -2 — the TTL is set inside
+        # the script itself when count == 1, so no extra EXPIRE is needed here.
 
         code = OTPService._generate_code()
         secret = OTPService._get_secret(email, purpose)
