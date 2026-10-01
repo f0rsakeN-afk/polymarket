@@ -36,8 +36,16 @@ class ForbiddenError(AppException):
 
 
 class ValidationError(AppException):
-    def __init__(self, message: str = "Validation failed", details: dict | None = None):
-        super().__init__(422, message, "VALIDATION_ERROR", details)
+    def __init__(
+        self,
+        message: str = "Validation failed",
+        details: dict | None = None,
+        error_code: str | None = None,
+    ):
+        # `error_code` lets a caller name the exact condition
+        # (POST_ONLY_WOULD_CROSS, QUOTE_EXPIRED, …) so clients can pick a
+        # precise title without having to pattern-match the message text.
+        super().__init__(422, message, error_code or "VALIDATION_ERROR", details)
 
 
 class InsufficientBalanceError(AppException):

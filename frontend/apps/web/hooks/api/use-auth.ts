@@ -11,7 +11,7 @@ import {
 } from "@/lib/api/auth"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
-import type { ApiError } from "@/lib/api/client"
+import { apiErrorMessage } from "@/lib/api/client"
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ export function useLogin() {
       sileo.success({ title: res.message ?? "Login successful" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Login failed" })
+      sileo.error({ title: apiErrorMessage(err, "Login failed") })
     },
   })
 }
@@ -44,7 +44,7 @@ export function useLogout() {
       sileo.success({ title: res.message ?? "Signed out" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Sign out failed" })
+      sileo.error({ title: apiErrorMessage(err, "Sign out failed") })
     },
   })
 }
@@ -58,7 +58,7 @@ export function useLogoutAll() {
       sileo.success({ title: res.message ?? "All sessions revoked" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to revoke sessions" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to revoke sessions") })
     },
   })
 }
@@ -79,7 +79,7 @@ export function useRevokeSession() {
       sileo.success({ title: res.message ?? "Session revoked" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to revoke session" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to revoke session") })
     },
   })
 }
@@ -103,7 +103,7 @@ export function useRegister() {
       sileo.success({ title: res.message ?? "Account created — check your email to verify" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Registration failed" })
+      sileo.error({ title: apiErrorMessage(err, "Registration failed") })
     },
   })
 }
@@ -118,7 +118,7 @@ export function useVerifyEmail() {
       qc.invalidateQueries({ queryKey: queryKeys.me() })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Verification failed" })
+      sileo.error({ title: apiErrorMessage(err, "Verification failed") })
     },
   })
 }
@@ -130,7 +130,7 @@ export function useResendVerification() {
       sileo.success({ title: res.message ?? "Verification email sent" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to resend" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to resend") })
     },
   })
 }
@@ -144,7 +144,7 @@ export function useSendMagicLink() {
       sileo.success({ title: res.message ?? "Login code sent" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to send code" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to send code") })
     },
   })
 }
@@ -154,10 +154,15 @@ export function useVerifyMagicCode() {
     mutationFn: ({ email, code, totpCode }: { email: string; code: string; totpCode?: string }) =>
       magicLinkApi.verifyCode(email, code, totpCode),
     onSuccess: (res) => {
+      // A 200 with a `requires_2fa` challenge is NOT a completed login.
+      if (res.data?.requires_2fa) {
+        sileo.info({ title: "2FA code required" })
+        return
+      }
       sileo.success({ title: res.message ?? "Login successful" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Verification failed" })
+      sileo.error({ title: apiErrorMessage(err, "Verification failed") })
     },
   })
 }
@@ -169,7 +174,7 @@ export function useRequestMagicUrl() {
       sileo.success({ title: res.message ?? "Login link sent" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to send link" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to send link") })
     },
   })
 }
@@ -178,10 +183,14 @@ export function useVerifyMagicUrl() {
   return useMutation({
     mutationFn: (token: string) => magicLinkApi.verifyUrl(token),
     onSuccess: (res) => {
+      if (res.data?.requires_2fa) {
+        sileo.info({ title: "2FA code required" })
+        return
+      }
       sileo.success({ title: res.message ?? "Login successful" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Verification failed" })
+      sileo.error({ title: apiErrorMessage(err, "Verification failed") })
     },
   })
 }
@@ -195,7 +204,7 @@ export function useForgotPassword() {
       sileo.success({ title: res.message ?? "Reset code sent" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to send reset code" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to send reset code") })
     },
   })
 }
@@ -208,7 +217,7 @@ export function useResetPassword() {
       sileo.success({ title: res.message ?? "Password reset successful" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Password reset failed" })
+      sileo.error({ title: apiErrorMessage(err, "Password reset failed") })
     },
   })
 }
@@ -222,7 +231,7 @@ export function useSetPassword() {
       qc.invalidateQueries({ queryKey: queryKeys.me() })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to set password" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to set password") })
     },
   })
 }
@@ -235,7 +244,7 @@ export function useChangePassword() {
       sileo.success({ title: res.message ?? "Password changed" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to change password" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to change password") })
     },
   })
 }
@@ -256,7 +265,7 @@ export function useTwoFactorSetup() {
       sileo.success({ title: res.message ?? "2FA setup ready" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to setup 2FA" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to setup 2FA") })
     },
   })
 }
@@ -271,7 +280,7 @@ export function useTwoFactorEnable() {
       sileo.success({ title: res.message ?? "2FA enabled" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to enable 2FA" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to enable 2FA") })
     },
   })
 }
@@ -287,7 +296,7 @@ export function useTwoFactorDisable() {
       sileo.success({ title: res.message ?? "2FA disabled" })
     },
     onError: (err) => {
-      sileo.error({ title: (err as ApiError).message || "Failed to disable 2FA" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to disable 2FA") })
     },
   })
 }

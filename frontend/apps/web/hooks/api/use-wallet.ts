@@ -4,32 +4,30 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tansta
 import { getWallet, deposit, withdraw, listTransactions } from "@/lib/api/wallet"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
-import type { Wallet, Transaction } from "@/hooks/api/types/wallet"
+import { apiErrorMessage } from "@/lib/api/client"
 
 export function useWallet() {
   return useQuery({
     queryKey: queryKeys.wallet(),
-    queryFn: () => getWallet().then((r) => r.data as Wallet),
+    queryFn: () => getWallet().then((r) => r.data),
     staleTime: 10_000,
   })
 }
 
 export function useTransactions() {
+  // GET /api/v1/wallet/transactions is offset-paginated only (no
+  // `next_cursor`/`has_more`) — a full page is the only "more" signal.
+  const PAGE_SIZE = 20
   return useInfiniteQuery({
     queryKey: queryKeys.transactions(),
-    queryFn: ({ pageParam }) => listTransactions({ page: pageParam, page_size: 20 }),
+    queryFn: ({ pageParam }) => listTransactions({ page: pageParam, page_size: PAGE_SIZE }),
     initialPageParam: 1,
-    getNextPageParam: (lastPage, _, lastPageParam) => {
-      const txs = (lastPage as { data?: { transactions?: unknown[] } }).data?.transactions ?? []
-      return txs.length === 20 ? lastPageParam + 1 : undefined
-    },
+    getNextPageParam: (lastPage, _, lastPageParam) =>
+      lastPage.data.transactions.length === PAGE_SIZE ? lastPageParam + 1 : undefined,
     select: (data) => ({
-      transactions: data.pages.flatMap(
-        (p) => ((p as { data?: { transactions?: Transaction[] } }).data?.transactions ?? []) as Transaction[]
-      ),
+      transactions: data.pages.flatMap((p) => p.data.transactions),
       hasMore:
-        ((data.pages[data.pages.length - 1] as { data?: { transactions?: unknown[] } } | undefined)
-          ?.data?.transactions?.length ?? 0) === 20,
+        (data.pages[data.pages.length - 1]?.data.transactions.length ?? 0) === PAGE_SIZE,
     }),
     staleTime: 10_000,
   })
@@ -45,7 +43,7 @@ export function useDeposit() {
       qc.invalidateQueries({ queryKey: queryKeys.transactions() })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Deposit failed" })
+      sileo.error({ title: apiErrorMessage(err, "Deposit failed") })
     },
   })
 }
@@ -60,7 +58,7 @@ export function useWithdraw() {
       qc.invalidateQueries({ queryKey: queryKeys.transactions() })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Withdrawal failed" })
+      sileo.error({ title: apiErrorMessage(err, "Withdrawal failed") })
     },
   })
 }

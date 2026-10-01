@@ -27,6 +27,8 @@ import {
 } from "@workspace/ui/components/card";
 import { OtpInput } from "@/components/auth/otp-input";
 import { sileo } from "sileo";
+import { queryKeys } from "@/lib/api/queryKeys";
+import { apiErrorMessage } from "@/lib/api/client"
 
 const enableSchema = z.object({
   code: z.string().length(6, "Code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits"),
@@ -41,7 +43,7 @@ export function TwoFactorPageClient() {
   const [code, setCode] = useState("");
 
   const { data: status, isLoading } = useQuery({
-    queryKey: ["2fa-status"] as const,
+    queryKey: queryKeys.twoFactorStatus(),
     queryFn: () => twoFactorApi.status(),
     retry: false,
   });
@@ -58,14 +60,14 @@ export function TwoFactorPageClient() {
       setStep("setup");
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to setup 2FA" });
+      sileo.error({ title: apiErrorMessage(err, "Failed to setup 2FA") });
     },
   });
 
   const enableMutation = useMutation({
     mutationFn: (data: EnableInput) => twoFactorApi.enable(data.code),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["2fa-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.twoFactorStatus() });
       setStep("status");
       setCode("");
       setSetupData(null);
@@ -73,20 +75,20 @@ export function TwoFactorPageClient() {
       sileo.success({ title: "2FA enabled" });
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to enable 2FA" });
+      sileo.error({ title: apiErrorMessage(err, "Failed to enable 2FA") });
     },
   });
 
   const disableMutation = useMutation({
     mutationFn: (data: EnableInput) => twoFactorApi.disable(data.code, data.password),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["2fa-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.twoFactorStatus() });
       setCode("");
       enableForm.reset();
       sileo.success({ title: "2FA disabled" });
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to disable 2FA" });
+      sileo.error({ title: apiErrorMessage(err, "Failed to disable 2FA") });
     },
   });
 

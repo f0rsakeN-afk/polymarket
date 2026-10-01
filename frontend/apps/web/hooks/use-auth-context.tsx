@@ -4,6 +4,7 @@ import React, { createContext, useContext, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { authApi, MeResponse } from "@/lib/api/auth"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { useCurrentUser } from "./use-auth"
 
 interface AuthContextValue {
@@ -24,18 +25,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     mutationFn: () => authApi.logout(),
     onSuccess: () => {
       // Remove all auth-related queries; keep market/position/order caches intact
-      queryClient.removeQueries({ queryKey: ["me"] })
-      queryClient.removeQueries({ queryKey: ["positions"] })
-      queryClient.removeQueries({ queryKey: ["orders"] })
-      queryClient.removeQueries({ queryKey: ["notifications"] })
+      queryClient.removeQueries({ queryKey: queryKeys.me() })
+      queryClient.removeQueries({ queryKey: queryKeys.positions() })
+      queryClient.removeQueries({ queryKey: queryKeys.orders() })
+      queryClient.removeQueries({ queryKey: queryKeys.notifications() })
       router.push("/")
     },
     onError: () => {
       // Even if server logout fails, clear local auth state
-      queryClient.removeQueries({ queryKey: ["me"] })
-      queryClient.removeQueries({ queryKey: ["positions"] })
-      queryClient.removeQueries({ queryKey: ["orders"] })
-      queryClient.removeQueries({ queryKey: ["notifications"] })
+      queryClient.removeQueries({ queryKey: queryKeys.me() })
+      queryClient.removeQueries({ queryKey: queryKeys.positions() })
+      queryClient.removeQueries({ queryKey: queryKeys.orders() })
+      queryClient.removeQueries({ queryKey: queryKeys.notifications() })
       router.push("/")
     },
   })

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import NotFoundError
+from app.api.exceptions import NotFoundError, ValidationError
 from app.api.responses import success_response
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user
@@ -96,7 +96,7 @@ async def get_order(order_id: str, request: Request, db: AsyncSession = Depends(
 @router.get("/", summary="List orders")
 async def list_orders(
     request: Request,
-    cursor: str | None = Query(None, description="Cursor for keyset pagination — order created_at ISO string"),
+    cursor: str | None = Query(None, max_length=512, description="Cursor for keyset pagination — order created_at ISO string"),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     side: str | None = None,

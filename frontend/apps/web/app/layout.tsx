@@ -10,6 +10,7 @@ import { Toaster } from "@/components/toaster"
 import { Toaster as SonnerToaster } from "sonner"
 import { AppCommandMenu } from "@/components/shared/app-command-menu"
 import { cn } from "@workspace/ui/lib/utils"
+import { config } from "@/lib/config"
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" })
 
@@ -18,7 +19,7 @@ const fontMono = Geist_Mono({
   variable: "--font-mono",
 })
 
-const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "") ?? "https://predictx.io"
+const baseUrl = config.siteUrl
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),

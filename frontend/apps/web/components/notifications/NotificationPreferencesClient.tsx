@@ -5,7 +5,6 @@ import { useNotificationPreferences, useUpdateNotificationPreferences } from "@/
 import { Switch } from "@workspace/ui/components/switch"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Skeleton } from "@workspace/ui/components/skeleton"
-import { sileo } from "sileo"
 import type { NotificationPreference } from "@/schemas/notifications"
 
 interface ToggleRowProps {
@@ -33,13 +32,8 @@ export function NotificationPreferencesClient() {
   const updateMutation = useUpdateNotificationPreferences()
 
   const handleToggle = (key: keyof NotificationPreference, value: boolean) => {
-    updateMutation.mutate(
-      { [key]: value },
-      {
-        onSuccess: () => sileo.success({ title: "Preferences saved" }),
-        onError: () => sileo.error({ title: "Failed to save preferences" }),
-      }
-    )
+    // Toasts (backend message) are emitted by useUpdateNotificationPreferences.
+    updateMutation.mutate({ [key]: value })
   }
 
   if (isLoading) {

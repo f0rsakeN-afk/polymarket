@@ -21,6 +21,9 @@ import {
 } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import type { Notification } from "@/schemas/notifications"
+import { queryKeys } from "@/lib/api/queryKeys"
+import { apiErrorMessage } from "@/lib/api/client"
+import { sileo } from "sileo"
 
 type NotifType = Notification["type"]
 
@@ -128,15 +131,19 @@ export default function NotificationsPage() {
   const [realtimePrepend, setRealtimePrepend] = useState<Notification[]>([])
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["notifications-list", page] as const,
+    queryKey: queryKeys.notifications({ page, page_size: 30 }),
     queryFn: () => notificationsApi.list({ page, page_size: 30 }),
     enabled: !!user,
   })
 
   const { mutate: markAllRead, isPending: isMarkingRead } = useMutation({
     mutationFn: notificationsApi.markAllRead,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["notifications-list"] })
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.notifications() })
+      sileo.success({ title: res.message ?? "All notifications marked as read" })
+    },
+    onError: (err) => {
+      sileo.error({ title: apiErrorMessage(err, "Failed to mark all as read") })
     },
   })
 
@@ -145,7 +152,7 @@ export default function NotificationsPage() {
       const message = msg as { type?: string; notification?: Notification }
       if (message.type === "notification" && message.notification) {
         setRealtimePrepend((prev) => [message.notification!, ...prev])
-        qc.invalidateQueries({ queryKey: ["notifications-list"] })
+        qc.invalidateQueries({ queryKey: queryKeys.notifications() })
       }
     },
     [qc]

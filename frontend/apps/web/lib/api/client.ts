@@ -21,6 +21,13 @@ interface ApiErrorData {
   details?: { errors?: { field: string; message: string }[] }
 }
 
+/**
+ * The backend emits three distinct error envelopes:
+ *  1. AppException/handlers → { success:false, error, error_code, details? }
+ *  2. FastAPI validation    → { detail: [{loc, msg}, ...] } | { detail: "..." }
+ *  3. RateLimitMiddleware   → { error_code:"RATE_LIMIT_EXCEEDED", retry_after }
+ *     Origin middleware      → { error_code:"ORIGIN_NOT_ALLOWED", message }
+ */
 function extractMessage(data: unknown): { message: string; error_code?: string } {
   if (!data || typeof data !== "object") return { message: "An error occurred" }
   const d = data as Record<string, unknown>
@@ -30,14 +37,69 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
     return { message: items.map((e) => e.msg || e.loc.join(".")).join("; ") }
   }
 
-  const ad = d as unknown as ApiErrorData
-  if (ad.success === false && ad.error) {
-    return { message: ad.error, error_code: ad.error_code }
+  // Rate limiting is checked FIRST so the `retry_after` hint survives even
+  // though the middleware now also emits the standard `success/error` keys.
+  if (d.error_code === "RATE_LIMIT_EXCEEDED") {
+    const retry = typeof d.retry_after === "number" ? d.retry_after : undefined
+    return {
+      message: retry
+        ? `Too many requests — try again in ${retry}s`
+        : "Too many requests — try again shortly",
+      error_code: "RATE_LIMIT_EXCEEDED",
+    }
+  }
+
+  const ad = d as Partial<ApiErrorData>
+  if (ad.success === false && typeof ad.error === "string") {
+    // Field-level detail (FastAPI validation and AppException `details.errors`)
+    // carries the *specific* reason — surface it, don't just show "Validation failed".
+    const fieldErrors = ad.details?.errors
+    const fields =
+      Array.isArray(fieldErrors) && fieldErrors.length > 0
+        ? fieldErrors.map((e) => `${e.field}: ${e.message}`).join(" · ")
+        : ""
+    return {
+      message: fields ? `${ad.error} — ${fields}` : ad.error,
+      error_code: ad.error_code,
+    }
+  }
+
+  // CORS middleware shape: { error_code, message }.
+  if (typeof d.error_code === "string" && typeof d.message === "string") {
+    return { message: d.message, error_code: d.error_code }
   }
 
   if (typeof d.detail === "string") return { message: d.detail }
+  if (typeof d.error === "string") return { message: d.error }
 
   return { message: "An error occurred" }
+}
+
+/**
+ * Safe error-to-message helper for mutation onError callbacks.
+ * Never casts to ApiError — checks it, so non-Error throws fall back cleanly.
+ *
+ * The backend's own message always wins. The fallback only applies when the
+ * failure never reached the server (offline, timeout, aborted request), where
+ * the browser's raw text ("Failed to fetch", "The user aborted a request")
+ * is meaningless to a user.
+ */
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message || fallback
+
+  if (err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError")) {
+    return "The request timed out — please try again."
+  }
+  if (err instanceof TypeError && /fetch|network|load failed/i.test(err.message)) {
+    return "Can't reach the server — check your connection and try again."
+  }
+  if (err instanceof Error && err.message) return err.message
+  return fallback
+}
+
+/** Backend `error_code` when the failure came through the API, else undefined. */
+export function apiErrorCode(err: unknown): string | undefined {
+  return err instanceof ApiError ? err.error_code : undefined
 }
 
 // ─── Response normalizer ────────────────────────────────────────────────────────

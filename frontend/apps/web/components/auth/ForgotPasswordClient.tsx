@@ -20,6 +20,7 @@ import {
 } from "@workspace/ui/components/form"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 
 function PolygonMark({ className }: { className?: string }) {
   return (
@@ -48,7 +49,7 @@ export function ForgotPasswordClient() {
       setSubmittedEmail(form.getValues("email"))
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to send code" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to send code") })
     },
   })
 

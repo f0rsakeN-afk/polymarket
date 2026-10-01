@@ -41,7 +41,7 @@ async def create_alert(data: AlertCreate, request: Request, db: AsyncSession = D
     )
 
     logger.info(f"Alert created: user={user.id} market={data.market_id} {data.condition} {data.trigger_price}")
-    return success_response(AlertResponse.model_validate(alert))
+    return success_response(AlertResponse.model_validate(alert), message="Alert created")
 
 
 @router.get("/", summary="List active alerts")
@@ -74,4 +74,4 @@ async def delete_alert(alert_id: str, request: Request, db: AsyncSession = Depen
     from app.services.alert_engine import deindex_alert
     await deindex_alert(str(alert.market_id), alert_id, alert.outcome, alert.condition)
     logger.info(f"Alert deleted: {alert_id} by user={user.id}")
-    return success_response({"id": alert_id, "deleted": True})
+    return success_response({"id": alert_id, "deleted": True}, message="Alert deleted")

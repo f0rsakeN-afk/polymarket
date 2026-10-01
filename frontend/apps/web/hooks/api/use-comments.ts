@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { getMarketComments, getMarketCommentReplies, postComment, updateComment, deleteComment } from "@/lib/api/comments"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 
 export function useComments(slug: string, params?: { page?: number; page_size?: number }) {
   return useQuery({
@@ -30,8 +31,11 @@ export function usePostComment(slug: string) {
   return useMutation({
     mutationFn: ({ content, parent_id }: { content: string; parent_id?: string }) =>
       postComment(slug, content, parent_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.comments(slug) }),
-    onError: (err) => sileo.error({ title: err instanceof Error ? err.message : "Failed to post comment" }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.comments(slug) })
+      sileo.success({ title: res.message ?? "Comment posted" })
+    },
+    onError: (err) => sileo.error({ title: apiErrorMessage(err, "Failed to post comment") }),
   })
 }
 
@@ -40,8 +44,11 @@ export function useEditComment(slug: string) {
   return useMutation({
     mutationFn: ({ commentId, content }: { commentId: string; content: string }) =>
       updateComment(slug, commentId, content),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.comments(slug) }),
-    onError: (err) => sileo.error({ title: err instanceof Error ? err.message : "Failed to edit comment" }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.comments(slug) })
+      sileo.success({ title: res.message ?? "Comment updated" })
+    },
+    onError: (err) => sileo.error({ title: apiErrorMessage(err, "Failed to edit comment") }),
   })
 }
 
@@ -49,7 +56,10 @@ export function useDeleteComment(slug: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ commentId }: { commentId: string }) => deleteComment(slug, commentId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.comments(slug) }),
-    onError: (err) => sileo.error({ title: err instanceof Error ? err.message : "Failed to delete comment" }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.comments(slug) })
+      sileo.success({ title: res.message ?? "Comment deleted" })
+    },
+    onError: (err) => sileo.error({ title: apiErrorMessage(err, "Failed to delete comment") }),
   })
 }

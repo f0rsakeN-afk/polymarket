@@ -7,7 +7,8 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { Card } from "@workspace/ui/components/card"
 import type { Trade } from "@/hooks/api/types/market"
 
-function formatTime(iso: string) {
+function formatTime(iso: string | null | undefined) {
+  if (!iso) return "—"
   const d = new Date(iso)
   const now = new Date()
   const diff = (now.getTime() - d.getTime()) / 1000
@@ -28,7 +29,8 @@ const COLUMNS = [
 ]
 
 const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
-  const total = Number(trade.total ?? Number(trade.price) * Number(trade.amount))
+  // Backend has no `total` field — notional is always price × shares.
+  const total = Number(trade.price) * Number(trade.amount)
 
   return (
     <div

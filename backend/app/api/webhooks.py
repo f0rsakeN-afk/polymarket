@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request

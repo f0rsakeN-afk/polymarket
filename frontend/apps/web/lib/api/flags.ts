@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, MutationResponse } from "./client"
 
 export interface FlagResponse {
   id: string
@@ -20,7 +20,7 @@ export interface ResolveFlagParams {
 
 export const flagsApi = {
   create: (data: CreateFlagParams) =>
-    api.post<{ success: boolean; data: FlagResponse }>("/api/v1/flags", data),
+    api.post<MutationResponse<FlagResponse>>("/api/v1/flags", data),
 
   getForMarket: (marketId: string) =>
     api.get<{ success: boolean; data: FlagResponse[] }>(
@@ -28,7 +28,7 @@ export const flagsApi = {
     ),
 
   resolve: (flagId: string, data: ResolveFlagParams) =>
-    api.patch<{ success: boolean; data: { flag_id: string; status: string } }>(
+    api.patch<MutationResponse<{ flag_id: string; status: string }>>(
       `/api/v1/flags/${flagId}/resolve`,
       data
     ),

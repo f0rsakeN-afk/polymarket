@@ -15,6 +15,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { useCreateMarket } from "@/hooks/api/use-markets"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 
 const createMarketSchema = z.object({
   question: z.string().min(5, "Question must be at least 5 characters").max(1000),
@@ -66,7 +67,7 @@ export function CreateMarketForm() {
   const onSubmit = useCallback(async (data: CreateMarketInput) => {
     setServerError(null)
     try {
-      await createMarket.mutateAsync({
+      const res = await createMarket.mutateAsync({
         question: data.question,
         description: data.description || undefined,
         category: data.category || undefined,
@@ -76,11 +77,11 @@ export function CreateMarketForm() {
         initial_probability: data.initial_probability,
         outcomes_create: data.outcomes.map((o, i) => ({ name: o.name, outcome_index: i })),
       })
-      sileo.success({ title: "Market created!" })
+      sileo.success({ title: res.message ?? "Market created!" })
       form.reset()
     } catch (e) {
-      setServerError(e instanceof Error ? e.message : "Failed to create market")
-      sileo.error({ title: "Create failed", description: e instanceof Error ? e.message : "Unknown error" })
+      setServerError(apiErrorMessage(e, "Failed to create market"))
+      sileo.error({ title: "Create failed", description: apiErrorMessage(e, "Unknown error") })
     }
   }, [createMarket, form])
 

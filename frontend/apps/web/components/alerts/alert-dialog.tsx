@@ -20,6 +20,7 @@ import { useCreateAlert } from "@/hooks/api/use-alerts"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
 import Link from "next/link"
+import { apiErrorMessage } from "@/lib/api/client"
 
 const QUICK_FILL_OPTIONS = ["yes", "no"] as const
 const QUICK_FILL_CONDITIONS = ["above", "below"] as const
@@ -51,12 +52,12 @@ function AlertDialog({ marketId, currentYesPrice, currentNoPrice }: {
 
   const onSubmit = useCallback(async (data: AlertInput) => {
     try {
-      await createAlert({ market_id: marketId, ...data })
-      sileo.success({ title: "Alert created" })
+      const res = await createAlert({ market_id: marketId, ...data })
+      sileo.success({ title: res.message ?? "Alert created" })
       reset()
       setOpen(false)
     } catch (e) {
-      sileo.error({ title: "Failed to create alert", description: e instanceof Error ? e.message : "Unknown error" })
+      sileo.error({ title: "Failed to create alert", description: apiErrorMessage(e, "Unknown error") })
     }
   }, [createAlert, marketId, reset])
 

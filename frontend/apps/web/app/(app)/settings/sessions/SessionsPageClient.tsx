@@ -4,15 +4,18 @@ import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useCallback } from "react"
 import { authApi } from "@/lib/api/auth"
+import type { Session } from "@/lib/api/auth"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@workspace/ui/components/table"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 import { Globe, Monitor, Smartphone, Trash2 } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
+import { queryKeys } from "@/lib/api/queryKeys"
 
 function formatDate(dateStr: string): string {
   return new Intl.DateTimeFormat("en", {
@@ -51,7 +54,7 @@ function CurrentBadge() {
 // ── Session Row ────────────────────────────────────────────────────────────────
 
 function SessionRow({ session, onRevoke, isRevoking }: {
-  session: { id: string; ip_address?: string; last_active_at: string; expires_at: string; user_agent?: string; is_current?: boolean }
+  session: Session
   onRevoke: (id: string) => () => void
   isRevoking: boolean
 }) {
@@ -107,7 +110,7 @@ function SessionRow({ session, onRevoke, isRevoking }: {
 // ── Sessions Table ─────────────────────────────────────────────────────────────
 
 function SessionsTable({ sessions, isLoading, onRevoke, isRevoking }: {
-  sessions: Array<{ id: string; ip_address?: string; last_active_at: string; expires_at: string; user_agent?: string; is_current?: boolean }>
+  sessions: Session[]
   isLoading: boolean
   onRevoke: (id: string) => () => void
   isRevoking: boolean
@@ -177,34 +180,32 @@ export function SessionsPageClient() {
   const qc = useQueryClient()
 
   const { data: sessions, isLoading } = useQuery({
-    queryKey: ["sessions"] as const,
-    queryFn: () => authApi.sessions().then((r) => r.data as Array<{
-      id: string; ip_address?: string; last_active_at: string; expires_at: string; user_agent?: string; is_current?: boolean
-    }>),
+    queryKey: queryKeys.sessions(),
+    queryFn: () => authApi.sessions().then((r) => r.data),
     retry: false,
   })
 
   const revokeMutation = useMutation({
     mutationFn: (sessionId: string) => authApi.revokeSession(sessionId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["sessions"] })
-      sileo.success({ title: "Session revoked" })
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.sessions() })
+      sileo.success({ title: res.message ?? "Session revoked" })
     },
-    onError: () => {
-      sileo.error({ title: "Failed to revoke session" })
+    onError: (err) => {
+      sileo.error({ title: apiErrorMessage(err, "Failed to revoke session") })
     },
   })
 
   const revokeAllMutation = useMutation({
     mutationFn: () => authApi.logoutAll(),
-    onSuccess: () => {
-      qc.removeQueries({ queryKey: ["sessions"] })
-      qc.removeQueries({ queryKey: ["me"] })
-      sileo.success({ title: "All other sessions revoked" })
+    onSuccess: (res) => {
+      qc.removeQueries({ queryKey: queryKeys.sessions() })
+      qc.removeQueries({ queryKey: queryKeys.me() })
+      sileo.success({ title: res.message ?? "All other sessions revoked" })
       router.push("/")
     },
-    onError: () => {
-      sileo.error({ title: "Failed to revoke sessions" })
+    onError: (err) => {
+      sileo.error({ title: apiErrorMessage(err, "Failed to revoke sessions") })
     },
   })
 

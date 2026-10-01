@@ -26,7 +26,7 @@ async def add_liquidity(
 ):
     user = await get_current_user(request, db)
     result = await LiquidityService.add_liquidity(db, user, market_id, Decimal(str(data.amount)))
-    return success_response(result)
+    return success_response(result, message="Liquidity added")
 
 
 @router.delete("/{market_id}/liquidity")
@@ -38,7 +38,7 @@ async def remove_liquidity(
 ):
     user = await get_current_user(request, db)
     result = await LiquidityService.remove_liquidity(db, user, market_id, Decimal(str(data.lp_tokens)))
-    return success_response(result)
+    return success_response(result, message="Liquidity removed")
 
 
 @router.get("/{market_id}/liquidity")

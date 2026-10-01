@@ -21,6 +21,7 @@ import {
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { OtpInput } from "@/components/auth/otp-input"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 
 function PolygonMark({ className }: { className?: string }) {
   return (
@@ -50,7 +51,7 @@ export function ResetPasswordClient() {
       router.push("/login")
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to reset password" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to reset password") })
     },
   })
 

@@ -20,6 +20,7 @@ import {
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { sileo } from "sileo"
 import { emailSchema, passwordSchema } from "@/schemas/auth"
+import { apiErrorMessage } from "@/lib/api/client"
 
 function PolygonMark({ className }: { className?: string }) {
   return (
@@ -85,7 +86,7 @@ function EmailStep({
       await magicLinkApi.sendCode(emailVal)
       onMagicLink(emailVal)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send code")
+      setError(apiErrorMessage(err, "Failed to send code"))
     } finally {
       setIsLoading(false)
     }
@@ -203,7 +204,7 @@ function PasswordStep({
       )
       router.push(next)
     } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Login failed")
+      setGlobalError(apiErrorMessage(err, "Login failed"))
     } finally {
       setIsLoading(false)
     }
@@ -337,22 +338,17 @@ function MagicLinkStep({
     setError("")
     setIsLoading(true)
     try {
-      await magicLinkApi.verifyCode(email, codeToVerify)
+      const res = await magicLinkApi.verifyCode(email, codeToVerify)
+      // 200 + {requires_2fa, partial_token} = challenge, not a completed login.
+      // Cookies are only set once verifyMagic2fa succeeds.
+      if (res.data?.requires_2fa) {
+        setMagicPartialToken(res.data.partial_token ?? "")
+        setStep("totp")
+        return
+      }
       router.push(next)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid or expired code"
-      if (msg.startsWith("2FA code required:")) {
-        setMagicPartialToken(msg.split(":")[1] ?? "")
-        setStep("totp")
-        setIsLoading(false)
-        return
-      }
-      if (msg === "2FA code required") {
-        setStep("totp")
-        setIsLoading(false)
-        return
-      }
-      setError(msg)
+      setError(apiErrorMessage(err, "Invalid or expired code"))
       setOtp("")
     } finally {
       setIsLoading(false)
@@ -362,17 +358,19 @@ function MagicLinkStep({
   const handleTotp = useCallback(async (code?: string) => {
     const codeToVerify = code ?? totpCode
     if (codeToVerify.length !== 6) return
+    if (!magicPartialToken) {
+      setError("Session expired — please request a new code")
+      return
+    }
     setError("")
     setIsLoading(true)
     try {
-      if (magicPartialToken) {
-        await magicLinkApi.verifyMagic2fa(magicPartialToken, codeToVerify)
-      } else {
-        await magicLinkApi.verifyUrl2fa(codeToVerify, codeToVerify)
-      }
+      // `verifyUrl2fa` is for the emailed-link flow only; this step always
+      // carries the partial token issued by verifyCode.
+      await magicLinkApi.verifyMagic2fa(magicPartialToken, codeToVerify)
       router.push(next)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid 2FA code")
+      setError(apiErrorMessage(err, "Invalid 2FA code"))
     } finally {
       setIsLoading(false)
     }
@@ -380,11 +378,11 @@ function MagicLinkStep({
 
   const handleResend = useCallback(async () => {
     try {
-      await magicLinkApi.sendCode(email)
+      const res = await magicLinkApi.sendCode(email)
       setResendTimer(RESEND_COOLDOWN)
-      sileo.success({ title: "Code resent" })
-    } catch {
-      sileo.error({ title: "Failed to resend" })
+      sileo.success({ title: res.message ?? "Code resent" })
+    } catch (err) {
+      sileo.error({ title: apiErrorMessage(err, "Failed to resend") })
     }
   }, [email])
 

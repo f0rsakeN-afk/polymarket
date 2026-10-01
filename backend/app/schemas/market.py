@@ -48,7 +48,7 @@ class CreateMarketRequest(BaseModel):
     question: str = Field(..., min_length=5, max_length=1000)
     description: str | None = Field(None, max_length=5000)
     category: str | None = Field(None, max_length=100)
-    slug: str = Field(..., min_length=3, max_length=255)
+    slug: str = Field(..., min_length=3, max_length=255, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     closes_at: datetime
     initial_liquidity: NonNegativeMoney = Field(default=Decimal(0))
     initial_probability: NonNegativeMoney | None = Field(default=None, ge=0.01, le=0.99)
@@ -64,4 +64,4 @@ class MarketListResponse(BaseModel):
 
 
 class ResolveMarketRequest(BaseModel):
-    winning_outcome_id: str
+    winning_outcome_id: str = Field(..., max_length=64)

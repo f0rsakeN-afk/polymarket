@@ -4,7 +4,7 @@ import re
 from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 from app.api.exceptions import AppException
 from app.api.responses import error_response
@@ -44,6 +44,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content=error_response(message, error_code, details or None),
+        headers=exc.headers,
     )
 
 
@@ -73,6 +74,25 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content=error_response("Resource already exists or constraint violated", "DB_CONSTRAINT_ERROR"),
+    )
+
+
+async def data_error_handler(request: Request, exc: DataError):
+    """A bad identifier/literal reached the database (e.g. `GET /orders/not-a-uuid`
+    sends an unparseable value into a `WHERE id = ...::uuid` clause).
+
+    Without this handler the asyncpg error escapes to `generic_exception_handler`
+    and the client sees a 500. It's a caller input problem, so it belongs at 422.
+    """
+    orig = str(getattr(exc, "orig", "") or "")
+    logger.warning(f"DB data error: {orig[:200]} | path={request.url.path}")
+    if "uuid" in orig.lower():
+        message = "Invalid ID format"
+    else:
+        message = "Invalid value for a field"
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content=error_response(message, "VALIDATION_ERROR"),
     )
 
 

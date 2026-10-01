@@ -7,6 +7,7 @@ import { usePositions } from "@/hooks/api/use-positions"
 import { useOrders } from "@/hooks/api/use-orders"
 import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { SplitMergeForm } from "@/components/liquidity/split-merge-form"
 import {
@@ -41,7 +42,8 @@ function formatPnL(v: number) {
   return `${sign}$${v.toFixed(2)}`
 }
 
-function formatTime(iso: string) {
+function formatTime(iso: string | null | undefined) {
+  if (!iso) return "—"
   const d = new Date(iso)
   const now = new Date()
   const diff = (now.getTime() - d.getTime()) / 1000
@@ -488,7 +490,7 @@ export default function PortfolioPage() {
       }
       if (message.type === "order:fill" || message.type === "position:update") {
         qc.invalidateQueries({ queryKey: ["positions"] })
-        qc.invalidateQueries({ queryKey: ["orders"] })
+        qc.invalidateQueries({ queryKey: queryKeys.orders() })
       }
     },
     [qc]

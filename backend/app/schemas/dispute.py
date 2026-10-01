@@ -4,14 +4,14 @@ from pydantic import BaseModel, Field
 
 
 class CreateDisputeRequest(BaseModel):
-    market_id: str = Field(..., min_length=1)
+    market_id: str = Field(..., min_length=1, max_length=64)
     evidence: str = Field(..., min_length=10, max_length=5000)
     evidence_url: str | None = Field(default=None, max_length=1000)
 
 
 class ProposeResolutionRequest(BaseModel):
-    market_id: str = Field(..., min_length=1)
-    outcome_id: str = Field(..., min_length=1)
+    market_id: str = Field(..., min_length=1, max_length=64)
+    outcome_id: str = Field(..., min_length=1, max_length=64)
     resolution_source: str = Field(..., min_length=10, max_length=1000)
 
 

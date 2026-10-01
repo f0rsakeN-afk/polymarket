@@ -14,6 +14,7 @@ import { addLiquidity, removeLiquidity } from "@/lib/api/liquidity"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useWallet } from "@/hooks/api/use-wallet"
 import { queryKeys } from "@/lib/api/queryKeys"
+import { apiErrorMessage } from "@/lib/api/client"
 
 export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string; marketStatus: string }) {
   const { data: currentUser } = useCurrentUser()
@@ -33,28 +34,28 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
 
   const { mutateAsync: add, isPending: isAdding } = useMutation({
     mutationFn: (amt: number) => addLiquidity(marketId, { amount: amt }),
-    onSuccess: () => {
-      sileo.success({ title: "Liquidity added" })
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Liquidity added" })
       addForm.reset()
-      qc.invalidateQueries({ queryKey: ["market", marketId] })
+      qc.invalidateQueries({ queryKey: queryKeys.market(marketId) })
       qc.invalidateQueries({ queryKey: queryKeys.lpAnalytics() })
       qc.invalidateQueries({ queryKey: queryKeys.lpPosition(marketId) })
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
     },
-    onError: (e) => sileo.error({ title: "Failed to add liquidity", description: e instanceof Error ? e.message : "Unknown error" }),
+    onError: (e) => sileo.error({ title: "Failed to add liquidity", description: apiErrorMessage(e, "Unknown error") }),
   })
 
   const { mutateAsync: remove, isPending: isRemoving } = useMutation({
     mutationFn: () => removeLiquidity(marketId, { lp_tokens: parseFloat(lpTokens) }),
-    onSuccess: () => {
-      sileo.success({ title: "Liquidity removed" })
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Liquidity removed" })
       setLpTokens("")
-      qc.invalidateQueries({ queryKey: ["market", marketId] })
+      qc.invalidateQueries({ queryKey: queryKeys.market(marketId) })
       qc.invalidateQueries({ queryKey: queryKeys.lpAnalytics() })
       qc.invalidateQueries({ queryKey: queryKeys.lpPosition(marketId) })
       qc.invalidateQueries({ queryKey: queryKeys.wallet() })
     },
-    onError: (e) => sileo.error({ title: "Failed to remove liquidity", description: e instanceof Error ? e.message : "Unknown error" }),
+    onError: (e) => sileo.error({ title: "Failed to remove liquidity", description: apiErrorMessage(e, "Unknown error") }),
   })
 
   const handleAdd = useCallback((data: { amount: number }) => {
