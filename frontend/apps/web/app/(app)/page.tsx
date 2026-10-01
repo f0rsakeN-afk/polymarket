@@ -6,8 +6,8 @@ import {
   SkeletonTradeFeed,
   SkeletonTrendingCarousel,
 } from "@/components/shared/skeletons"
-import { getGlobalTrades, listMarkets } from "@/lib/api/markets"
-import type { MarketListResponse, TradesResponse } from "@/hooks/api/types/market"
+import { listMarkets } from "@/lib/api/markets"
+import { listTrades } from "@/lib/api/trades"
 
 export const dynamic = "force-dynamic"
 
@@ -58,7 +58,7 @@ export default async function HomePage({
   const [marketsPage, closingPage, tradesPage] = await Promise.all([
     listMarkets({ q: q || undefined, page: 1, page_size: 20 }).catch(() => undefined),
     listMarkets({ sort: "closing_soon", page: 1, page_size: 8 }).catch(() => undefined),
-    getGlobalTrades({ page: 1, page_size: 15 }).catch(() => undefined),
+    listTrades({ page: 1, page_size: 15 }).catch(() => undefined),
   ])
 
   return (
@@ -72,9 +72,9 @@ export default async function HomePage({
       </div>
       <Suspense fallback={<HomePageSkeleton />}>
         <HomePageContent
-          initialMarketsPage={marketsPage as MarketListResponse | undefined}
-          initialClosingPage={closingPage as MarketListResponse | undefined}
-          initialTradesPage={tradesPage as TradesResponse | undefined}
+          initialMarketsPage={marketsPage}
+          initialClosingPage={closingPage}
+          initialTradesPage={tradesPage}
         />
       </Suspense>
     </>

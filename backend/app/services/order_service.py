@@ -98,14 +98,14 @@ class OrderService:
         )
         outcome = outcome_result.scalar_one_or_none()
         if not outcome:
-            raise ValidationError(f"Invalid outcome '{outcome_name}'")
+            raise ValidationError(f"Invalid outcome '{outcome_name}'", error_code="INVALID_OUTCOME")
 
         pool_result = await db.execute(
             select(LiquidityPool).where(LiquidityPool.market_id == market.id)
         )
         pool = pool_result.scalar_one_or_none()
         if not pool:
-            raise ValidationError("Market has no liquidity")
+            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
 
         amm = BinaryAMM(
             yes_shares=pool.yes_shares,
@@ -161,7 +161,7 @@ class OrderService:
         # data.amount is already Decimal (PositiveMoney) — keep Decimal end-to-end (C5 fix)
         amount = data.amount if isinstance(data.amount, Decimal) else Decimal(str(data.amount))
         if data.price is not None and data.price <= 0:
-            raise ValidationError("Price must be > 0")
+            raise ValidationError("Price must be > 0", error_code="INVALID_PRICE")
 
         # ── Step 1: Lock Market + Pool + Wallet (serialization point) ──
 
@@ -190,7 +190,7 @@ class OrderService:
         )
         pool = pool.scalar_one_or_none()
         if not pool:
-            raise ValidationError("Market has no liquidity")
+            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
 
         wallet = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -233,18 +233,18 @@ class OrderService:
                 r = await get_redis()
                 raw = await redis_cb.call(lambda: r.get(f"quote:{user.id}:{data.quote_id}"))
             except Exception:
-                raise ValidationError("Quote validation unavailable — please retry")
+                raise ValidationError("Quote validation unavailable — please retry", error_code="QUOTE_UNAVAILABLE")
             if not raw:
-                raise ValidationError("Quote not found — please refresh")
+                raise ValidationError("Quote not found — please refresh", error_code="QUOTE_NOT_FOUND")
             try:
                 quote = json.loads(raw)
             except Exception:
-                raise ValidationError("Quote corrupted — please refresh")
+                raise ValidationError("Quote corrupted — please refresh", error_code="QUOTE_CORRUPTED")
             if quote.get("expires_at", 0) < time.time():
-                raise ValidationError("Quote expired — please refresh")
+                raise ValidationError("Quote expired — please refresh", error_code="QUOTE_EXPIRED")
             # Bind check: quote must belong to the same user placing the order.
             if quote.get("user_id") != str(user.id):
-                raise ValidationError("Quote does not belong to this user")
+                raise ValidationError("Quote does not belong to this user", error_code="QUOTE_FORBIDDEN")
 
         # ── Step 4: Position check for sells ──
 
@@ -263,7 +263,8 @@ class OrderService:
                 raise ValidationError(
                     f"Insufficient {data.outcome} shares. "
                     f"Position: {float(held) if position else 0}, "
-                    f"Requested: {float(amount)}"
+                    f"Requested: {float(amount)}",
+                    error_code="INSUFFICIENT_SHARES",
                 )
 
         # ── Step 5: AMM + Matching ──
@@ -315,12 +316,14 @@ class OrderService:
                     if data.side == "buy" and current_amm_price > limit_price_f:
                         raise ValidationError(
                             f"Post-only order would cross the spread. "
-                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}",
+                            error_code="POST_ONLY_WOULD_CROSS",
                         )
                     if data.side == "sell" and current_amm_price < limit_price_f:
                         raise ValidationError(
                             f"Post-only order would cross the spread. "
-                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}"
+                            f"AMM price: {current_amm_price:.4f}, limit: {limit_price_f:.4f}",
+                            error_code="POST_ONLY_WOULD_CROSS",
                         )
 
                 amm_price_f = float(price_before)
@@ -336,7 +339,8 @@ class OrderService:
                         raise ValidationError(
                             f"Fill-or-kill could not be fully filled. "
                             f"Book matched: {float(matched_shares)}/{float(amount)} shares, "
-                            f"AMM price {amm_price_f:.4f} would exceed limit {limit_price_f:.4f}"
+                            f"AMM price {amm_price_f:.4f} would exceed limit {limit_price_f:.4f}",
+                            error_code="ORDER_NOT_FILLABLE",
                         )
 
                     if data.side == "buy":
@@ -416,7 +420,8 @@ class OrderService:
                     raise ValidationError(
                         f"Insufficient {data.outcome} shares after orderbook match. "
                         f"Held: {float(tmp_pos.shares_held) if tmp_pos else 0}, "
-                        f"Requested: {float(remaining_shares)}"
+                        f"Requested: {float(remaining_shares)}",
+                        error_code="INSUFFICIENT_SHARES",
                     )
                 quote = amm.sell(data.outcome, remaining_shares)
                 cost_basis = tmp_pos.average_price * remaining_shares
@@ -444,7 +449,8 @@ class OrderService:
         if data.order_type == "fill_or_kill" and total_shares < amount:
             raise ValidationError(
                 f"Fill-or-kill could not be fully filled. "
-                f"Total filled: {float(total_shares)}/{float(amount)} shares"
+                f"Total filled: {float(total_shares)}/{float(amount)} shares",
+                error_code="ORDER_NOT_FILLABLE",
             )
         total_usdc_received = matched_usdc + sell_proceeds_amm
 

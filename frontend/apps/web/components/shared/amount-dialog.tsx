@@ -10,6 +10,7 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@workspace/ui/components/alert-dialog"
 import { Field, FieldContent, FieldError } from "@workspace/ui/components/field"
 import { z } from "zod"
+import { apiErrorMessage } from "@/lib/api/client"
 
 const amountSchema = z.object({
   amount: z.number().min(0.01, "Minimum amount is $0.01"),
@@ -51,7 +52,7 @@ export function AmountDialog({ title, description, trigger, onConfirm }: AmountD
     } catch (e) {
       sileo.error({
         title: `${title} failed`,
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: apiErrorMessage(e, "Unknown error"),
       })
     } finally {
       setSubmitting(false)

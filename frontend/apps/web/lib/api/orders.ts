@@ -3,12 +3,23 @@ import type { MutationResponse } from "@/lib/api/client"
 import { z } from "zod"
 import { placeOrderSchema } from "@/lib/schemas/trading"
 import { getQuoteSchema } from "@/lib/schemas/orders"
-import type { OrdersResponse } from "@/hooks/api/types/order"
+import type {
+  OrdersResponse,
+  PlaceOrderResponse,
+  QuoteResponse,
+  SingleOrder,
+} from "@/hooks/api/types/order"
+
+export type { OrdersResponse, PlaceOrderResponse, QuoteResponse }
 
 export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
 
+/**
+ * GET /api/v1/orders/ — keyset pagination. Pass the previous page's
+ * `next_cursor` back as `cursor`; there is no `page` parameter.
+ */
 export function listOrders(params?: {
-  page?: number
+  cursor?: string
   page_size?: number
   status?: string
   side?: string
@@ -18,7 +29,7 @@ export function listOrders(params?: {
   date_to?: string
 }) {
   const qs = new URLSearchParams()
-  if (params?.page) qs.set("page", String(params.page))
+  if (params?.cursor) qs.set("cursor", params.cursor)
   if (params?.page_size) qs.set("page_size", String(params.page_size))
   if (params?.status) qs.set("status", params.status)
   if (params?.side) qs.set("side", params.side)
@@ -30,43 +41,8 @@ export function listOrders(params?: {
   return api.get<OrdersResponse>(`/api/v1/orders/${query ? `?${query}` : ""}`)
 }
 
-export interface PlaceOrderResponse {
-  order_id: string
-  status: string
-  side: string
-  outcome: string
-  shares: string
-  price: string
-  price_before: string
-  price_after: string
-  yes_price_after: string
-  no_price_after: string
-  slippage: string
-  fee: string
-  wallet_balance: string
-  duplicate?: boolean
-}
-
-export interface SingleOrderResponse {
-  id: string
-  market_id: string
-  outcome: string
-  side: string
-  order_type: string
-  status: string
-  amount: string
-  price: string
-  shares_bought: string | null
-  shares_sold: string | null
-  fee: string | null
-  quote_id: string | null
-  client_order_id: string | null
-  created_at: string
-  expires_at: string | null
-}
-
 export function getOrder(orderId: string) {
-  return api.get<MutationResponse<SingleOrderResponse>>(`/api/v1/orders/${orderId}`)
+  return api.get<MutationResponse<SingleOrder>>(`/api/v1/orders/${orderId}`)
 }
 
 export function placeOrder(order: PlaceOrderPayload) {
@@ -77,11 +53,13 @@ export function placeOrder(order: PlaceOrderPayload) {
 }
 
 export function cancelOrder(orderId: string) {
-  return api.delete<MutationResponse<void>>(`/api/v1/orders/${orderId}`)
+  return api.delete<MutationResponse<{ order_id: string; status: string }>>(
+    `/api/v1/orders/${orderId}`
+  )
 }
 
 export function getQuote(params: { market_id: string; outcome: string; side: "buy" | "sell"; amount: string | number }) {
-  return api.post<MutationResponse<import("@/lib/schemas/orders").QuoteResponse>>(
+  return api.post<MutationResponse<QuoteResponse>>(
     "/api/v1/orders/quote",
     getQuoteSchema.parse(params)
   )

@@ -1,7 +1,8 @@
 import { MetadataRoute } from "next";
+import { config } from "@/lib/config";
 
 export default function robots(): MetadataRoute.Robots {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "") ?? "https://predictx.io";
+  const baseUrl = config.siteUrl;
 
   return {
     rules: [

@@ -164,6 +164,19 @@ function TradeForm({
 
   const clientOrderId = useMemo(() => crypto.randomUUID(), [])
 
+  // Backend quotes expire after 5s (OrderService.QUOTE_TTL) and
+  // place_order rejects a stale quote_id with "Quote expired — please refresh".
+  // Drop the quote at its real expiry so we neither show nor send a dead quote.
+  useEffect(() => {
+    if (!quote) return
+    const ttlMs = Number(quote.expires_at) * 1000 - Date.now()
+    const timer = setTimeout(() => {
+      setQuote(null)
+      setQuoteMeta(null)
+    }, Math.max(ttlMs, 0))
+    return () => clearTimeout(timer)
+  }, [quote])
+
   const {
     register,
     handleSubmit,
@@ -201,9 +214,8 @@ function TradeForm({
     ? currentYesPrice
     : currentNoPrice
 
-  // Only use the cached quote when it matches current inputs
-  const quoteVisible =
-    orderType === "market" &&
+  // Only use the cached quote when it matches current inputs (and is still within TTL)
+  const quoteMatchesInputs =
     quote !== null &&
     quoteMeta !== null &&
     quoteMeta.marketId === marketId &&
@@ -211,10 +223,15 @@ function TradeForm({
     quoteMeta.side === side &&
     Number(quoteMeta.amount) === Number(amount)
 
+  const quoteVisible = orderType === "market" && quoteMatchesInputs
+
   const displayPrice =
     orderType === "limit"
       ? price ?? effectivePrice
-      : quoteVisible && quote ? quote.price : effectivePrice
+      : // Backend quote has no flat `price` — `price_after` is the post-slippage estimate.
+        quoteVisible && quote
+        ? quote.price_after
+        : effectivePrice
 
   const total = amount && displayPrice ? Number(amount) * Number(displayPrice) : 0
 
@@ -228,6 +245,11 @@ function TradeForm({
     if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
     // Invalid inputs: skip fetch; quoteVisible gate below hides any cached quote.
     if (!amount || Number(amount) <= 0 || orderType !== "market") {
+      return
+    }
+    // Live quote already covers exactly these inputs — a new one is only needed
+    // once it expires (TTL effect clears `quote`, flipping this back to false).
+    if (quoteMatchesInputs) {
       return
     }
     const timeoutId = setTimeout(async () => {
@@ -245,7 +267,9 @@ function TradeForm({
     }, 300)
     quoteDebounceRef.current = timeoutId
     return () => clearTimeout(timeoutId)
-  }, [amount, outcome, side, marketId, orderType])
+    // `quoteMatchesInputs` re-runs this once the previous quote expires or the
+    // inputs change, so a fresh quote replaces the stale one.
+  }, [amount, outcome, side, marketId, orderType, quoteMatchesInputs])
 
   // ── Handlers ────────────────────────────────────────────────────────────
 

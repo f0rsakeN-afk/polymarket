@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ForbiddenError, ValidationError
 from app.api.responses import PaginatedResponse, success_response
-from app.database import get_db
+from app.database import get_db, get_db_replica
 from app.deps import get_current_user
 from app.models.treasury import Treasury, TreasuryLog
 from app.models.user import User
@@ -41,12 +41,24 @@ async def _get_or_create_treasury(db: AsyncSession) -> Treasury:
 @router.get("")
 async def get_treasury(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db_replica),
 ):
-    # Authenticated read: a GET must never let anonymous traffic write
-    # (this endpoint lazily creates the singleton row).
-    await get_current_user(request, db)
-    treasury = await _get_or_create_treasury(db)
+    # Admin-only: treasury balance and fee totals are operational financial
+    # data — the same privilege boundary as POST /treasury/distribute.
+    await _get_admin_user(request, db)
+
+    # Read must be side-effect free. The singleton row is created by the
+    # write path (distribute), so a fresh install simply reports zeros here
+    # instead of INSERTing on a GET.
+    result = await db.execute(select(Treasury).limit(1))
+    treasury = result.scalar_one_or_none()
+    if treasury is None:
+        return success_response(TreasuryResponse(
+            id="",
+            balance="0",
+            total_fees_collected="0",
+            total_fees_distributed="0",
+        ))
     return success_response(TreasuryResponse(
         id=str(treasury.id),
         balance=str(treasury.balance),
@@ -57,13 +69,20 @@ async def get_treasury(
 
 @router.get("/logs")
 async def get_treasury_logs(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    event: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    event: str | None = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db_replica),
 ):
-    treasury = await _get_or_create_treasury(db)
+    # Admin-only: this is an audit trail of money movements (amounts and
+    # reference ids). No non-admin surface consumes it.
+    await _get_admin_user(request, db)
+
+    result = await db.execute(select(Treasury).limit(1))
+    treasury = result.scalar_one_or_none()
+    if treasury is None:
+        return PaginatedResponse(data=[], total=0, page=page, page_size=page_size, has_more=False)
 
     query = select(TreasuryLog).where(TreasuryLog.treasury_id == treasury.id)
     if event:
@@ -133,4 +152,4 @@ async def distribute_fees(
     db.add(log)
     await db.commit()
 
-    return success_response({"message": f"Distributed {amount} from treasury"})
+    return success_response({"message": f"Distributed {amount} from treasury"}, message=f"Distributed {amount} from treasury")

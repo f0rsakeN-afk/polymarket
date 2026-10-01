@@ -50,7 +50,7 @@ async def list_trades(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     market_slug: str | None = None,
-    cursor: str | None = Query(None, description="Opaque cursor from a previous response for stable pagination. Overrides page."),
+    cursor: str | None = Query(None, max_length=512, description="Opaque cursor from a previous response for stable pagination. Overrides page."),
     db: AsyncSession = Depends(get_db_replica),
 ):
     # Enforce keyset pagination when offset would exceed 1000.
@@ -58,7 +58,7 @@ async def list_trades(
     # offset > 1000), so deep offsets silently returned the first page.
     offset = (page - 1) * page_size
     if cursor is None and offset > 1000:
-        raise ValidationError("Pagination offset exceeds 1000. Use cursor pagination instead.")
+        raise ValidationError("Pagination offset exceeds 1000. Use cursor pagination instead.", error_code="PAGINATION_LIMIT")
     use_cursor = cursor is not None
     query = (
         select(Trade, Market.slug, Market.question, User.username)
@@ -117,7 +117,7 @@ async def list_market_trades(
     slug: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    cursor: str | None = Query(None, description="Opaque cursor from a previous response for stable pagination. Overrides page."),
+    cursor: str | None = Query(None, max_length=512, description="Opaque cursor from a previous response for stable pagination. Overrides page."),
     db: AsyncSession = Depends(get_db_replica),
 ):
     market_result = await db.execute(select(Market).where(Market.slug == slug))

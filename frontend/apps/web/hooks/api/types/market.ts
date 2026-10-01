@@ -10,9 +10,10 @@ export interface MarketResponse {
   yes_price: string
   no_price: string
   closes_at: string
-  winning_outcome_id?: string
-  winning_outcome_name?: string
-  outcomes?: Outcome[]
+  winning_outcome_id: string | null
+  winning_outcome_name: string | null
+  /** null for markets that only have the default YES/NO pair — see MarketDetailResponse */
+  outcomes: Outcome[] | null
 }
 
 export interface MarketListResponse {
@@ -44,10 +45,12 @@ export interface PriceHistoryPoint {
 
 export interface MarketDetailResponse extends Omit<MarketResponse, "id"> {
   id: string
+  /** Always populated on the detail endpoint (unlike MarketResponse.outcomes). */
   outcomes: Outcome[]
   faqs?: FAQ[]
-  spread: string
-  created_at: string
+  /** Backend computes `abs(yes_price - no_price)` → JSON number, not a string. */
+  spread: number
+  created_at: string | null
 }
 
 export interface Trade {
@@ -59,9 +62,9 @@ export interface Trade {
   side: string
   price: string
   amount: string
-  executed_at: string
+  /** null until the trade is settled */
+  executed_at: string | null
   username: string
-  total?: string
 }
 
 export interface TradesResponse {
@@ -70,16 +73,19 @@ export interface TradesResponse {
     trades: Trade[]
     page: number
     page_size: number
+    next_cursor: string | null
+    has_more: boolean
   }
 }
 
+/** One row of MarketActivity.recent_trades (app/api/market_activity.py). */
 export interface MarketTrade {
   id: string
   outcome: string
   side: string
   price: string
   amount: string
-  timestamp: string
+  executed_at: string
   username: string
 }
 

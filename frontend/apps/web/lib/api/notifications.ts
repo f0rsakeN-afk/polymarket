@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { api } from "./client"
+import { api, MutationResponse } from "./client"
 import {
   notificationPreferenceSchema,
   updateNotificationPreferencesSchema,
@@ -24,7 +24,7 @@ export const notificationsApi = {
   updatePreferences: (
     data: z.infer<typeof updateNotificationPreferencesSchema>
   ) =>
-    api.put<{ success: boolean; message?: string }>(
+    api.put<MutationResponse<{ message?: string }>>(
       "/api/v1/notifications/preferences",
       updateNotificationPreferencesSchema.parse(data)
     ),
@@ -41,10 +41,10 @@ export const notificationsApi = {
   },
 
   markRead: (notificationId: string) =>
-    api.post<{ success: boolean }>(
+    api.post<MutationResponse<{ message: string }>>(
       `/api/v1/notifications/${notificationId}/read`
     ),
 
   markAllRead: () =>
-    api.post<{ success: boolean }>("/api/v1/notifications/read-all"),
+    api.post<MutationResponse<{ message: string }>>("/api/v1/notifications/read-all"),
 }

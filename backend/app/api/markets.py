@@ -82,11 +82,11 @@ def market_to_response(
 
 @router.get("/")
 async def list_markets(
-    q: str | None = None,
-    category: str | None = None,
-    status: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    category: str | None = Query(None, max_length=100),
+    status: str | None = Query(None, max_length=32),
     sort: str = Query("volume", pattern="^(volume|newest|closing_soon|liquidity)$"),
-    cursor: str | None = Query(None, description="Cursor for stable pagination: base64 encoding of (created_at, id). Overrides page."),
+    cursor: str | None = Query(None, max_length=512, description="Cursor for stable pagination: base64 encoding of (created_at, id). Overrides page."),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
@@ -153,7 +153,8 @@ async def list_markets(
         # Offset-based pagination with safety limit — avoid > 1000 row skip
         if (page - 1) * page_size > 1000:
             raise ValidationError(
-                "Pagination offset exceeds 1000. Use cursor pagination instead."
+                "Pagination offset exceeds 1000. Use cursor pagination instead.",
+                error_code="PAGINATION_LIMIT"
             )
         query = (
             base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
@@ -276,7 +277,9 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
     # Check cache using market_id (not slug)
     cached = await cache_get_orderbook(str(market.id))
     if cached is not None:
-        return cached
+        # Cache stores the raw orderbook — wrap it so the response shape is
+        # identical to the cache-miss path ({success, data}).
+        return success_response(cached)
 
     data = await build_orderbook(db, str(market.id))
     await cache_set_orderbook(str(market.id), data, ttl=60)
@@ -364,7 +367,7 @@ async def create_market(
     await db.commit()
     logger.info(f"Market created: {data.slug} by admin={user.id}")
     await cache_invalidate_market_lists()
-    return success_response({"slug": data.slug, "id": str(market.id)})
+    return success_response({"slug": data.slug, "id": str(market.id)}, message="Market created")
 
 
 @router.get("/{slug}/faqs")
@@ -583,7 +586,8 @@ async def resolve_market_endpoint(
                 "slug": slug,
                 "winning_outcome_id": str(outcome.id),
                 "winning_outcome_name": outcome.name,
-            }
+            },
+            message="Market resolved",
         )
     finally:
         # Release the distributed lock; 300s TTL is a safety net if we crash
@@ -634,7 +638,7 @@ async def claim_winnings(
 
     payout = Decimal(str(winning_pos.shares_held))
     if payout <= 0:
-        raise ValidationError("No winnings to claim")
+        raise ValidationError("No winnings to claim", error_code="NOTHING_TO_CLAIM")
 
     # Mark as settled atomically — prevents double-claim on client retry
     winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
@@ -656,4 +660,4 @@ async def claim_winnings(
     await db.commit()
 
     logger.info(f"Claimed winnings: user={user.id} market={slug} payout={payout}")
-    return success_response({"claimed": str(payout)})
+    return success_response({"claimed": str(payout)}, message="Winnings claimed")

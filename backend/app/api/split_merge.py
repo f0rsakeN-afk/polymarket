@@ -14,6 +14,7 @@ from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.position import Position
 from app.models.wallet import Transaction, Wallet
+from app.schemas.split_merge import SplitMergeRequest
 from app.services.market_service import MarketService
 from app.websocket.manager import redis_pubsub
 
@@ -23,8 +24,7 @@ router = APIRouter(prefix="/split-merge", tags=["split-merge"])
 
 @router.post("/split", summary="Split USDC into equal YES+NO shares")
 async def split(
-    market_id: str,
-    amount: Decimal,
+    data: SplitMergeRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
@@ -35,6 +35,8 @@ async def split(
     giving accurate unrealized PnL display.
     """
     user = await get_current_user(request, db)
+    market_id: str = data.market_id
+    amount: Decimal = data.amount
     amount_dec = amount
 
     if amount_dec <= 0:
@@ -153,7 +155,7 @@ async def split(
 
     return success_response({
         "market_id": market_id,
-        "amount": amount,
+        "amount": str(amount),
         "fee": str(fee),
         "yes_price": str(yes_price),
         "no_price": str(no_price),
@@ -165,8 +167,7 @@ async def split(
 
 @router.post("/merge", summary="Merge equal YES+NO shares back into USDC")
 async def merge(
-    market_id: str,
-    amount: Decimal,
+    data: SplitMergeRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
@@ -176,6 +177,8 @@ async def merge(
     `amount` shares of BOTH YES and NO to perform a merge.
     """
     user = await get_current_user(request, db)
+    market_id: str = data.market_id
+    amount: Decimal = data.amount
     amount_dec = amount
 
     if amount_dec <= 0:
@@ -284,7 +287,7 @@ async def merge(
 
     return success_response({
         "market_id": market_id,
-        "amount": amount,
+        "amount": str(amount),
         "fee": str(fee),
         "amount_received": str(amount_after_fee),
         "balance_after": str(wallet.balance),

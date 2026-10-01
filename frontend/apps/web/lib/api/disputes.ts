@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, MutationResponse } from "./client"
 
 export interface DisputeResponse {
   id: string
@@ -29,7 +29,7 @@ export interface AdjudicateDisputeParams {
 
 export const disputesApi = {
   create: (data: CreateDisputeParams) =>
-    api.post<{ success: boolean; data: DisputeResponse }>("/api/v1/disputes", data),
+    api.post<MutationResponse<DisputeResponse>>("/api/v1/disputes", data),
 
   getForMarket: (marketId: string) =>
     api.get<{ success: boolean; data: DisputeResponse[] }>(
@@ -37,13 +37,13 @@ export const disputesApi = {
     ),
 
   proposeResolution: (data: ProposeResolutionParams) =>
-    api.post<{ success: boolean; message?: string }>(
+    api.post<MutationResponse<{ message?: string }>>(
       "/api/v1/disputes/propose-resolution",
       data
     ),
 
   adjudicate: (disputeId: string, data: AdjudicateDisputeParams) =>
-    api.post<{ success: boolean; data: { dispute_id: string; ruling: string; market_status: string } }>(
+    api.post<MutationResponse<{ dispute_id: string; ruling: string; market_status: string }>>(
       `/api/v1/disputes/${disputeId}/adjudicate`,
       data
     ),

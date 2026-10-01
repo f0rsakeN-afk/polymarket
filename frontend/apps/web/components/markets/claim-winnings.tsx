@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { claimWinnings } from "@/lib/api/markets"
+import { apiErrorMessage } from "@/lib/api/client"
 
 const ClaimWinnings = memo(function ClaimWinnings({ slug }: { slug: string }) {
   const { data: currentUser } = useCurrentUser()
@@ -22,7 +23,7 @@ const ClaimWinnings = memo(function ClaimWinnings({ slug }: { slug: string }) {
       qc.invalidateQueries({ queryKey: ["positions"] })
       sileo.success({ title: "Winnings claimed!" })
     } catch (e) {
-      sileo.error({ title: "Claim failed", description: e instanceof Error ? e.message : "Unknown error" })
+      sileo.error({ title: "Claim failed", description: apiErrorMessage(e, "Unknown error") })
     } finally {
       setClaiming(false)
     }

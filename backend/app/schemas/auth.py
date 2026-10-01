@@ -5,7 +5,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     username: str = Field(..., min_length=3, max_length=30, pattern=r"^[a-zA-Z0-9_-]+$")
     password: str = Field(..., min_length=8, max_length=128)
-    referral_code: str | None = None
+    referral_code: str | None = Field(None, max_length=32)
 
 
 class SetPasswordRequest(BaseModel):
@@ -13,9 +13,9 @@ class SetPasswordRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str = Field(..., min_length=1)
+    old_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
-    totp_code: str | None = None
+    totp_code: str | None = Field(None, max_length=8)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -28,7 +28,7 @@ class ResendVerificationRequest(BaseModel):
 
 
 class VerifyMagicUrlRequest(BaseModel):
-    token: str
+    token: str = Field(..., min_length=1, max_length=1024)
 
 
 class MagicLinkRequest(BaseModel):
@@ -38,7 +38,7 @@ class MagicLinkRequest(BaseModel):
 class VerifyMagicRequest(BaseModel):
     email: EmailStr
     code: str = Field(..., min_length=8, max_length=8)
-    totp_code: str | None = None  # optional 2FA after magic login
+    totp_code: str | None = Field(None, max_length=8)  # optional 2FA after magic login
 
 
 class MagicUrl2FARequest(BaseModel):
@@ -58,8 +58,8 @@ class ResetPasswordRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=1)
-    totp_code: str | None = None  # required if 2FA enabled
+    password: str = Field(..., min_length=1, max_length=128)
+    totp_code: str | None = Field(None, max_length=8)  # required if 2FA enabled
 
 
 class RefreshRequest(BaseModel):
@@ -87,4 +87,4 @@ class TwoFactorEnableRequest(BaseModel):
 
 class TwoFactorDisableRequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
-    password: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1, max_length=128)

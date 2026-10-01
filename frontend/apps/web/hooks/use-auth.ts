@@ -2,8 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query"
 import { authApi } from "@/lib/api/auth"
+import { queryKeys } from "@/lib/api/queryKeys"
 
-const ME_QUERY_KEY = ["me"] as const
+// Single source of truth: MUST be queryKeys.me() so profile mutations
+// (verify-email / password change / 2FA toggle) invalidate the same cache entry.
+const ME_QUERY_KEY = queryKeys.me()
 
 export function useCurrentUser() {
   return useQuery({

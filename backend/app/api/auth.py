@@ -6,7 +6,7 @@ import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -80,8 +80,11 @@ def _issue_tokens(
     ua: str | None = None,
 ):
     """Create access + refresh token + session record, set cookies. Caller commits."""
-    access_token, jti = create_access_token(str(user_id))
     refresh_token_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    # Session row must exist before the access token is minted so the token can
+    # carry `sid` — that's what lets GET /auth/sessions mark the caller's own row.
+    access_token, jti = create_access_token(str(user_id), session_id=session_id)
     expires_at = datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire)
 
     token_record = RefreshToken(
@@ -94,6 +97,7 @@ def _issue_tokens(
     db.add(token_record)
 
     session = Session(
+        id=session_id,
         user_id=user_id,
         refresh_token_id=refresh_token_id,
         ip_address=ip,
@@ -357,17 +361,17 @@ async def resend_verification(data: ResendVerificationRequest, db: AsyncSession 
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
-        return success_response({"message": "If that email exists, a code was sent"})
+        return success_response({"message": "If that email exists, a code was sent"}, message="If that email exists, a code was sent")
 
     if user.is_email_verified:
-        return success_response({"message": "Email already verified"})
+        return success_response({"message": "Email already verified"}, message="Email already verified")
 
     # Invalidate previous code then issue new one
     await OTPService.invalidate(data.email, _OTP_VERIFY)
     code = await OTPService.send_code(data.email, _OTP_VERIFY)
     EmailService.send_verification_code(data.email, code)
 
-    return success_response({"message": "Verification code sent"})
+    return success_response({"message": "Verification code sent"}, message="Verification code sent")
 
 
 @router.post("/set-password", summary="Set password (requires email verification)")
@@ -397,7 +401,7 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
-        return success_response({"message": "If that email is registered, a code was sent"})
+        return success_response({"message": "If that email is registered, a code was sent"}, message="If that email is registered, a code was sent")
 
     if not user.is_email_verified:
         raise UnauthorizedError("Email not verified. Please register first.")
@@ -405,7 +409,7 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
     code = await OTPService.send_code(data.email, _OTP_MAGIC)
     EmailService.send_magic_code(data.email, code)
     logger.info(f"Magic link code requested: {data.email}")
-    return success_response({"message": "Login code sent"})
+    return success_response({"message": "Login code sent"}, message="Login code sent")
 
 
 @router.post("/magic-link/url", summary="Request one-click magic link URL via email")
@@ -413,7 +417,7 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
-        return success_response({"message": "If that email is registered, a link was sent"})
+        return success_response({"message": "If that email is registered, a link was sent"}, message="If that email is registered, a link was sent")
 
     if not user.is_email_verified:
         raise UnauthorizedError("Email not verified. Please register first.")
@@ -435,7 +439,7 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     magic_url = f"{settings.frontend_url}/auth/magic-url?token={token}"
     EmailService.send_magic_url(data.email, magic_url)
     logger.info(f"Magic URL requested: {data.email}")
-    return success_response({"message": "Login link sent"})
+    return success_response({"message": "Login link sent"}, message="Login link sent")
 
 
 @router.post("/verify-magic-url", summary="Verify magic link URL token")
@@ -750,7 +754,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request, db: Asy
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
-        return success_response({"message": "If that email is registered, a code was sent"})
+        return success_response({"message": "If that email is registered, a code was sent"}, message="If that email is registered, a code was sent")
 
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
@@ -758,7 +762,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request, db: Asy
     EmailService.send_password_reset_code(data.email, code)
     await AuthAuditService.log_password_reset_request(db, data.email, ip, ua)
     logger.info(f"Password reset requested: {data.email}")
-    return success_response({"message": "Reset code sent"})
+    return success_response({"message": "Reset code sent"}, message="Reset code sent")
 
 
 @router.post("/reset-password", summary="Reset password with code")
@@ -922,6 +926,19 @@ async def list_sessions(request: Request, db: AsyncSession = Depends(get_db)):
     """List all active sessions for the current user."""
     user = await get_current_user(request, db)
 
+    # `sid` on the access token identifies which row issued this request.
+    # Optional: tokens minted before this claim exist simply report no current session.
+    current_sid: str | None = None
+    token = request.cookies.get("access_token")
+    auth_header = request.headers.get("Authorization", "")
+    if not token and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if token:
+        try:
+            current_sid = decode_token(token).get("sid")
+        except Exception:
+            current_sid = None
+
     result = await db.execute(
         select(Session).where(
             Session.user_id == user.id,
@@ -938,6 +955,7 @@ async def list_sessions(request: Request, db: AsyncSession = Depends(get_db)):
             "created_at": s.created_at,
             "last_active_at": s.last_active_at,
             "expires_at": s.expires_at,
+            "is_current": current_sid is not None and str(s.id) == current_sid,
         }
         for s in sessions
     ])

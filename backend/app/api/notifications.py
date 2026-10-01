@@ -47,7 +47,7 @@ async def update_preferences(
     for field, value in req.model_dump(exclude_none=True).items():
         setattr(prefs, field, value)
     await db.commit()
-    return success_response({"message": "Preferences updated"})
+    return success_response({"message": "Preferences updated"}, message="Preferences updated")
 
 
 @router.get("")
@@ -114,7 +114,7 @@ async def mark_read(
     ok = await NotificationService.mark_read(db, current_user.id, notification_id)
     if not ok:
         raise NotFoundError("Notification not found")
-    return success_response({"message": "Marked as read"})
+    return success_response({"message": "Marked as read"}, message="Marked as read")
 
 
 @router.post("/read-all")
@@ -123,4 +123,4 @@ async def mark_all_read(
     current_user = Depends(get_current_user),
 ):
     await NotificationService.mark_all_read(db, current_user.id)
-    return success_response({"message": "All notifications marked as read"})
+    return success_response({"message": "All notifications marked as read"}, message="All notifications marked as read")

@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,7 +83,7 @@ async def create_dispute(
         evidence_url=dispute.evidence_url,
         status=dispute.status,
         created_at=dispute.created_at,
-    ))
+    ), message="Dispute filed")
 
 
 @router.post("/propose-resolution")
@@ -120,7 +120,7 @@ async def propose_resolution(
     await cache_invalidate_market(str(market.id))
     await cache_invalidate_market_lists()
 
-    return success_response({"message": "Resolution proposed, dispute window open for 48 hours"})
+    return success_response({"message": "Resolution proposed, dispute window open for 48 hours"}, message="Resolution proposed, dispute window open for 48 hours")
 
 
 @router.get("/market/{market_id}")
@@ -161,6 +161,7 @@ async def get_disputes_for_market(
 async def adjudicate_dispute(
     dispute_id: str,
     req: AdjudicateDisputeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
@@ -222,7 +223,7 @@ async def adjudicate_dispute(
             )
 
     actual_market_status = market.status if (req.ruling == "upheld" and market) else None
-    ruling_msg = "dispute denied" if req.ruling == "denied" else "dispute upheld — market resolved"
+    ruling_msg = "dispute denied" if req.ruling == "dismissed" else "dispute upheld — market resolved"
     return success_response({
         "dispute_id": str(dispute.id),
         "ruling": req.ruling,

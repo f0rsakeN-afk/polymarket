@@ -59,7 +59,7 @@ async def flag_market(
         reason=flag.reason,
         status=flag.status,
         created_at=flag.created_at,
-    ))
+    ), message="Flag recorded")
 
 
 @router.get("/market/{market_id}")

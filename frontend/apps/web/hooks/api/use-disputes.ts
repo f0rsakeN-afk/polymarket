@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { disputesApi } from "@/lib/api/disputes"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 import type {
   CreateDisputeParams,
   ProposeResolutionParams,
@@ -22,11 +23,11 @@ export function useDisputesForMarket(marketId: string) {
 export function useCreateDispute() {
   return useMutation({
     mutationFn: (data: CreateDisputeParams) => disputesApi.create(data),
-    onSuccess: () => {
-      sileo.success({ title: "Dispute filed" })
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Dispute filed" })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to file dispute" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to file dispute") })
     },
   })
 }
@@ -34,11 +35,11 @@ export function useCreateDispute() {
 export function useProposeResolution() {
   return useMutation({
     mutationFn: (data: ProposeResolutionParams) => disputesApi.proposeResolution(data),
-    onSuccess: () => {
-      sileo.success({ title: "Resolution proposed" })
+    onSuccess: (res) => {
+      sileo.success({ title: res.message ?? "Resolution proposed" })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to propose resolution" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to propose resolution") })
     },
   })
 }
@@ -48,12 +49,12 @@ export function useAdjudicateDispute() {
   return useMutation({
     mutationFn: ({ disputeId, data }: { disputeId: string; data: AdjudicateDisputeParams }) =>
       disputesApi.adjudicate(disputeId, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["disputes"] })
-      sileo.success({ title: "Dispute adjudicated" })
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.disputes() })
+      sileo.success({ title: res.message ?? "Dispute adjudicated" })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to adjudicate dispute" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to adjudicate dispute") })
     },
   })
 }

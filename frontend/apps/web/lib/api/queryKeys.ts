@@ -12,6 +12,14 @@ export const queryKeys = {
   marketActivity: (slug: string) => ["market-activity", slug] as const,
   marketTrades: (slug: string) => ["market-trades", slug] as const,
   globalTrades: (marketSlug?: string) => ["global-trades", marketSlug] as const,
+  // Non-infinite variants of the same feeds — MUST be distinct keys from the
+  // infinite queries above: they cache a single page object, not {pages, pageParams}.
+  // The "…", "simple" segment keeps them out of each other's exact-key lookups while
+  // still matching prefix invalidations like ["market-trades"].
+  marketTradesPage: (slug: string, params?: Record<string, unknown>) =>
+    ["market-trades", slug, "simple", params] as const,
+  globalTradesPage: (marketSlug?: string, params?: Record<string, unknown>) =>
+    ["global-trades", marketSlug, "simple", params] as const,
   comments: (slug: string) => ["comments", slug] as const,
   faqs: (slug: string) => ["faqs", slug] as const,
   relatedMarkets: (slug: string) => ["related-markets", slug] as const,
@@ -42,10 +50,10 @@ export const queryKeys = {
   alerts: () => ["alerts"] as const,
 
   // Disputes
-  disputes: (marketId: string) => ["disputes", marketId] as const,
+  disputes: (marketId?: string) => (marketId ? (["disputes", marketId] as const) : (["disputes"] as const)),
 
   // Flags
-  flags: (marketId: string) => ["flags", marketId] as const,
+  flags: (marketId?: string) => (marketId ? (["flags", marketId] as const) : (["flags"] as const)),
 
   // Liquidity
   lpAnalytics: () => ["lp-analytics"] as const,

@@ -20,8 +20,8 @@ import { DataTable, Column } from "@/components/shared/data-table"
 import { useOrders } from "@/hooks/api/use-orders"
 import { useUserSocket } from "@/hooks/use-user-socket"
 import { useCurrentUser } from "@/hooks/use-auth"
-import { sileo } from "sileo"
 import { useCancelOrder } from "@/hooks/api/use-orders"
+import { queryKeys } from "@/lib/api/queryKeys"
 import { cn } from "@workspace/ui/lib/utils"
 import type { Order } from "@/hooks/api/types/order"
 
@@ -41,7 +41,8 @@ function n(v: string | number | null | undefined, fallback = 0): number {
   return isNaN(x) ? fallback : x
 }
 
-function formatTime(iso: string) {
+function formatTime(iso: string | null | undefined) {
+  if (!iso) return "—"
   const d = new Date(iso)
   const now = new Date()
   const diff = (now.getTime() - d.getTime()) / 1000
@@ -89,10 +90,9 @@ function CancelButton({ order }: { order: Order }) {
   const handleConfirm = useCallback(async () => {
     try {
       await cancelOrder(order.id)
-      sileo.success({ title: "Order cancelled" })
       setOpen(false)
-    } catch (e) {
-      sileo.error({ title: "Cancel failed", description: e instanceof Error ? e.message : "Unknown error" })
+    } catch {
+      // Toast (with the backend's message) is emitted by useCancelOrder.
     }
   }, [cancelOrder, order.id])
 
@@ -150,7 +150,7 @@ export function OrdersPageClient() {
   const handleWsMessage = useCallback((payload: unknown) => {
     const msg = payload as { type?: string; notification?: { type?: string } }
     if (msg?.type === "position:update" || msg?.notification?.type === "order_filled") {
-      qc.invalidateQueries({ queryKey: ["orders"] })
+      qc.invalidateQueries({ queryKey: queryKeys.orders() })
       qc.invalidateQueries({ queryKey: ["positions"] })
     }
   }, [qc])

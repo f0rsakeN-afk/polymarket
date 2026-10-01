@@ -26,6 +26,8 @@ import {
   CardTitle,
 } from "@workspace/ui/components/card";
 import { sileo } from "sileo";
+import { queryKeys } from "@/lib/api/queryKeys";
+import { apiErrorMessage } from "@/lib/api/client"
 
 const schema = z
   .object({
@@ -52,13 +54,13 @@ export function ChangePasswordPageClient() {
   const mutation = useMutation({
     mutationFn: (data: Input) => accountApi.changePassword({ old_password: data.oldPassword, new_password: data.newPassword }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["me"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.me() });
       form.reset();
       setSuccess(true);
       sileo.success({ title: "Password changed" });
     },
     onError: (err) => {
-      form.setError("root", { message: err instanceof Error ? err.message : "Failed to change password" });
+      form.setError("root", { message: apiErrorMessage(err, "Failed to change password") });
     },
   });
 
