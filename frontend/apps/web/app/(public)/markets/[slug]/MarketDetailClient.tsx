@@ -14,28 +14,25 @@ export function MarketDetailClient() {
 
   const handleTrade = useCallback(async (order: PlaceOrderInput) => {
     try {
-      const result = await placeOrder(order) as { success?: boolean; data?: { status?: string; shares?: string; price?: string; duplicate?: boolean } }
-      const status = result?.data?.status
-      if (status === "duplicate" || result?.data?.duplicate) {
-        sileo.info({ title: "Order already placed", description: `View in orders (${parseFloat(result?.data?.shares ?? "0").toFixed(2) ?? 0} shares at $${parseFloat(result?.data?.price ?? "0").toFixed(4) ?? 0})` })
+      const result = await placeOrder(order)
+      const { data } = result
+      const shares = parseFloat(data.shares || "0").toFixed(2)
+      const price = parseFloat(data.price || "0").toFixed(4)
+      const detail = `${shares} shares at $${price}`
+      if (data.status === "duplicate" || data.duplicate) {
+        sileo.info({
+          title: result.message ?? "Order already placed",
+          description: `View in orders (${detail})`,
+        })
       } else {
-        sileo.success({ title: `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`, description: `${parseFloat(result?.data?.shares ?? "0").toFixed(2) ?? 0} shares at $${parseFloat(result?.data?.price ?? "0").toFixed(4) ?? 0}` })
+        sileo.success({
+          title: result.message ?? `Order placed: ${order.side.toUpperCase()} ${order.outcome.toUpperCase()}`,
+          description: detail,
+        })
       }
-    } catch (e) {
-      const err = e as { message: string; error_code?: string }
-      const msg = err.message
-      const code = err.error_code
-      if (code === "VALIDATION_ERROR") {
-        sileo.error({ title: "Invalid order", description: msg })
-      } else if (msg.includes("slippage") || code === "SLIPPAGE_EXCEEDED") {
-        sileo.error({ title: "Price moved", description: "The price changed more than expected. Please review and try again." })
-      } else if (msg.includes("duplicate") || msg.includes("already placed") || code === "DUPLICATE_ORDER") {
-        sileo.info({ title: "Order already placed" })
-      } else if (code === "INSUFFICIENT_BALANCE") {
-        sileo.error({ title: "Insufficient balance", description: "You don't have enough funds for this order." })
-      } else {
-        sileo.error({ title: "Trade failed", description: msg })
-      }
+    } catch {
+      // Error toast — including the backend's message — is emitted by
+      // usePlaceOrder, so re-throwing here would only duplicate it.
     }
   }, [placeOrder])
 

@@ -5,7 +5,6 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { Button } from "@workspace/ui/components/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@workspace/ui/components/alert-dialog"
 import { useCancelOrder } from "@/hooks/api/use-orders"
-import { sileo } from "sileo"
 import type { Order } from "@/hooks/api/types/order"
 
 interface OrderRowProps {
@@ -99,9 +98,8 @@ function OrdersList({ orders, loading, hasMore, onLoadMore }: OrdersListProps) {
     setCancellingId(orderId)
     try {
       await cancelOrder(orderId)
-      sileo.success({ title: "Order cancelled" })
-    } catch (e) {
-      sileo.error({ title: "Cancel failed", description: e instanceof Error ? e.message : "Unknown error" })
+    } catch {
+      // Toast (with the backend's message) is emitted by useCancelOrder.
     } finally {
       setCancellingId(null)
     }

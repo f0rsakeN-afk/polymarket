@@ -12,7 +12,8 @@ function formatUSD(n: string | number) {
   }).format(Number(n))
 }
 
-function formatDate(iso: string) {
+function formatDate(iso: string | null | undefined) {
+  if (!iso) return "—"
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -24,8 +25,17 @@ function formatDate(iso: string) {
 const typeLabels: Record<string, string> = {
   deposit: "Deposit",
   withdrawal: "Withdrawal",
-  trade: "Trade",
-  refund: "Refund",
+  trade_buy: "Trade",
+  trade_sell: "Trade",
+  split: "Split",
+  merge: "Merge",
+  liquidity_add: "Add liquidity",
+  liquidity_remove: "Remove liquidity",
+  liquidity_removal: "LP settlement",
+  settlement_win: "Market settlement",
+  settlement_loss: "Market settlement",
+  referral_reward: "Referral reward",
+  protocol_fee: "Protocol fee",
 }
 
 const statusColors: Record<string, string> = {
@@ -78,8 +88,9 @@ export function TransactionsPageClient() {
               </div>
               <div className="text-right">
                 <p className="font-medium">
-                  {tx.type === "deposit" || tx.type === "refund" ? "+" : "-"}
-                  {formatUSD(tx.amount)}
+                  {/* `amount` is signed — do not infer direction from `type`. */}
+                  {Number(tx.amount) < 0 ? "-" : "+"}
+                  {formatUSD(Math.abs(Number(tx.amount)))}
                 </p>
                 <p className={`text-xs font-medium capitalize ${statusColors[tx.status] ?? ""}`}>{tx.status}</p>
               </div>

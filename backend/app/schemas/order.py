@@ -6,23 +6,23 @@ from app.schemas.base import MoneyField, NonNegativeMoney, PositiveMoney
 
 
 class OrderRequest(BaseModel):
-    market_id: str
-    outcome: str = Field(...)  # Accepts "yes", "no", or outcome name for multi-outcome markets
+    market_id: str = Field(..., max_length=64)
+    outcome: str = Field(..., max_length=100)  # Accepts "yes", "no", or outcome name for multi-outcome markets
     side: str = Field(..., pattern="^(buy|sell)$")
     order_type: str = Field(default="market", pattern="^(market|limit|fill_or_kill)$")
     amount: PositiveMoney
     price: NonNegativeMoney | None = Field(None, le=1)  # required for limit
     expires_at: datetime | None = None  # for limit orders
     post_only: bool = False  # if True, reject if would execute immediately
-    client_order_id: str | None = None
+    client_order_id: str | None = Field(None, max_length=64)
     max_slippage: NonNegativeMoney | None = Field(None, ge=0, le=0.10)  # cap at 10% slippage server-side
     min_shares_out: PositiveMoney | None = None  # minimum shares to receive
-    quote_id: str | None = None  # bind to a specific quote
+    quote_id: str | None = Field(None, max_length=64)  # bind to a specific quote
 
 
 class QuoteRequest(BaseModel):
-    market_id: str
-    outcome: str = Field(...)
+    market_id: str = Field(..., max_length=64)
+    outcome: str = Field(..., max_length=100)
     side: str = Field(..., pattern="^(buy|sell)$")
     amount: PositiveMoney
 

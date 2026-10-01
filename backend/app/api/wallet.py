@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.exceptions import (
     ForbiddenError,
     NotFoundError,
+    ValidationError,
 )
 from app.api.responses import success_response
 from app.config import settings
@@ -85,7 +86,7 @@ async def create_deposit(
         payment_intent_id=intent.id,
         amount=data.amount,
         currency="USD",
-    ))
+    ), message="Deposit initiated")
 
 
 @router.post("/withdraw")

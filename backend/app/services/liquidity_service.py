@@ -42,7 +42,7 @@ class LiquidityService:
         )
         pool = pool_result.scalar_one_or_none()
         if not pool:
-            raise ValidationError("Market has no liquidity pool")
+            raise ValidationError("Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY")
         if market.status != "active":
             raise ValidationError("Market is not active for liquidity removal")
 
@@ -161,7 +161,7 @@ class LiquidityService:
         )
         pool = pool_result.scalar_one_or_none()
         if not pool:
-            raise ValidationError("Market has no liquidity pool")
+            raise ValidationError("Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY")
         if market.status != "active":
             raise ValidationError("Market is not active for liquidity removal")
 
@@ -178,7 +178,7 @@ class LiquidityService:
         )
         lp_share = lp_result.scalar_one_or_none()
         if not lp_share or lp_share.lp_tokens < lp_tokens:
-            raise ValidationError("Insufficient LP tokens")
+            raise ValidationError("Insufficient LP tokens", error_code="INSUFFICIENT_LP_TOKENS")
 
         if pool.lp_token_supply == 0:
             raise ValidationError("No LP tokens outstanding")

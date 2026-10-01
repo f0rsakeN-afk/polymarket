@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createAlert, listAlerts, deleteAlert } from "@/lib/api/alerts"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
+import { apiErrorMessage } from "@/lib/api/client"
 
 export function useAlerts() {
   return useQuery({
@@ -28,12 +29,12 @@ export function useDeleteAlert() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deleteAlert,
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.alerts() })
-      sileo.success({ title: "Alert deleted" })
+      sileo.success({ title: res.message ?? "Alert deleted" })
     },
     onError: (err) => {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to delete alert" })
+      sileo.error({ title: apiErrorMessage(err, "Failed to delete alert") })
     },
   })
 }

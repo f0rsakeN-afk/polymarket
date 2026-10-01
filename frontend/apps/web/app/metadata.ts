@@ -1,6 +1,7 @@
 import { Metadata } from "next";
+import { config } from "@/lib/config";
 
-const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "") ?? "https://predictx.io";
+const baseUrl = config.siteUrl;
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),

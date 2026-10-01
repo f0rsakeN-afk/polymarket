@@ -5,12 +5,13 @@ from datetime import UTC, datetime, timedelta
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
 from jose import JWTError, jwt
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ForbiddenError, UnauthorizedError
 from app.config import settings
 from app.database import get_db
-from app.models.user import User
+from app.models.user import Session, User
 from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
@@ -64,14 +65,22 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def create_access_token(user_id: str, expires_delta: timedelta | None = None) -> tuple[str, str]:
+def create_access_token(
+    user_id: str,
+    expires_delta: timedelta | None = None,
+    session_id: str | None = None,
+) -> tuple[str, str]:
     """
     Create a JWT access token with a unique jti.
+    `session_id` binds the token to its DB session row so callers can tell
+    which of the user's sessions issued a request (optional for old tokens).
     Returns (token, jti).
     """
     jti = str(uuid.uuid4())
     expire = datetime.now(UTC) + (expires_delta or timedelta(seconds=settings.jwt_access_expire))
     to_encode = {"sub": user_id, "exp": expire, "type": "access", "jti": jti}
+    if session_id:
+        to_encode["sid"] = session_id
     token = jwt.encode(to_encode, settings.jwt_secret, algorithm=ALGORITHM)
     return token, jti
 

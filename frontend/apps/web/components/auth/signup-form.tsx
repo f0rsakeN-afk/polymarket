@@ -20,6 +20,7 @@ import {
 } from "@workspace/ui/components/form";
 import { Card, CardContent } from "@workspace/ui/components/card";
 import { sileo } from "sileo";
+import { apiErrorMessage } from "@/lib/api/client"
 
 // ─── Polygon Logo ───────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ export function SignupForm() {
         setStep("otp");
         setResendTimer(RESEND_COOLDOWN);
       } catch (err) {
-        sileo.error({ title: err instanceof Error ? err.message : "Registration failed" });
+        sileo.error({ title: apiErrorMessage(err, "Registration failed") });
         setIsLoading(false);
       }
     },
@@ -108,8 +109,8 @@ export function SignupForm() {
       sileo.success({ title: "Email verified!" });
       router.push("/login");
     } catch (err) {
-      sileo.error({ title: err instanceof Error ? err.message : "Invalid or expired code" });
-      setOtpError(err instanceof Error ? err.message : "Invalid or expired code");
+      sileo.error({ title: apiErrorMessage(err, "Invalid or expired code") });
+      setOtpError(apiErrorMessage(err, "Invalid or expired code"));
       setOtp("");
     } finally {
       setIsLoading(false);
@@ -123,7 +124,7 @@ export function SignupForm() {
       setOtpError("");
       sileo.success({ title: "Code resent" });
     } catch (err) {
-      sileo.error({ title: err instanceof Error ? err.message : "Failed to resend code" });
+      sileo.error({ title: apiErrorMessage(err, "Failed to resend code") });
     }
   }, [email]);
 

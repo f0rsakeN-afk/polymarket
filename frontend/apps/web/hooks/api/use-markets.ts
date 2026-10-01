@@ -5,8 +5,6 @@ import {
   listMarkets,
   getMarket,
   getMarketActivity,
-  getMarketTrades,
-  getGlobalTrades,
   getMarketFAQs,
   getRelatedMarkets,
   getPriceHistory,
@@ -15,9 +13,10 @@ import {
   claimWinnings,
   getOrderBook,
 } from "@/lib/api/markets"
+import { listMarketTrades, listTrades } from "@/lib/api/trades"
 import { api } from "@/lib/api/client"
 import { queryKeys } from "@/lib/api/queryKeys"
-import type { MarketListResponse, MarketResponse, MarketDetailResponse, MarketActivity, Trade, TradesResponse } from "@/hooks/api/types/market"
+import type { MarketListResponse, MarketResponse, TradesResponse } from "@/hooks/api/types/market"
 
 // ─── Markets List ─────────────────────────────────────────────────────────────
 
@@ -45,7 +44,7 @@ export function useMarkets(
 export function useMarket(slug: string) {
   return useQuery({
     queryKey: queryKeys.market(slug),
-    queryFn: () => getMarket(slug).then((r) => r.data as MarketDetailResponse),
+    queryFn: () => getMarket(slug).then((r) => r.data),
     enabled: !!slug,
     staleTime: 30_000,
   })
@@ -56,7 +55,7 @@ export function useMarket(slug: string) {
 export function useMarketActivity(slug: string) {
   return useQuery({
     queryKey: queryKeys.marketActivity(slug),
-    queryFn: () => getMarketActivity(slug).then((r) => r.data as MarketActivity),
+    queryFn: () => getMarketActivity(slug).then((r) => r.data),
     enabled: !!slug,
     staleTime: 15_000,
   })
@@ -67,23 +66,15 @@ export function useMarketActivity(slug: string) {
 export function useMarketTrades(slug: string) {
   return useInfiniteQuery({
     queryKey: queryKeys.marketTrades(slug),
-    queryFn: ({ pageParam }) => getMarketTrades(slug, { page: pageParam, page_size: 50 }),
-    initialPageParam: 1,
-    getNextPageParam: (lastPage, _, lastPageParam) => {
-      const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades
-      return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
-    },
+    // Keyset pagination: feed the previous `next_cursor` back in.
+    queryFn: ({ pageParam }) => listMarketTrades(slug, { cursor: pageParam, page_size: 50 }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
     enabled: !!slug,
-    select: (data) => {
-      const pages = data?.pages ?? []
-      return {
-        trades: pages.flatMap((p) => (p as { data?: { trades?: Trade[] } } | undefined)?.data?.trades ?? []) as Trade[],
-        hasMore: (() => {
-          const last = pages[pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
-          return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
-        })(),
-      }
-    },
+    select: (data) => ({
+      trades: data.pages.flatMap((p) => p.data.trades),
+      hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
+    }),
     staleTime: 10_000,
   })
 }
@@ -93,23 +84,17 @@ export function useMarketTrades(slug: string) {
 export function useGlobalTrades(params?: { market_slug?: string }, initialPage?: TradesResponse) {
   return useInfiniteQuery({
     queryKey: queryKeys.globalTrades(params?.market_slug ?? undefined),
-    queryFn: ({ pageParam }) => getGlobalTrades({ ...params, page: pageParam, page_size: 50 }),
-    ...(initialPage ? { initialData: { pages: [initialPage], pageParams: [1] } } : {}),
-    initialPageParam: 1,
-    getNextPageParam: (lastPage, _, lastPageParam) => {
-      const trades = (lastPage as { data?: { trades?: unknown[] } } | undefined)?.data?.trades
-      return Array.isArray(trades) && trades.length === 50 ? lastPageParam + 1 : undefined
-    },
-    select: (data) => {
-      const pages = data?.pages ?? []
-      return {
-        trades: pages.flatMap((p) => (p as { data?: { trades?: Trade[] } } | undefined)?.data?.trades ?? []) as Trade[],
-        hasMore: (() => {
-          const last = pages[pages.length - 1] as { data?: { trades?: unknown[] } } | undefined
-          return Array.isArray(last?.data?.trades) && last.data.trades.length === 50
-        })(),
-      }
-    },
+    queryFn: ({ pageParam }) =>
+      listTrades({ market_slug: params?.market_slug, cursor: pageParam, page_size: 50 }),
+    ...(initialPage
+      ? { initialData: { pages: [initialPage], pageParams: [undefined as string | undefined] } }
+      : {}),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
+    select: (data) => ({
+      trades: data.pages.flatMap((p) => p.data.trades),
+      hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
+    }),
     staleTime: 10_000,
   })
 }

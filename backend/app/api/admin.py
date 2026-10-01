@@ -32,7 +32,7 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    search: str | None = None,
+    search: str | None = Query(None, max_length=100),
 ):
     """List all users with pagination and optional search (email or username)."""
     await _get_admin_user(request, db)
@@ -136,7 +136,7 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
     await AuthAuditService.log_account_banned(db, str(user.id), str(admin.id), ip, ua)
 
     logger.info(f"User {user.id} banned by admin {admin.id}")
-    return success_response({"status": "banned", "user_id": str(user.id)})
+    return success_response({"status": "banned", "user_id": str(user.id)}, message="User banned")
 
 
 @router.patch("/users/{user_id}/unban", summary="Unban user (admin)")
@@ -157,7 +157,7 @@ async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(
     await AuthAuditService.log_account_unbanned(db, str(user.id), str(admin.id), ip, ua)
 
     logger.info(f"User {user.id} unbanned by admin {admin.id}")
-    return success_response({"status": "unbanned", "user_id": str(user.id)})
+    return success_response({"status": "unbanned", "user_id": str(user.id)}, message="User unbanned")
 
 
 @router.get("/audit-events", summary="List auth audit events (admin)")
@@ -166,7 +166,7 @@ async def list_audit_events(
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
-    event: str | None = None,
+    event: str | None = Query(None, max_length=64),
     success: str | None = None,
     user_id: str | None = None,
 ):
@@ -221,4 +221,4 @@ async def distribute_protocol_fees(request: Request, db: AsyncSession = Depends(
     """Withdraw protocol fees from all markets to the treasury wallet."""
     await _get_admin_user(request, db)
     result = await LiquidityService.distribute_protocol_fees(db)
-    return success_response(result)
+    return success_response(result, message="Protocol fees distributed to treasury")

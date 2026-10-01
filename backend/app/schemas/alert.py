@@ -7,8 +7,8 @@ from app.schemas.base import NonNegativeMoney
 
 
 class AlertCreate(BaseModel):
-    market_id: str
-    outcome: str | None = None  # "yes", "no", or None for either
+    market_id: str = Field(..., max_length=64)
+    outcome: str | None = Field(None, max_length=100)  # "yes", "no", or None for either
     condition: str = Field(..., pattern="^(above|below)$")
     trigger_price: NonNegativeMoney = Field(..., gt=0, lt=1)
 

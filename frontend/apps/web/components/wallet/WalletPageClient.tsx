@@ -15,7 +15,6 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { depositSchema, withdrawSchema } from "@/schemas/wallet"
 import type { DepositInput, WithdrawInput } from "@/schemas/wallet"
-import { sileo } from "sileo"
 
 function AmountForm({
   schema,
@@ -78,12 +77,9 @@ export function WalletPageClient() {
 
   const handleDeposit = useCallback(
     (data: DepositInput) => {
+      // Toasts (backend message) are emitted by useDeposit.
       deposit.mutate(data, {
-        onSuccess: () => {
-          sileo.success({ title: "Deposit initiated" })
-          setDepositOpen(false)
-        },
-        onError: () => sileo.error({ title: "Deposit failed" }),
+        onSuccess: () => setDepositOpen(false),
       })
     },
     [deposit]
@@ -91,12 +87,9 @@ export function WalletPageClient() {
 
   const handleWithdraw = useCallback(
     (data: WithdrawInput) => {
+      // Toasts (backend message) are emitted by useWithdraw.
       withdraw.mutate(data, {
-        onSuccess: () => {
-          sileo.success({ title: "Withdrawal initiated" })
-          setWithdrawOpen(false)
-        },
-        onError: () => sileo.error({ title: "Withdrawal failed" }),
+        onSuccess: () => setWithdrawOpen(false),
       })
     },
     [withdraw]

@@ -72,6 +72,11 @@ def _get_auth_limit_type(path: str) -> LimitType:
 
 
 # Security headers applied to every response
+# Hard cap on request body size, enforced in RateLimitMiddleware before the
+# body is buffered. Largest legitimate payload is a market description (5000
+# chars) or dispute evidence (5000 chars) — 256 KiB leaves a wide margin.
+_MAX_BODY_BYTES = 256 * 1024
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",          # Prevent MIME sniffing
     "X-Frame-Options": "DENY",                      # Disable iframe embedding
@@ -154,6 +159,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         method = request.method
 
+        # ── Request body size guard ──────────────────────────────────────────
+        # Pydantic only enforces max_length AFTER the whole body has been read
+        # into memory, so without a pre-read cap a client can POST an
+        # unbounded payload and exhaust the process. Reject on Content-Length
+        # before Starlette buffers anything. (Chunked bodies without the
+        # header are still bounded by the reverse proxy / uvicorn.)
+        if method in ("POST", "PUT", "PATCH"):
+            cl = request.headers.get("content-length", "")
+            if cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "success": False,
+                        "error": f"Request body too large (max {_MAX_BODY_BYTES} bytes)",
+                        "error_code": "PAYLOAD_TOO_LARGE",
+                    },
+                    headers={"Connection": "close"},
+                )
+
         # Skip rate limiting for health/read-only endpoints
         if method == "GET" or path in ("/health", "/health/ready", "/", "/docs", "/openapi.json", "/redoc"):
             return await call_next(request)
@@ -176,9 +200,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not result.allowed:
             from fastapi.responses import JSONResponse
 
+            # Match the standard error envelope used everywhere else
+            # ({success:false, error, error_code, details?}) so clients only
+            # ever have to parse one shape. `retry_after` is kept top-level
+            # for backward compatibility with existing consumers.
+            retry_after = result.retry_after
             return JSONResponse(
                 status_code=429,
-                content={"error_code": "RATE_LIMIT_EXCEEDED", "retry_after": result.retry_after},
+                content={
+                    "success": False,
+                    "error": (
+                        f"Too many requests — try again in {retry_after}s"
+                        if retry_after
+                        else "Too many requests"
+                    ),
+                    "error_code": "RATE_LIMIT_EXCEEDED",
+                    "retry_after": retry_after,
+                },
                 headers={
                     "X-RateLimit-Limit": str(result.limit),
                     "X-RateLimit-Remaining": "0",

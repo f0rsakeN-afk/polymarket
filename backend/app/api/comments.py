@@ -85,7 +85,7 @@ async def create_comment(
         "reply_count": 0,
         "created_at": comment.created_at.isoformat(),
         "updated_at": comment.updated_at.isoformat(),
-    })
+    }, message="Comment posted")
 
 
 @router.get("/{slug}/comments", summary="List comments", description="List comments for a market with nested replies.")
@@ -240,7 +240,7 @@ async def edit_comment(
         "id": str(comment.id),
         "content": comment.content,
         "updated_at": comment.updated_at.isoformat(),
-    })
+    }, message="Comment updated")
 
 
 @router.delete("/{slug}/comments/{comment_id}", summary="Delete comment", description="Soft-delete own comment. Auth required.")
@@ -277,4 +277,4 @@ async def delete_comment(
     except Exception:
         pass  # non-fatal
 
-    return success_response({"id": str(comment_id), "status": "deleted"})
+    return success_response({"id": str(comment_id), "status": "deleted"}, message="Comment deleted")

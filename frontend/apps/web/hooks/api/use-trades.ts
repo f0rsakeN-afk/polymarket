@@ -6,7 +6,7 @@ import { queryKeys } from "@/lib/api/queryKeys"
 
 export function useSimpleGlobalTrades(params?: { page?: number; page_size?: number; market_slug?: string }) {
   return useQuery({
-    queryKey: queryKeys.globalTrades(params?.market_slug),
+    queryKey: queryKeys.globalTradesPage(params?.market_slug, params),
     queryFn: () => listTrades(params),
     select: (res) => res.data,
     staleTime: 10_000,
@@ -15,7 +15,7 @@ export function useSimpleGlobalTrades(params?: { page?: number; page_size?: numb
 
 export function useSimpleMarketTrades(slug: string, params?: { page?: number; page_size?: number }) {
   return useQuery({
-    queryKey: queryKeys.marketTrades(slug),
+    queryKey: queryKeys.marketTradesPage(slug, params),
     queryFn: () => listMarketTrades(slug, params),
     select: (res) => res.data,
     enabled: !!slug,

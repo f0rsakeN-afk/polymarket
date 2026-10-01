@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class FlagCreateRequest(BaseModel):
-    market_id: str
+    market_id: str = Field(..., max_length=64)
     reason: str = Field(..., min_length=5, max_length=1000)
 
 

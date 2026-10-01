@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, MutationResponse } from "./client"
 import { addLiquiditySchema, removeLiquiditySchema } from "@/schemas/liquidity"
 
 export interface LPAnalyticsResponse {
@@ -29,14 +29,14 @@ export function getLPAnalytics() {
 }
 
 export function addLiquidity(marketId: string, data: { amount: number }) {
-  return api.post<{ success: boolean; data: { lp_tokens_minted: string; pool_lp_token_supply: string; wallet_balance: string } }>(
+  return api.post<MutationResponse<{ lp_tokens_minted: string; pool_lp_token_supply: string; wallet_balance: string }>>(
     `/api/v1/markets/${marketId}/liquidity`,
     addLiquiditySchema.parse(data)
   )
 }
 
 export function removeLiquidity(marketId: string, data: { lp_tokens: number }) {
-  return api.delete<{ success: boolean; data: { yes_redeemed: string; no_redeemed: string; total_redeemed: string; wallet_balance: string } }>(
+  return api.delete<MutationResponse<{ yes_redeemed: string; no_redeemed: string; total_redeemed: string; wallet_balance: string }>>(
     `/api/v1/markets/${marketId}/liquidity`,
     removeLiquiditySchema.parse(data)
   )

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 from app.api.admin import router as admin_router
 from app.api.alerts import router as alerts_router
@@ -18,6 +18,7 @@ from app.api.exceptions import AppException
 from app.api.flags import router as flags_router
 from app.api.handlers import (
     app_exception_handler,
+    data_error_handler,
     generic_exception_handler,
     http_exception_handler,
     integrity_error_handler,
@@ -239,6 +240,7 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(IntegrityError, integrity_error_handler)
+app.add_exception_handler(DataError, data_error_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 # Routes

@@ -12,8 +12,9 @@ import { cn } from "@workspace/ui/lib/utils"
 import { useComments, usePostComment, useEditComment, useDeleteComment } from "@/hooks/api/use-comments"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { sileo } from "sileo"
-import { getMarketCommentReplies } from "@/lib/api/markets"
+import { getMarketCommentReplies } from "@/lib/api/comments"
 import type { Comment } from "@/hooks/api/types/comment"
+import { apiErrorMessage } from "@/lib/api/client"
 
 const commentSchema = z.object({
   content: z.string().min(1, "Comment cannot be empty").max(2000, "Max 2000 characters"),
@@ -170,8 +171,8 @@ const CommentRow = memo(function CommentRow({
     try {
       const res = await getMarketCommentReplies(slug, comment.id)
       setReplies(res.data.replies)
-    } catch {
-      sileo.error({ title: "Failed to load replies" })
+    } catch (e) {
+      sileo.error({ title: apiErrorMessage(e, "Failed to load replies") })
     } finally {
       setLoadingReplies(false)
     }
@@ -190,9 +191,8 @@ const CommentRow = memo(function CommentRow({
       setShowReplyForm(false)
       await loadReplies()
       setShowReplies(true)
-      sileo.success({ title: "Reply posted" })
     } catch {
-      sileo.error({ title: "Failed to post reply" })
+      // Toast (backend message) is emitted by usePostComment.
     }
   }, [comment.id, postReply, loadReplies])
 
@@ -200,18 +200,16 @@ const CommentRow = memo(function CommentRow({
     try {
       await editComment({ commentId: comment.id, content })
       setEditing(false)
-      sileo.success({ title: "Comment updated" })
     } catch {
-      sileo.error({ title: "Failed to update comment" })
+      // Toast (backend message) is emitted by useEditComment.
     }
   }, [comment.id, editComment])
 
   const handleDelete = useCallback(async () => {
     try {
       await removeComment({ commentId: comment.id })
-      sileo.success({ title: "Comment deleted" })
     } catch {
-      sileo.error({ title: "Failed to delete comment" })
+      // Toast (backend message) is emitted by useDeleteComment.
     }
   }, [comment.id, removeComment])
 
@@ -358,10 +356,9 @@ function CommentForm({ slug }: { slug: string }) {
     }
     try {
       await postComment({ content: data.content, parent_id: undefined })
-      sileo.success({ title: "Comment posted" })
       reset()
-    } catch (e) {
-      sileo.error({ title: "Failed to post", description: e instanceof Error ? e.message : "Unknown error" })
+    } catch {
+      // Toast (backend message) is emitted by usePostComment.
     }
   }, [currentUser, postComment, reset])
 

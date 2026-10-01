@@ -15,13 +15,16 @@ import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
 import { OrderBook } from "./order-book"
+import { queryKeys } from "@/lib/api/queryKeys"
+import type { OrderBook as OrderBookData } from "@/lib/api/markets"
 import { CommentList, CommentForm } from "./comment-list"
 import { LiveTradeTicker } from "./live-trade-ticker"
 import { SkeletonMarketDetail } from "@/components/shared/skeletons"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
-import type { MarketDetailResponse, PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
+import type { PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
+import { apiErrorMessage } from "@/lib/api/client"
 
 // visx/d3 chart code splits into its own chunk and never SSR-renders —
 // the detail page paints text/orderbook first, charts hydrate after.
@@ -77,6 +80,33 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     if (!orderbookData?.outcomes) return null
     return Object.values(orderbookData.outcomes)[0] ?? null
   }, [orderbookData])
+
+  /**
+   * Per-outcome mid price from the orderbook.
+   * GET /markets/{slug} does NOT put a price on `outcomes` — only the market-level
+   * yes_price/no_price. Multi-outcome markets therefore have no price anywhere else,
+   * so we derive it here (best bid/ask midpoint) instead of reading a field that
+   * was never there.
+   */
+  const outcomePrices = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const [name, book] of Object.entries(orderbookData?.outcomes ?? {})) {
+      const bids = (book.bids ?? []).map((b) => Number(b.price)).filter((p) => Number.isFinite(p))
+      const asks = (book.asks ?? []).map((a) => Number(a.price)).filter((p) => Number.isFinite(p))
+      const bestBid = bids.length ? Math.max(...bids) : NaN
+      const bestAsk = asks.length ? Math.min(...asks) : NaN
+      if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) map[name] = (bestBid + bestAsk) / 2
+      else if (Number.isFinite(bestAsk)) map[name] = bestAsk
+      else if (Number.isFinite(bestBid)) map[name] = bestBid
+    }
+    return map
+  }, [orderbookData])
+
+  /** Orderbook keys are lower-cased outcome names; fall back to an even split. */
+  const priceFor = useCallback(
+    (outcomeName: string, fallback: number) => outcomePrices[outcomeName.toLowerCase()] ?? fallback,
+    [outcomePrices]
+  )
   // WS-only points — chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
@@ -116,9 +146,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         title: "Market Resolved!",
         description: `Winning outcome: ${msg.winning_outcome_name ?? "Unknown"}`,
       })
-      queryClient.invalidateQueries({ queryKey: ["market", slug] })
-      queryClient.invalidateQueries({ queryKey: ["markets"] })
-      queryClient.invalidateQueries({ queryKey: ["positions"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.market(slug) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.markets() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.positions() })
     }
     // publish_notification wraps with type:"notification", so check that first then inspect inner fields
     if (msg.type === "notification" && (msg as { alert_id?: string }).alert_id) {
@@ -129,10 +159,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       })
     }
     if (msg.type === "orderbook:update" && (msg as { outcomes?: unknown }).outcomes) {
-      // WS sends raw outcomes dict { outcome: { bids, asks } }; HTTP API returns { success, data: { outcomes } }.
-      // Set both levels so both the direct consumer (header select) and OrderBook (reads data.data.outcomes) work.
-      const rawOutcomes = (msg as { outcomes: unknown }).outcomes as Record<string, { bids: unknown[]; asks: unknown[] }>
-      queryClient.setQueryData(["orderbook", slug] as const, { data: { outcomes: rawOutcomes } })
+      // WS publishes the raw `build_orderbook` dict { outcome: { bids, asks } };
+      // the HTTP response wraps it as { success, data }. Cache the wrapped shape
+      // so this write and `getOrderBook` produce the identical value.
+      const outcomes = (msg as { outcomes: OrderBookData }).outcomes
+      queryClient.setQueryData(queryKeys.orderBook(slug), { success: true, data: { outcomes } })
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
@@ -149,7 +180,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   })
 
   const { yesOutcome, noOutcome, outcomeList } = useMemo(() => {
-    const outcomes = (market as MarketDetailResponse)?.outcomes ?? []
+    const outcomes = market?.outcomes ?? []
     const yes = outcomes.find((o) => o.name.toLowerCase() === "yes")
     const no = outcomes.find((o) => o.name.toLowerCase() === "no")
     return {
@@ -185,17 +216,17 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       seedPoint2["No"] = noPrice
     } else {
       const uniform = outcomeList.length > 0 ? 1 / outcomeList.length : 0.5
-      const firstPrice = Number((outcomeList[0] as { price?: number })?.price ?? uniform)
+      const firstPrice = priceFor(outcomeList[0]?.name ?? "", uniform)
       seedPoint["value"] = isNaN(firstPrice) ? uniform : firstPrice
       seedPoint2["value"] = seedPoint["value"]
       for (const o of outcomeList) {
-        const p = Number((o as { price?: number }).price ?? uniform)
+        const p = priceFor(o.name, uniform)
         seedPoint[o.name] = isNaN(p) ? uniform : p
         seedPoint2[o.name] = isNaN(p) ? uniform : p
       }
     }
     return [seedPoint, seedPoint2] as LiveLinePoint[]
-  }, [market, outcomeList, isBinary, seedTime])
+  }, [market, outcomeList, isBinary, seedTime, priceFor])
 
   // Historical points from fetched price history — shown behind seeds/live data
   const historicalPoints = useMemo(() => {
@@ -225,10 +256,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const handleResolve = useCallback(async () => {
     if (!selectedOutcomeId) return
     try {
-      await resolveMarket({ slug, winning_outcome_id: selectedOutcomeId })
-      sileo.success({ title: "Market resolved!" })
+      const res = await resolveMarket({ slug, winning_outcome_id: selectedOutcomeId })
+      sileo.success({ title: res.message ?? "Market resolved!" })
     } catch (e) {
-      sileo.error({ title: "Resolve failed", description: e instanceof Error ? e.message : "Unknown error" })
+      sileo.error({ title: "Resolve failed", description: apiErrorMessage(e, "Unknown error") })
     }
   }, [slug, selectedOutcomeId, resolveMarket])
 
@@ -243,7 +274,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   )
 
   const outcomes = useMemo(
-    () => (market as MarketDetailResponse)?.outcomes ?? [],
+    () => market?.outcomes ?? [],
     [market]
   )
 
@@ -310,7 +341,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                  {(market as MarketDetailResponse).outcomes.map((o) => (
+                  {market.outcomes.map((o) => (
                     <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>
                   ))}
                   </SelectGroup>
@@ -372,7 +403,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                     <div key={outcome.id} className="flex items-center gap-2">
                       <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
                       <div className="text-lg font-bold tabular-nums" style={{ color: chartColors[i % chartColors.length] }}>
-                        {Math.round(Number((outcome as { price?: number }).price ?? 0) * 100)}¢
+                        {Math.round(priceFor(outcome.name, 0) * 100)}¢
                       </div>
                     </div>
                   ))
@@ -580,7 +611,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             {market.status !== "resolved" && (
               <div className="flex items-center justify-between text-xs">
                 <dt className="text-muted-foreground">Spread</dt>
-                <dd className="font-medium">{((Number((market as MarketDetailResponse).spread)) * 100).toFixed(1)}%</dd>
+                <dd className="font-medium">{((Number(market.spread)) * 100).toFixed(1)}%</dd>
               </div>
             )}
             {!isBinary && (
@@ -628,14 +659,14 @@ const ClaimWinnings = memo(function ClaimWinnings({ slug }: { slug: string }) {
   const handleClaim = useCallback(async () => {
     setClaiming(true)
     try {
-      await claimWinnings(slug)
+      const res = await claimWinnings(slug)
       setClaimed(true)
-      qc.invalidateQueries({ queryKey: ["wallet"] })
-      qc.invalidateQueries({ queryKey: ["transactions"] })
-      qc.invalidateQueries({ queryKey: ["positions"] })
-      sileo.success({ title: "Winnings claimed!" })
+      qc.invalidateQueries({ queryKey: queryKeys.wallet() })
+      qc.invalidateQueries({ queryKey: queryKeys.transactions() })
+      qc.invalidateQueries({ queryKey: queryKeys.positions() })
+      sileo.success({ title: res.message ?? "Winnings claimed!" })
     } catch (e) {
-      sileo.error({ title: "Claim failed", description: e instanceof Error ? e.message : "Unknown error" })
+      sileo.error({ title: "Claim failed", description: apiErrorMessage(e, "Unknown error") })
     } finally {
       setClaiming(false)
     }

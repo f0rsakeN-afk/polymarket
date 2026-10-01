@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, MutationResponse } from "./client"
 import type { CommentsResponse, Comment } from "@/hooks/api/types/comment"
 
 export function getMarketComments(
@@ -33,7 +33,7 @@ export function postComment(
   content: string,
   parent_id?: string
 ) {
-  return api.post<{ success: boolean; data: Comment }>(
+  return api.post<MutationResponse<Comment>>(
     `/api/v1/markets/${slug}/comments`,
     { content, parent_id: parent_id ?? null }
   )
@@ -44,14 +44,14 @@ export function updateComment(
   commentId: string,
   content: string
 ) {
-  return api.patch<{ success: boolean; data: { id: string; content: string; updated_at: string } }>(
+  return api.patch<MutationResponse<{ id: string; content: string; updated_at: string }>>(
     `/api/v1/markets/${slug}/comments/${commentId}`,
     { content }
   )
 }
 
 export function deleteComment(slug: string, commentId: string) {
-  return api.delete<{ success: boolean; data: { id: string; status: string } }>(
+  return api.delete<MutationResponse<{ id: string; status: string }>>(
     `/api/v1/markets/${slug}/comments/${commentId}`
   )
 }
