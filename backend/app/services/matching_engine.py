@@ -96,6 +96,12 @@ class MatchingEngine:
         )
         pool = pool_result.scalar_one_or_none()
         if pool is not None and fee > 0:
+            # The fee is withheld from the seller's proceeds (they receive
+            # usdc_value - fee below), so those dollars belong to the pool's
+            # escrow: record the sub-ledger claim AND the collateral that backs
+            # it. Otherwise the later treasury sweep would pay the fee out of
+            # money the pool never received (LPs/winners subsidising fees).
+            pool.credit_collateral(fee)
             pool.protocol_fees += fee
 
         # Always lock wallets in deterministic order by user_id to prevent deadlocks

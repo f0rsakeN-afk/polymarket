@@ -40,6 +40,28 @@ from app.websocket.manager import redis_pubsub
 logger = logging.getLogger("polymarket")
 
 
+async def _enqueue_limit_sweep_now() -> None:
+    """Wake the limit-order sweeper as soon as a fill moves a price.
+
+    `celery beat` runs `check_limit_order_execution` every 30s and only scans
+    markets that were marked dirty by the trade that moved them (see
+    `websocket.manager.publish_price_update`). Without this call a resting
+    limit order whose price just got crossed still waits up to half a minute
+    — invisible in a demo, real money when the market runs away.
+
+    The NX key collapses any burst of fills into at most one queued sweep per
+    second, so volatility cannot flood the broker with one message per trade.
+    Everything is best-effort: if Redis or the broker is unavailable the beat
+    run is the fallback and nothing is lost.
+    """
+    from app.workers.tasks import check_limit_order_execution
+
+    r = await get_redis()
+    fresh = await redis_cb.call(lambda: r.set("limit_check:enqueued", "1", ex=1, nx=True))
+    if fresh:
+        check_limit_order_execution.delay()
+
+
 @dataclass
 class OrderResult:
     order_id: str
@@ -403,6 +425,9 @@ class OrderService:
                 # remaining_shares = number of shares to buy, remaining_usdc = USDC to pay
                 quote = amm.buy(data.outcome, remaining_usdc)
                 wallet.balance -= remaining_usdc
+                # The spend enters the pool's escrow — it funds the shares the
+                # AMM just minted to the buyer (and the LPs who backed them).
+                pool.credit_collateral(remaining_usdc)
                 amm_shares = quote.shares_out
                 amm_price_val = quote.price
                 amm_fee = quote.fee
@@ -430,6 +455,10 @@ class OrderService:
                 tmp_pos.shares_held -= remaining_shares
                 tmp_pos.realized_pnl += realized_pnl
                 wallet.balance += sell_proceeds_amm
+                # Sell proceeds come *out* of the escrow: shares go in,
+                # dollars come out. Strict debit — a shortfall means the
+                # ledger is broken and the trade must roll back, not mint.
+                pool.debit_collateral(sell_proceeds_amm)
                 amm_shares = remaining_shares
                 amm_price_val = quote.price
                 amm_fee = quote.fee
@@ -664,6 +693,14 @@ class OrderService:
         try:
             from app.workers.tasks import check_price_alerts
             check_price_alerts.delay(str(market.id), yes_price, no_price)
+        except Exception:
+            pass
+
+        # The fill above moved this market's price, so resting limit orders
+        # waiting on it may now be fillable — don't make them wait for the
+        # 30s beat sweep (see _enqueue_limit_sweep_now for the throttling).
+        try:
+            await _enqueue_limit_sweep_now()
         except Exception:
             pass
 

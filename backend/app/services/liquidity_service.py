@@ -2,7 +2,7 @@ import logging
 import secrets
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import NotFoundError, ValidationError
@@ -10,6 +10,7 @@ from app.config import settings
 from app.deps import hash_password
 from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
+from app.models.position import Position
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
 from app.services.market_service import MarketService
@@ -73,7 +74,7 @@ class LiquidityService:
         collateral_each = amount / Decimal(2)
         pool.yes_shares += collateral_each
         pool.no_shares += collateral_each
-        pool.collateral += amount
+        pool.credit_collateral(amount)
 
         lp_result = await db.execute(
             select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id).with_for_update()
@@ -190,7 +191,43 @@ class LiquidityService:
         lp_fraction = lp_tokens / pool.lp_token_supply
         yes_redeemed = pool.yes_shares * lp_fraction
         no_redeemed = pool.no_shares * lp_fraction
-        total_redeemed = yes_redeemed + no_redeemed
+        # Payout is the LP's pro-rata slice of the *escrow*, paid in USDC.
+        # The old formula paid `yes_redeemed + no_redeemed`, which valued both
+        # reserve sides at $1 each: after trading skewed the ratio it could
+        # demand more dollars than the pool actually held (e.g. reserves
+        # 184/30 against 200 collateral would pay out 214). Collateral is the
+        # hard bound on what the pool can hand out. For a freshly-seeded
+        # 50/50 pool (reserves sum == collateral) the two are identical.
+        total_redeemed = pool.collateral * lp_fraction
+
+        # ── Escrow floor (circuit breaker) ──
+        # An LP exit takes real dollars out of the escrow, and settlement pays
+        # winners → protocol fees → LPs, in that order. At resolution exactly
+        # ONE side is paid $1 per share, so what must stay behind is the
+        # larger of the two sides' open positions, plus fees still owed.
+        # Without this cap an LP could withdraw the whole pool while traders
+        # still hold shares, and settlement would have to short-change them
+        # (or fail outright). The claims are read from position rows, which
+        # are the authoritative source — pool reserves are AMM pricing state.
+        claim_rows = await db.execute(
+            select(Position.outcome_id, func.sum(Position.shares_held))
+            .where(Position.market_id == market.id, Position.settled_at.is_(None))
+            .group_by(Position.outcome_id)
+        )
+        worst_case_shares = max(
+            (total or Decimal(0) for _outcome_id, total in claim_rows.all()),
+            default=Decimal(0),
+        )
+        floor = worst_case_shares + pool.protocol_fees
+        withdrawable = max(Decimal(0), pool.collateral - floor)
+        if total_redeemed > withdrawable:
+            raise ValidationError(
+                f"Withdrawal refused: {total_redeemed:.4f} USDC would drop the escrow to "
+                f"{pool.collateral - total_redeemed:.4f} while {worst_case_shares:.4f} shares of open "
+                f"positions (worst case) and {pool.protocol_fees:.4f} of protocol fees still have to be "
+                f"paid from it. Withdrawable right now: {withdrawable:.4f} USDC.",
+                error_code="ESCROW_FLOOR",
+            )
 
         pool.yes_shares -= yes_redeemed
         pool.no_shares -= no_redeemed
@@ -198,7 +235,12 @@ class LiquidityService:
         pool.lp_token_supply -= lp_tokens
 
         lp_share.lp_tokens -= lp_tokens
-        lp_share.collateral_deposited -= total_redeemed
+        lp_share.collateral_deposited = max(
+            Decimal(0), lp_share.collateral_deposited - total_redeemed
+        )
+        # Escrow out — strictly bounded by what the pool holds; `fraction <= 1`
+        # makes a shortfall impossible unless the ledger is already broken.
+        pool.debit_collateral(total_redeemed)
         wallet.balance += total_redeemed
 
         # Validate slippage: check if prices moved adversely beyond tolerance.
@@ -313,9 +355,22 @@ class LiquidityService:
         for pool, market in pools:
             if pool.protocol_fees <= 0:
                 continue
-            amount = pool.protocol_fees
+            owed = pool.protocol_fees
+            # The sweep is paid out of the pool's escrow: protocol_fees is a
+            # sub-ledger *inside* pool.collateral, not extra money. A shortfall
+            # means recorded fees exceed backing collateral — an invariant
+            # violation: pay what the escrow covers, keep the rest recorded for
+            # the next sweep, and shout about it.
+            amount = pool.debit_collateral(owed, allow_shortfall=True)
+            if amount < owed:
+                logger.error(
+                    f"Protocol fee sweep shortfall: market={market.slug} "
+                    f"owed={float(owed)} paid={float(amount)}"
+                )
+            pool.protocol_fees = owed - amount
+            if amount <= 0:
+                continue
             treasury_wallet.balance += amount
-            pool.protocol_fees = Decimal(0)
             total += amount
             distributed.append({
                 "market_id": str(market.id),

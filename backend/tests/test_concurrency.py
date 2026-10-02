@@ -296,7 +296,11 @@ async def test_concurrent_market_resolution(admin_user, test_market, db_session)
             )
 
     # The Redis SETNX lock, the enqueue dedup key, and the status guard each
-    # independently prevent a double resolution.
+    # independently prevent a double resolution. The endpoint now also takes a
+    # row lock on the market (needed so the settlement worker can't read a
+    # pre-commit status), which serialises these two requests: the loser
+    # observes the winner's committed `resolving` state and reports it as a
+    # validation error rather than racing into the Redis lock.
     winners = [r for r in (resp_a, resp_b) if r.status_code == 200]
     losers = [r for r in (resp_a, resp_b) if r.status_code != 200]
     assert len(winners) == 1, (
@@ -304,7 +308,7 @@ async def test_concurrent_market_resolution(admin_user, test_market, db_session)
         f"{[(r.status_code, r.text) for r in (resp_a, resp_b)]}"
     )
     assert len(losers) == 1
-    assert losers[0].status_code in (400, 409), losers[0].text
+    assert losers[0].status_code in (400, 409, 422), losers[0].text
     assert mock_enqueue.call_count == 1, "settlement task must be enqueued exactly once"
 
     await db_session.refresh(test_market)
