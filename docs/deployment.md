@@ -43,8 +43,10 @@ The app no longer auto-creates tables on startup. **Always run migrations before
 ### Migration Strategy
 
 ```bash
-# 1. Backup DB
-pg_dump -Fc mydatabase > backup_$(date +%Y%m%d).dump
+# 1. Backup DB — timestamped custom-format dump, verified with pg_restore --list,
+#    pruned only after a good dump exists (script: backend/scripts/backup_db.sh)
+PGHOST=db.prod PGPORT=5432 PGUSER=app PGDATABASE=app \
+  ./scripts/backup_db.sh                 # keep 14 days (RETENTION_DAYS=30 to change)
 
 # 2. Run migrations (run in a transaction, lock the migration table)
 alembic upgrade head
@@ -52,6 +54,20 @@ alembic upgrade head
 # 3. Rollback plan (always have one)
 alembic downgrade -1
 ```
+
+Connection settings come from `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`, falling back
+to the dev stack, so the same script is used locally and in production — export the variables in
+the cron job that runs it:
+
+```cron
+# nightly 02:15, keep 30 days, pointing at production
+15 2 * * * PGHOST=db.prod PGPORT=5432 PGUSER=app PGDATABASE=app PGPASSWORD=... \
+  /opt/polymarket/backend/scripts/backup_db.sh >> /var/log/polymarket-backup.log 2>&1
+```
+
+Restores are deliberately manual: `./scripts/backup_db.sh --restore latest` (or a filename in
+`BACKUP_DIR`, default `~/backups/polymarket`). The script exits non-zero rather than pruning when
+a dump fails verification, and prints the count of dumps retained.
 
 ### First Production Boot
 
@@ -75,10 +91,25 @@ See `backend/docker-compose.prod.yml` for the full stack:
 - **Redis** — external (not in compose, use Sentinel for HA)
 
 ### Deploy
+
+Deploys are manual on purpose — there is **no deploy workflow in CI** (an earlier
+`.github/workflows/deploy.yml` was removed because nothing was deploying from GitHub):
+
 ```bash
 cd backend
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+What CI *does* run on every push (`.github/workflows/ci.yml`, at the repo root — GitHub only
+picks workflows up from the root `.github/`, which is why they moved out of `backend/.github/`):
+
+| Job | What it gates on |
+|---|---|
+| `backend` | postgres:16 + redis:7 services, `uv run ruff check app tests`, `uv run pytest --cov=app --cov-fail-under=65` |
+| `frontend` | `bun install --frozen-lockfile`, `bun run lint` (0 errors), `bun run typecheck` in `apps/web` |
+| `security-scan` | Trivy filesystem + config scans, SARIF uploaded **report-only** (`continue-on-error`) — findings are visible without blocking a deploy nobody runs |
+
+The test suite builds its own schema from `alembic upgrade head`, so CI needs no migration step.
 
 ---
 

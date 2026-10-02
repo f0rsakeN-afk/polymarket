@@ -44,10 +44,14 @@ global store.
 
 ## Known gaps (documented, not hidden)
 
-- **No test suite at all.** First thing to fix (vitest + a few Playwright flows).
-- ESLint runs with `eslint-plugin-only-warn`, so lint never fails a build.
-- Duplicate `useCurrentUser` hook, a dead `metadata.ts`, an `/admin` link rendered for non-admins,
-  a mounted-but-unused toaster, and brand-name drift ("PredictX" vs "Polymarket").
+- **No test suite at all.** First thing to fix (vitest + a few Playwright flows) — the backend has
+  300+ tests and this layer has none.
+
+Audited and closed in the same pass (kept here so nobody re-reports them): ESLint no longer runs
+`eslint-plugin-only-warn` (four heuristic `react-hooks` rules are `warn`, everything else fails the
+build), the duplicate `useCurrentUser` is down to one definition, the dead `app/metadata.ts` and the
+unused Sonner toaster mount are deleted, and the brand-name drift is swept to "Polymarket". The
+`/admin` link turned out to be gated on `is_admin` already.
 
 ## More
 

@@ -1,5 +1,19 @@
 # TODO — Remaining Backend Fixes (pick up tomorrow)
 
+> **Status note (2026-10-03):** this backlog was written in September and several items are already
+> closed by later work. Verified closed from the code: **#38** (XFF only trusted from
+> `TRUSTED_PROXY_IPS`, fail-closed), **#47** (`visibility_timeout` + `reject_on_worker_lost`),
+> **#39** (`stripe.Webhook.construct_event`), **#51** (`TRUNCATE CASCADE` between tests),
+> **#42** (treasury `INSERT … ON CONFLICT`), **#36** (`timeout=120`), **#33** (Dockerfile
+> `HEALTHCHECK`), **#10** (`__table_args__` is per model, not overwritten), **#32** (lock order
+> standardised at every call site as `Market → Pool → Wallet → Position → LPShare → Order`, by
+> convention rather than a shared helper), **#27** in part (blacklist fails closed in production,
+> XFF scrubbed; refresh TTL and request-id propagation to Celery unchanged). Also since then: the
+> escrow ledger + settlement payout path, the refresh-chain cap, non-enumerable registration, the
+> `?token=` WebSocket gate, and CI moved to the repository root. **The authoritative current gap
+> list is [`docs/README.md`](docs/README.md) → `trading-engine.md` §6 / `auth-and-security.md` §12**
+> — treat the checkboxes below as a historical backlog to re-triage, not as live status.
+
 > 9 CRITICAL (P0) already fixed & closed on 2026-09-16 (commits `eb9309d`..`e029867`, issues #22,28,31,34,37,40,43,46,49).
 > 21 issues remain open — this file is the ordered backlog.
 

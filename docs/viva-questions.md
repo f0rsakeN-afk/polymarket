@@ -611,8 +611,9 @@ comment explaining the number it chose.
 → `backend/app/websocket/manager.py`.
 
 **F8. How is auth done on the upgrade?**
-**Answer:** The WebSocket handshake looks for the login cookie (or a `?token=` query parameter),
-then runs the *same* check as the REST API: valid signature, correct token type, not blacklisted,
+**Answer:** The WebSocket handshake looks for the login cookie (it only accepts `?token=` if
+`WS_ALLOW_QUERY_TOKEN=true` is set, which is **off** by default — a token in a URL ends up in
+proxy logs, history and `Referer`), then runs the *same* check as the REST API: valid signature, correct token type, not blacklisted,
 user still active, and bound to a live session. It fails **closed** — no valid session, no socket.
 → `docs/auth-and-security.md` §10.
 
@@ -725,11 +726,16 @@ the other.
 → `backend/app/config.py`.
 
 **G8. What does CI run?**
-**Answer:** The backend runs `ruff` (lint) plus the full pytest suite, which rebuilds the database
-from migrations — so a broken migration fails CI. The frontend runs lint and a build. Honest gap to
-name unprompted: the backend workflow file currently sits under `backend/.github/workflows/`, where
-GitHub will **not** execute it — it has to move to the repository root.
-→ `backend/.github/workflows/`.
+**Answer:** The backend runs `ruff` plus the full pytest suite with a coverage floor
+(`--cov-fail-under=65`), rebuilding the database from migrations — so a broken migration fails CI.
+The frontend runs `bun run lint` (0 errors allowed; the four heuristic `react-hooks` rules are
+`warn` because of ~65 pre-existing chart-package hits) and `bun run typecheck` in `apps/web`. A
+third job runs Trivy filesystem/config scans and uploads SARIF **report-only**, so findings are
+visible without blocking anything. Two things to name unprompted: the workflows used to sit under
+`backend/.github/workflows/` where GitHub never executes them (now at the repository root), and
+there is deliberately **no deploy workflow** — deploys are manual until there's something to
+deploy to.
+→ `.github/workflows/ci.yml`.
 
 **G9. How do you roll out without dropping requests?**
 **Answer:** Rebuild the images, then restart services one at a time with `docker compose up -d
@@ -924,8 +930,10 @@ attacker already had is killed too.
 **H17. What is enumeration and where does it remain?**
 **Answer:** Enumeration is discovering which emails are registered. Login, forgot-password and
 resend all return identical messages and take identical time (the dummy hash), so they leak nothing.
-What *does* still leak: registration returns "account already exists" — a deliberate usability
-trade-off that we document as a known gap rather than pretend is fixed.
+Registration used to be the exception — it returned "account already exists" for a verified
+address. It now answers the same 200 with the same body and message in all three cases (new,
+verified, awaiting verification); a verified address triggers a *throttled* "you already have an
+account" email instead. So nothing in the auth surface tells you whether an address is registered.
 → `docs/auth-and-security.md` §12.
 
 **H18. How are webhooks verified?**
@@ -956,10 +964,11 @@ full one on the site including `frame-ancestors 'none'` — plus HSTS in product
 → `backend/app/api/middleware.py`.
 
 **H22. What would you do first with more time?**
-**Answer:** Double-entry accounting first — it's the only gap that can lose real money. Then an
-absolute lifetime cap on refresh-token chains, then move CI to the repository root so it runs, then
-tests for the frontend.
-→ `docs/trading-engine.md` §6.1.
+**Answer:** Frontend tests — that layer is empty and it's where a user meets everything else.
+Then a nightly invariant audit (compare each pool's escrow against its open claims), then depth:
+deeper liquidity and an LP position that isn't just a number in a dropdown. Accounting and the
+refresh-chain cap are done, which is why they're not on this list.
+→ `docs/trading-engine.md` §6.
 
 **H23. What's your threat model in one line?**
 **Answer:** Protect user funds and accounts from remote attackers across the web, API and network;
@@ -987,9 +996,11 @@ travel in cleartext.
 → `backend/app/api/auth.py`.
 
 **H27. What could an attacker still do today?**
-**Answer:** Three things, all documented: read a `?token=` query parameter from a proxy's access log
-(a 15-minute window), learn which emails are registered via the registration form, and — if
-`TRUSTED_PROXY_IPS` isn't configured — share one rate-limit bucket with everyone behind that proxy.
+**Answer:** Three things, all documented: a logged-out token stays usable outside production while
+Redis is down (the blacklist fails open below `APP_ENV=production` — and the app says so at
+startup), a non-browser client can be given `WS_ALLOW_QUERY_TOKEN=true` which puts a live token in
+a URL, and — if `TRUSTED_PROXY_IPS` isn't configured — everyone behind that proxy shares one
+rate-limit bucket. Enumeration is no longer one of them: registration answers uniformly.
 Naming these before you're asked is the answer.
 → `docs/auth-and-security.md` §12.
 
@@ -1079,11 +1090,14 @@ reserves, hence price.
 
 **★ I9. How is a winner paid, and from where?**
 **Answer:** At settlement every winning share is credited at $1 flat into your wallet, and losing
-positions are recorded with a zero payout. The money comes from the losing side and the pool —
-nothing is taken from you at settlement. A `settled_at` flag set under a row lock means it can only
-happen once. Honest caveat to volunteer: the ledger is single-entry, so payouts aren't strictly
-pre-funded from an escrow — it's the biggest known weakness.
-→ `docs/trading-engine.md` §5, §6.1.
+positions are recorded with a zero payout. The money comes out of `pool.collateral` — a real
+escrow every buy, split and deposit credited and every sell, merge, LP exit and fee sweep debited —
+and nothing is taken from you at settlement. A `settled_at` flag set under a row lock means it can
+only happen once, and the claim endpoint is all-or-nothing: if the escrow can't cover a winner it
+answers `ESCROW_INSUFFICIENT` and leaves the position claimable rather than paying a part.
+Honest caveat to volunteer: the settlement worker pays what the escrow holds and logs any shortfall
+instead of failing, and nothing audits every pool nightly against open claims.
+→ `docs/trading-engine.md` §5, §6.
 
 **★ I10. How is this not gambling?**
 **Answer:** Because you're buying a **claim** worth $1 if you're right, not placing a bet against a
@@ -1141,9 +1155,12 @@ the formula back to the old one.
 → `backend/tests/test_amm.py`.
 
 **I18. What's the weakest part of the trading design?**
-**Answer:** Accounting: the ledger is single-entry, so balances aren't strictly conserved. Second, LPs
-are exposed to the outcome. Third, the pool is thin — one $10 order moves the price 7 points, so a
-whale can push it around. All three are in `docs/trading-engine.md` §6.
+**Answer:** Depth: the pool is thin and linear-impact — one $10 order moves the price 7 points, so a
+whale can push it around, and there's no mid-price from a book. Second, defence in depth on the
+accounting: the escrow now holds every inflow and pays every outflow, and an LP exit is floored by
+open claims — but nothing runs over each pool nightly comparing `pool.collateral` against
+`max(open YES, open NO)` to catch drift from a bug nobody has found yet. Both are in
+`docs/trading-engine.md` §6.
 → `docs/trading-engine.md` §6.
 
 **I19. How would you add a new order type (e.g. stop-limit)?**
@@ -1289,10 +1306,15 @@ are keyboard-navigable and trap focus correctly, and visible focus states. Be ho
 implemented rather than claiming full WCAG compliance.
 
 **K9. Known front-end debts?**
-**Answer:** The big one: **no test suite at all**. Then ESLint runs with a plugin that downgrades
-everything to warnings so builds never fail, a duplicate `useCurrentUser` hook, a dead `metadata.ts`,
-an `/admin` link that renders for non-admins, a mounted-but-unused toast component, and brand drift
-("PredictX" versus "Polymarket"). Name them before you're asked.
+**Answer:** The big one, still open: **no test suite at all** — the backend has 327 tests and the
+frontend has none, which is exactly backwards for a UI. The rest of this list is what I found and
+closed while auditing: ESLint no longer downgrades everything to warnings (the `only-warn` plugin is
+gone; only four heuristic `react-hooks` rules remain `warn`, with everything else failing the build),
+the duplicate `useCurrentUser` (two definitions, two refetch policies, one cache key) is down to
+one, the dead `app/metadata.ts` is deleted, the unused Sonner toaster mount and its dependency are
+gone, and the brand drift ("PredictX" versus "Polymarket") is swept to a single name — the `/admin`
+link turned out to already be gated on `is_admin`. Naming what you checked *and* what you fixed is
+the answer.
 
 **K10. Why a monorepo package for UI?**
 **Answer:** So the design system and the shared API types live in one place that both apps import,
@@ -1397,8 +1419,10 @@ expectations brittle, and a brittle test gets deleted. "Total wallet balances eq
 reported effects, and nothing is negative" catches every real class of bug and never flakes.
 
 **L13. What's in CI that must never regress?**
-**Answer:** `ruff check` and the entire pytest suite — and because the suite builds its schema by
-running the real migrations, a broken migration fails CI too. Those two are the gate.
+**Answer:** `ruff check` plus the entire pytest suite with a 65% coverage floor — and because the
+suite builds its schema by running the real migrations, a broken migration fails CI too. On the
+frontend, lint (zero errors) and typecheck in `apps/web`. Trivy scans also run, but report-only:
+findings get uploaded without blocking anything, because there is no deploy to block.
 
 **L14. How do you test security controls?**
 **Answer:** One regression test per control: a revoked or blacklisted token must be rejected at the
@@ -1416,12 +1440,13 @@ under N concurrent connections. Frontend tests first, since that's the empty lay
 ## M. Open / reflective ("what would you change?")
 
 **★ M1. What's the biggest weakness of this system?**
-**Answer:** Single-entry accounting. Settlement credits winners and a sell credits the seller, but
-nothing is debited in exchange — `pool.collateral` is only ever increased when liquidity is added,
-never decreased. So balances aren't strictly conserved: a $200 system could be asked to pay out
-$297.96 in the worked example in the docs. It's the first thing I'd fix and I'd volunteer it
-before being asked.
-→ `docs/trading-engine.md` §6.1.
+**Answer:** Depth, and the accounting confidence that comes with depth. The pool is thin — one $10
+order in a $100 market moves the price seven points — and while the escrow now holds every inflow
+and pays every outflow (an LP exit is floored by open claims), nothing audits each pool nightly
+against `max(open YES, open NO)` to catch drift from a bug nobody has found. Both are in §6 of the
+trading doc and I'd volunteer them before being asked. The single-entry ledger that used to head
+this answer is fixed: one choke point debits and credits, and settlement pays from escrow.
+→ `docs/trading-engine.md` §6.
 
 **★ M2. What did you learn the hard way?**
 **Answer:** Pick one you can tell properly. My favourite: the AMM used to charge the pre-trade price,
@@ -1430,9 +1455,11 @@ round-trip test exposed. Others: trade rows silently disappearing because a buy'
 was set to zero, and wallet deadlocks solved by sorting user IDs.
 
 **★ M3. If you had another month?**
-**Answer:** In order: the double-entry ledger (only real correctness risk), then frontend tests plus
-moving CI to the repository root so it actually runs, then an absolute cap on refresh-token chains,
-then deeper liquidity and an LP redesign, then the observability metrics.
+**Answer:** In order: frontend tests (the only empty test layer), then a nightly invariant audit
+over every pool's escrow versus its open claims, then deeper liquidity and a real LP position with
+a P&L view, then cross-node sharding for the WebSocket registries, then the observability metrics.
+The three that used to head this answer — the escrow ledger, CI moved to the repository root, and
+the refresh-chain cap — are done.
 
 **★ M4. Why did you use `SKIP LOCKED` instead of a queue table?**
 **Answer:** Because Postgres *is* the queue — no second system to keep consistent with the data, and
@@ -1440,10 +1467,11 @@ claiming a row is transactional with doing the work. A separate queue table mean
 disagree after a crash.
 
 **★ M5. What breaks at 10× traffic?**
-**Answer:** Three things: contended markets serialise behind each other (by design), the 30-second
-sweep that re-tests resting orders gets slower, and per-process WebSocket registries don't scale
-outward. Fixes: batch wallet updates, make fills event-driven instead of polled, and share or route
-subscriptions consistently.
+**Answer:** Three things: contended markets serialise behind each other (by design), the resting-
+order sweep still has a 30-second backstop poll (a fill now re-arms it immediately, throttled to one
+per second, but a burst of fills still collapses onto one sweep), and per-process WebSocket
+registries don't scale outward. Fixes: batch wallet updates, move the sweep to a real queue with a
+per-market consumer, and share subscriptions through Redis or route them consistently by market.
 
 **M6. What would you do differently architecturally?**
 **Answer:** Split the matching engine into its own service with an append-only event log, and keep the
@@ -1451,9 +1479,12 @@ API as a query layer over it. Today they're coupled in one process, which is sim
 matching scale and API scale are the same axis.
 
 **M7. Tell me about a design decision you'd reverse.**
-**Answer:** The single-entry ledger first. Then liquidity providers being redeemed from the winning
-side (they're taking outcome risk they didn't sign up for), then the `?token=` WebSocket fallback
-(a token can land in a proxy log), then a 30-day refresh lifetime with no absolute cap.
+**Answer:** Three I already reversed, in the order I hit them: crediting the ledger without ever
+debiting it (now every pool flow goes through `credit_collateral`/`debit_collateral`), redeeming LPs
+from the winning side's reserve (now a pro-rata slice of collateral, floored by open claims), and
+accepting `?token=` on the WebSocket by default (now off unless `WS_ALLOW_QUERY_TOKEN=true`). What
+I'd still reverse: polling for resting-order fills every 30 seconds instead of a queue — a fill now
+wakes the sweep immediately, but the backstop is still a timer.
 
 **M8. How do you keep docs honest?**
 **Answer:** They're written from the code and updated in the same change as every fix — including
@@ -1483,14 +1514,19 @@ failed, and you'd have no way to roll both back together. The speed isn't worth 
 between a trade and the balance it moves.
 
 **M13. How would you migrate the ledger to double-entry without downtime?**
-**Answer:** Add ledger accounts and a backfill that reconstructs them from the existing transaction
-history, run the new ledger in shadow mode until its sums match reality, then switch settlement to pay
-from escrow. Shadow first, flip second — no window where money can vanish.
+**Answer:** We did the smaller version of this and it's shipped: one choke point on the pool row
+(`credit_collateral`/`debit_collateral`), every call site moved onto it path by path with the test
+suite proving wallet-delta == collateral-delta at each step, and settlement switched to pay from
+escrow last. Shadow first, flip second — no window where money can vanish. Going the final step to
+proper double-entry would be the same shape: backfill accounts from `transaction`, run the new ledger
+in parallel until its sums match, then switch writers.
 
 **M14. What's one security control you'd add tomorrow?**
-**Answer:** An absolute lifetime on refresh-token chains (rotation-stable anchor), so a stolen cookie
-can't be refreshed forever even if rotation keeps succeeding. And move CI to `.github/` at the repo
-root, so it actually runs.
+**Answer:** A device/geo baseline per session — the refresh token is already bound to a user-agent
+and reuse kills the whole chain, but I'd add a coarse IP/ASN change signal so "same UA, other side
+of the world" forces a re-login instead of a silent refresh. (The two I'd have said a month ago —
+an absolute lifetime on refresh chains, and CI moved to the repository root so GitHub actually runs
+it — are both in place.)
 
 **M15. Pitch this in one sentence.**
 **Answer:** "A zero-house-edge exchange for event outcomes: an order book plus a price-impact-aware
@@ -1529,9 +1565,10 @@ delivered in realtime over Redis fan-out."
   limiting — which fails closed. Users refresh over REST.
 
 * **"Why is my order still pending?"**
-  → Because it's a limit priced away from the market and no resting order crosses it. The 30-second
-  background check re-tests it against the current pool price, and expiry frees the funds when the
-  market closes.
+  → Because it's a limit priced away from the market and no resting order crosses it. It gets
+  re-tested whenever a fill moves that market's price (the fill re-arms the sweep immediately, at
+  most once a second), with the 30-second background check as the backstop, and expiry frees the
+  funds when the market closes.
 
 * **"How do you know two concurrent buys don't corrupt balances?"**
   → `test_concurrency.py` fires parallel orders and asserts the invariants, plus the balance check
@@ -1543,9 +1580,11 @@ delivered in realtime over Redis fan-out."
   reverts it.
 
 * **"What's a thing you knowingly left wrong?"**
-  → The single-entry ledger, registration's email enumeration, and the missing absolute cap on
-  refresh chains — each documented with a fix sketch in `trading-engine.md` §6 and
-  `auth-and-security.md` §12. Naming them yourself is the answer.
+  → No frontend test suite at all, a thin AMM with linear impact, and no nightly invariant audit
+  comparing each pool's escrow to its open claims — all listed in `trading-engine.md` §6 and
+  `auth-and-security.md` §12. The three that used to be the answer here (single-entry ledger,
+  register email enumeration, uncapped refresh chains) are fixed and tested; naming what's *still*
+  wrong yourself is the answer.
 
 ---
 

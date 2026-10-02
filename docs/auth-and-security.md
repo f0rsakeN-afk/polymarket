@@ -50,22 +50,36 @@ path     = "/", domain = "localhost" in dev / None in prod
    `logger.warning(...)`, 401.
 3. Expiry check → revoke + 401.
 4. Account active check → 403.
-5. **Absolute-expiry safety check** (`expires_at - jwt_refresh_expire <= now`).
-6. **Device binding**: `token_record.device_info != current UA` ⇒ revoke + 401
+5. **Refresh-chain deadline** (`_refresh_chain_deadline`): Redis holds
+   `refresh_chain:{sha256(token)} → <absolute unix deadline>`. Login writes it
+   (`now + refresh_chain_max_seconds`, default 30 d); rotation *inherits* it rather than starting a
+   fresh one, which is what makes the cap absolute — renewing can never move it. Past the deadline
+   ⇒ every refresh token **and** every session for that user is revoked (`_revoke_chain`) + 401.
+   If Redis has no anchor (pre-feature token, flush) the check is skipped with a warning rather
+   than failing closed, because a Redis restart must not log every user out; the per-token TTLs
+   still apply.
+6. **Issuance-time sanity check** (`expires_at - jwt_refresh_expire` recovers this token's issue
+   time; refuse it once that is older than the chain cap).
+7. **Device binding**: `token_record.device_info != current UA` ⇒ revoke + 401
    ("Device mismatch — please re-authenticate").
-7. Rotate: revoke old token + old session, issue new pair bound to current ip/UA.
+8. Rotate: revoke old token + old session, issue new pair bound to current ip/UA, passing
+   `previous_token_hash` so the new token inherits the chain deadline (`_anchor_refresh_chain`).
 
 The frontend does this transparently: `client.ts:221 doRefresh()` fires once
 (single-flight via `isRefreshing` + `refreshSubscribers[]`, 10 s timeout), every queued 401
 retries after it, and failure → `redirectToLogin()`.
 
-> **Known limitation worth flagging:** the check in step 5 derives a token's *issuance* time as
-> `expires_at - jwt_refresh_expire` (both the comment and `config.py` now agree that the TTL is
-> `2592000` = 30 days; an older comment claimed 24 h and was wrong). Because refresh **rotates** —
-> every use mints a brand-new token with a brand-new issuance time — this bounds a *single* token,
-> **not** the total lifetime of a login chain. A user who keeps refreshing never has to log in
-> again. Capping that needs an anchor that survives rotation (`refresh_tokens.created_at`, or a
-> Redis chain-start key set at login and compared here).
+> **Two bugs that lived here, worth naming:** (a) the old step 5 compared a token's *issuance*
+> time to `now` (`expires_at - ttl <= now`), which is true for every token ever issued — so
+> `/auth/refresh` answered 401 on **every** call and a session died the moment its 15-minute
+> access token expired. Nothing caught it because no test exercised the endpoint. (b) With no
+> rotation-stable anchor, a client that kept refreshing could renew forever. Both are fixed: the
+> DB-only check now means what it says, and the Redis deadline above bounds the whole login chain
+> from the moment of login.
+>
+> **Tests:** `test_auth.py::test_refresh_rotation_inherits_the_chain_deadline` (the rotated token
+> carries the same absolute deadline) and `::test_refresh_chain_stops_at_the_absolute_deadline`
+> (past it: 401, every refresh token revoked, every session revoked).
 
 ---
 
@@ -89,6 +103,11 @@ crashes on the system/treasury account).
   ~100 ms as a known one. Without it, response time alone is a reliable "does this account exist"
   oracle that defeats every other anti-enumeration measure.
 - Failure responses are always the identical `"Invalid email or password"`.
+- `POST /auth/register` answers **the same 200 with the same body and message** whether the email
+  is new, already-verified (the owner gets a throttled "you already have an account" email) or
+  awaiting verification (the code is re-sent). It used to answer `409 "An account with this email
+  already exists"` — a free account-existence oracle sitting right next to the login form. The
+  duplication notice is throttled per email (10 min) so the form cannot be used to flood an inbox.
 - Password check happens *before* `is_active` / `is_email_verified` checks, so account state is
   not leaked to someone who doesn't know the password.
 - 2FA code required and verified only after password success.
@@ -360,6 +379,10 @@ Plus: `form-action 'self'` in CSP stops a hijacked form from posting anywhere, a
 | 6 | OTP plaintext written to Redis next to its hash | Redis stores the bare HMAC only; verification re-hashes the submitted code (legacy `code:hash` readable for its remaining ≤10 min TTL) | `test_otp_plaintext_never_stored_in_redis` |
 | 7 | No bcrypt work when the user is absent | `dummy_password_hash()` (cached bcrypt of a random secret) is verified against on the unknown-email path | `test_dummy_password_hash_is_cached_bcrypt` |
 | 10 | Origin allowlist only ran when `app_env == "production"` | Runs in **every** environment, against `ALLOWED_ORIGINS ∪ CORS_ORIGINS` | `test_origin_allowlist_applies_outside_production` |
+| 2 | WS accepted `?token=` in the query string by default | Gated behind `ws_allow_query_token` (`WS_ALLOW_QUERY_TOKEN`, **default false**). Cookies are the supported path — host-scoped, not port-scoped, so `localhost:3000 → localhost:8000` and `app → api.example.com` both work. A `?token=` probe now closes with 1008 | `test_websocket_query_token_is_gated_off_by_default` (rejects a *valid* token in the query, accepts the same token as a cookie) |
+| 5 | Register returned `409 "account already exists"` for a verified email | Uniform `200 {email, status: pending_verification}` + message `"Check your email to continue"` for all three cases; the owner is told by email instead (throttled 10 min). The response no longer carries an id, so it cannot differ between paths | `test_register_duplicate_email_is_not_enumerable` (compares both responses key by key) |
+| 11 | No absolute cap across refresh rotations | Redis `refresh_chain:{sha256}` deadline set at login and inherited by every rotation (`refresh_chain_max_seconds`, default 30 d); past it every token and session is revoked | `test_refresh_rotation_inherits_the_chain_deadline`, `test_refresh_chain_stops_at_the_absolute_deadline` |
+| 12 | `/auth/refresh` compared issuance time to `now` — true for every token — so **every refresh returned 401** | Check rewritten to mean what it says; the chain deadline from row 11 is the real bound | the two tests above (rotation succeeds, then the chain stops) |
 
 Two trading-logic defects found alongside these (see `docs/trading-engine.md`): AMM BUY fills wrote
 no `Trade` row (`remaining_shares` is pinned to `0` for buys — now keyed off `amm_shares`), and
@@ -371,11 +394,9 @@ and `test_create_market_initial_probability_is_not_inverted`.
 
 | # | Gap | Location | Why it stays |
 |---|---|---|---|
-| 2 | WS accepts `?token=` query param as a cookie fallback | `routes.py:64` | Required by non-browser clients (the test suite uses it); the cookie path is tried first. Mitigation: short 15 min access tokens + TLS. |
-| 5 | Register returns `ConflictError "account already exists"` | `auth.py:286` | Deliberate UX trade-off so a returning signup can be told to sign in. Login, forgot-password, resend-verification are all uniform. Rate limiting + the uniform *login* path bound the value of this signal. |
-| 8 | Blacklist **fails open** outside production | `deps.py:96` | Dev/staging convenience; production fails closed (Redis down ⇒ deny). |
-| 9 | `SameSite=Lax`, no synchroniser token | `deps.py:232` | Standard SPA+JSON design; `Lax` is needed so emailed links still work. The un-covered threat is a same-site (subdomain) attacker — closed by the JSON content-type + Origin allowlist, not by a token. |
-| 11 | No absolute cap across refresh rotations | `auth.py:1076` | Would need a rotation-stable anchor (`refresh_tokens.created_at` column or a Redis chain key). Single-token TTL is 30 d. |
+| 8 | Blacklist **fails open** outside production | `deps.py` (`_BLACKLIST_FAIL_OPEN`) | Dev/staging convenience; production fails closed (Redis down ⇒ deny). Startup now logs a warning naming the consequence (`app_env=…: token blacklist checks FAIL OPEN…`) so nobody discovers it during an incident. |
+| 9 | `SameSite=Lax`, no synchroniser token | `deps.py` (`set_auth_cookies`) | Standard SPA+JSON design; `Lax` is needed so emailed links still work. The un-covered threat is a same-site (subdomain) attacker — closed by the JSON content-type + Origin allowlist, not by a token. |
+| 13 | `WS_ALLOW_QUERY_TOKEN=true` (opt-in) puts a live JWT in a URL | `config.py` | Only if someone enables it deliberately, for a non-browser client that cannot store a cookie. The shipped default is `false`; URLs end up in proxy logs, history and `Referer`. |
 
 ---
 
@@ -401,6 +422,9 @@ HttpOnly cookies so even injected script can't read a token. **CSRF** is prevent
 non-wildcard CORS allowlist of origins/methods/headers with `allow_credentials` + an in-app
 `Origin` allowlist that 403s unknown origins **in every environment** — four independent layers,
 any one of which is sufficient. The websocket upgrade runs the same token chain as HTTP, so
-revocation is exact across both transports. Residual risks are documented rather than hidden:
-registration intentionally reveals existing emails, the blacklist only fails closed in production,
-and refresh rotation means there is no absolute cap on a login chain's total lifetime.
+revocation is exact across both transports. Residual risks are documented rather than hidden: the
+blacklist fails open outside production (and says so at startup), `SameSite=Lax` + JSON + the
+Origin allowlist — not a synchroniser token — carry the CSRF story, and the WebSocket will accept
+`?token=` only if `WS_ALLOW_QUERY_TOKEN=true` is set deliberately. Registration answers one
+uniform response whether or not the address exists, and a login chain cannot outlive
+`refresh_chain_max_seconds` no matter how often it refreshes.

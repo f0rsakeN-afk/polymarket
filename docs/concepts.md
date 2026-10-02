@@ -220,12 +220,15 @@ Resolution is the moment the truth becomes official: did it rain, did the team w
 2. **Winning shares pay $1 each.** If YES won, every YES share in your account is worth exactly $1 and is added to your wallet balance. NO shares are worth $0 and are recorded as a loss.
 3. **Nobody is charged anything at this step.** The trading fee was already paid when you traded. Settlement itself takes no cut.
 4. **It can only happen once.** Each position is flagged with a `settled_at` timestamp under a row lock, so a retried background job or a double-click on "claim" can never pay you twice.
-5. **Where the money comes from:** the losing side and the pool. Pool fees that were collected along the way are swept to the platform's treasury, and liquidity providers are paid out of the side that won — which is exactly why being an LP carries real risk.
+5. **Where the money comes from:** the pool's escrow. Every buy, split and deposit put those dollars
+   in; a sell, merge, LP exit or fee sweep took some out. At resolution the order is fixed —
+   **winners, then the platform's fees, then liquidity providers** (a pro-rata slice of whatever is
+   left) — so an LP carries the pool's trading P&L and the fees, not the outcome.
 
-> Honest footnote: this project's money ledger is **single-entry** (balances are updated, but not every
-> movement is mirrored by a matching debit *and* credit), so payouts are not strictly pre-funded by an
-> escrow account. It's the biggest known weakness of the system and the first thing we'd fix —
-> `trading-engine.md` §6.1 sketches how.
+> Honest footnote: the escrow is enforced by one debit/credit choke point on the pool row and the
+> settlement worker pays what it holds (logging any shortfall instead of failing), but nothing
+> audits each pool nightly against its open claims. `trading-engine.md` §6 lists that alongside the
+> other limits we admit to.
 
 ---
 

@@ -197,6 +197,14 @@ Resting orders are serviced by Celery beat:
   scanning only the **dirty set** `SPOP dirty:markets 10000`, with `SKIP LOCKED`.
 * `expire-stale-orders` (30 s) — frees `locked_balance` and cancels orders on closed markets.
 
+The dirty set is written by `websocket.manager.publish_price_update` in the same Redis pipeline as
+the WS broadcast, so a trade marks its market dirty for free. A fill additionally **enqueues the
+sweeper directly** (`OrderService._enqueue_limit_sweep_now`), throttled to one enqueue per second
+by a Redis `NX` key — an order whose price just got crossed waits milliseconds instead of the rest
+of the 30 s beat cycle, and a burst of fills collapses into a single sweep rather than one message
+per trade. If Redis or the broker is down, the beat run is the fallback and nothing is lost.
+**Test:** `tests/test_safety_limits.py::test_a_fill_enqueues_the_limit_order_sweep_immediately`.
+
 While an order rests, its budget sits in `wallet.locked_balance` — locked, not spent. It is
 released on fill, cancel, or expiry.
 
@@ -258,50 +266,94 @@ Transaction(type="merge", amount=+amount_after_fee)
 1. An admin resolves the market (`winning_outcome_id`), a Redis `SET NX` lock plus the
    `resolving → resolved` status flip make double-settlement impossible, and the Celery task does
    the rest under `FOR UPDATE` on unsettled positions.
-2. **Winners**: `wallet.balance += shares_held` ($1 per winning share), `Transaction
-   type="settlement_win"`, `position.settled_at` set — and `claim_winnings` re-checks
-   `settled_at IS NULL` under the same row lock, so a claim racing the worker can't pay twice.
+2. **Winners**: `wallet.balance += shares_held` ($1 per winning share) **paid out of
+   `pool.collateral`** (`debit_collateral(allow_shortfall=True)` — if the escrow can't cover the
+   full payout the worker pays what it holds and logs the shortfall instead of failing),
+   `Transaction type="settlement_win"`, `position.settled_at` set — and `claim_winnings`
+   re-checks `settled_at IS NULL` under the same row lock, so a claim racing the worker can't pay
+   twice. The claim endpoint is stricter than the worker: it is **all-or-nothing**, so any
+   shortfall raises `ESCROW_INSUFFICIENT` (422) and leaves the position claimable rather than
+   handing a partial payout through the API.
 3. **Losers**: `settlement_loss` transaction for the history, payout 0.
-4. **Protocol fees**: `pool.protocol_fees` swept to the system treasury.
-5. **LPs**: `lp_payout = lp_tokens × (pool.winning_side_shares / lp_token_supply)` — LPs are
-   redeemed out of the side that won, so they carry outcome risk in exchange for the fees.
+4. **Protocol fees**: the treasury takes `pool.protocol_fees` — a sub-ledger *inside* the escrow —
+   with the same shortfall discipline. Order is fixed and deliberate: **winners → fees → LPs**.
+5. **LPs**: `lp_payout = lp_tokens / lp_token_supply × (escrow left after winners and fees)` — a
+   pro-rata slice of *collateral*, so an LP carries the pool's trading P&L and the fees, not the
+   outcome. The same formula governs an LP exit mid-market, and `remove_liquidity` refuses any
+   withdrawal that would leave less than the open claims behind (§6.6).
 6. Positions are zeroed and the market becomes `resolved`; the frontend shows the claim button.
+
+The creator's first LP position is a real `LPShare` row minted when the market is seeded (with
+`total_liquidity` set at the same moment), so the pool starts with a holder rather than with
+unowned supply.
 
 ---
 
 ## 6. Known limitations to admit before you're asked
 
 These are real, and naming them unprompted scores more marks than hoping they don't come up.
+The first group was real six weeks ago and has been closed since — know the story, because
+"how did you fix it" is a better question to be asked than "what's broken".
 
-1. **The ledger is single-entry, not double-entry.** A settlement credits winners and a sell
-   credits the seller, but nothing is debited — `pool.collateral` is only ever incremented by
-   `add_liquidity`, never decremented by a trade, a sell, a merge, or an LP withdrawal.
-   Concretely: a $100 pool seeded 70/30, then a $100 buy of YES (2% fee) yields 113.98 shares and
-   leaves the pool holding 183.98 YES. If YES wins, claims are the buyer's 113.98 **plus** the
-   LPs' 183.98 = **$297.96 against the $200 that ever entered the system**. Balances are
-   therefore not strictly conserved. **Fix sketch:** give the pool a real ledger — credit
-   `pool.collateral` on every AMM buy and split, debit it on every AMM sell, merge and LP
-   withdrawal, and fund settlement payouts *from* `pool.collateral` (plus an explicit escrow for
-   book trades) instead of creating money. It is a mechanical change but it touches every write
-   path, so it is called out rather than half-done.
-2. **LPs are exposed to the outcome** (redeemed from the winning side's reserve), which is not
-   how an AMM LP usually thinks of themselves. A proper design redeems LPs from *collateral*
-   and charges/returns fees separately.
-3. **`pool.collateral` is decorative** — analytics that read it are wrong today (see 1).
-4. **The AMM is thin and linear-impact.** One $10 order in a $100 pool moves the price 7 points.
-   Real venues have deeper liquidity, partial fills and a mid-price from the book.
+### Fixed — know what was wrong and how it was closed
+
+1. **The ledger used to be single-entry: nothing was ever debited.** A $100 pool seeded 70/30 and
+   then a $100 YES buy (2% fee) yielded 113.98 shares against 183.98 YES of claims — if YES won,
+   $297.96 was owed out of the $200 that ever existed. **Now:** every pool flow goes through one
+   choke point, `LiquidityPool.credit_collateral()` / `debit_collateral()` in
+   `app/models/liquidity.py`. Buys, splits and deposits credit; sells, merges, LP exits, fee
+   sweeps, claims and settlement debit. `debit_collateral` refuses to drive the escrow negative —
+   only callers that pass `allow_shortfall=True` (the settlement sweep and the treasury sweep)
+   may pay less than owed, and they log the shortfall instead of failing. **Tests:**
+   `tests/test_ledger.py` (15 cases: split/merge symmetry, wallet-delta == collateral-delta, the
+   full settlement payout table, underfunded escrow paying capped/zero, claim-time refusal).
+2. **LPs used to be exposed to the outcome** — redeemed from the winning side's reserve, so an LP
+   on the losing side got nothing even though the pool held dollars. **Now** an LP exit pays a
+   pro-rata slice of *collateral*, and settlement pays winners → protocol fees → LPs (residual).
+   LPs still carry the pool's trading P&L, which is what an LP signs up for; what changed is they
+   are no longer short the outcome as well.
+3. **`pool.collateral` used to be decorative** — analytics read a number that meant nothing.
+   **Now** it *is* the escrow: settlement, LP payouts, the claim endpoint and the floor below all
+   treat it as the single source of truth.
+4. **The 1% protocol fee used to be bookkeeping without escrow** — recorded against money no ledger
+   row was ever taken from, so the treasury sweep claimed funds that were never debited. **Now**
+   `pool.protocol_fees` is a sub-ledger *inside* `pool.collateral`: every leg that owes a fee
+   credits it (book fee in `MatchingEngine.execute_match`, AMM legs in `order_service` and the
+   beat task, both split and merge), the sweep in `LiquidityService.distribute_protocol_fees`
+   debits it, and settlement pays it after winners and before LPs. **Test:**
+   `tests/test_orders.py::test_book_match_protocol_fee_is_credited`.
 5. **`initial_probability` was inverted** when seeding a pool (a market created at 0.70 opened at
    0.30). Fixed, with a regression test.
-6. **The 1% protocol fee is bookkeeping, not escrow.** On the AMM leg each fill adds
-   `trade_value × protocol_fee_rate` to `pool.protocol_fees` while `pool.collateral` is never
-   debited, so the treasury sweep at settlement claims money no ledger row was ever taken from.
-   On the book leg it *is* taken (out of the seller's proceeds) — but it used to be credited
-   nowhere. **Fixed:** `MatchingEngine.execute_match` now credits `pool.protocol_fees` with the
-   book fee, so `buyer −X` = `seller +(X − fee)` + `fee to the ledger`. Test:
-   `tests/test_orders.py::test_book_match_protocol_fee_is_credited`.
-7. **Residual of 6:** the AMM-leg protocol fee still has no matching debit. The real fix is the
-   double-entry ledger in §6.1 — until then `pool.protocol_fees` overstates what was actually
-   collected on AMM fills.
+
+### The guards that keep it honest
+
+6. **LP-exit escrow floor.** `LiquidityService.remove_liquidity` refuses any withdrawal that would
+   leave less than *worst-case open claims + protocol fees owed* behind. Only one side is ever
+   paid at resolution, so the worst case is the **larger** side's unsettled shares — read from
+   `position` rows (authoritative), not from AMM reserves (pricing state). Without it an LP could
+   empty the pool while traders still hold shares, and settlement would have to short-change them.
+   The refusal names the withdrawable amount. **Test:**
+   `tests/test_safety_limits.py::test_lp_exit_cannot_take_escrow_away_from_open_positions`.
+7. **Split and merge move the AMM reserves with the shares they mint and burn.** A split used to
+   hand out real shares without touching `pool.yes_shares`/`pool.no_shares`, so those shares could
+   not be sold back into the AMM (`amm.sell` refuses to pay out more than the reserve holds) even
+   though the owner legitimately held them. Both sides now move by the same amount, so the quoted
+   price is unchanged. **Test:**
+   `tests/test_safety_limits.py::test_split_and_merge_move_amm_reserves_with_the_shares`.
+
+### Still true — admit these unprompted
+
+8. **The AMM is thin and linear-impact.** One $10 order in a $100 pool moves the price 7 points.
+   Real venues have deeper liquidity, partial fills and a mid-price from the book.
+9. **No periodic invariant audit.** The floor in 6 covers the one path that removes dollars without
+   removing claims (LP exits), and `debit_collateral` refuses to go negative — but nothing runs
+   over every pool each night comparing `pool.collateral` against
+   `max(open YES claims, open NO claims)`. That query is ten lines and would catch data drift from
+   a bug nobody has found yet; it is not written because the honest answer is "we have not needed
+   it", not because it is hard.
+10. **`pool.yes_shares`/`no_shares` are AMM pricing state, not the claim ledger.** Settlement reads
+    position rows. They agree by construction now (7 closed the known divergence), but they are
+    still two representations of the same fact.
 
 ---
 

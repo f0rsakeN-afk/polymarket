@@ -30,17 +30,26 @@ is usually the document.
 
 ### Known gaps we admit rather than hide
 
-Listed in `trading-engine.md` §6 and `auth-and-security.md` §12: single-entry ledger, AMM-leg
-protocol fee recorded rather than escrowed, register-form email enumeration, no absolute cap on the
-refresh chain, CI workflow sitting in `backend/.github/` where GitHub won't run it, and no frontend
-tests. Each has a fix sketch.
+Six of the gaps we listed have since been closed — the details of *how* live in
+`trading-engine.md` §6 (single-entry ledger, LPs exposed to the outcome, decorative
+`pool.collateral`, protocol fee recorded rather than escrowed) and `auth-and-security.md` §12
+(register-form email enumeration, uncapped refresh chain, `?token=` WebSocket handshake,
+CI workflow parked in `backend/.github/` where GitHub never runs it). Naming what was wrong *and*
+how it was closed is the answer that scores.
+
+Still open, deliberately: **no frontend test suite** (needs network access to install a test
+runner in CI — D1), plus the honest limits in `trading-engine.md` §6 "Still true" (thin AMM, no
+nightly invariant audit).
 
 ### Related tests
 
 Behaviour described here is pinned by `backend/tests/`: `test_amm.py` (pricing + no-arbitrage),
 `test_security_fixes.py` (websocket auth, XFF, OTP storage, Origin allowlist, trade rows),
 `test_concurrency.py` (parallel orders), `test_websocket.py` (realtime), `test_orders.py`
-(order units, book matching, protocol-fee crediting).
+(order units, book matching, protocol-fee crediting), `test_ledger.py` (escrow in/out, settlement
+payout table, claim shortfalls), `test_safety_limits.py` (LP-exit escrow floor, split/merge
+reserve sync, immediate limit-order sweep), `test_auth.py` (including the refresh-chain cap and
+the non-enumerable register form).
 
 Run them with:
 

@@ -155,20 +155,26 @@ memory leaks), and **`preload_app = False`** — async engines and Redis pools m
 `--appendonly yes --requirepass`) vs `docker-compose.prod.yml` (hardened, resource-limited,
 healthcheck-gated).
 
-## A4. CI/CD with containers
-`backend/.github/workflows/`:
-- **`ci.yml`** — Python 3.12, `uv sync --frozen`, `ruff check`, `mypy .`,
-  `pytest --cov=app`, then parses `coverage.xml` and **fails if line-rate < 80%**.
-- **`deploy.yml`** (push to `main`) — `docker buildx` → push `ghcr.io/...:<sha>` with GHA cache →
-  health-wait loop (`30 × 10s` against `${{ vars.DEPLOY_HOST }}/health`) →
-  `docker-compose -f docker-compose.prod.yml up -d --scale app=2` with secrets → smoke `curl -sf /health`.
+## A4. CI with containers
+`.github/workflows/` (repo root — GitHub ignores any `.github` that is not the root one):
+- **`ci.yml`**, three jobs:
+  - `backend` — Python 3.14, postgres:16 + redis:7 as service containers, `uv sync --frozen`,
+    `ruff check app tests`, then `pytest --cov=app` with **`--cov-fail-under=65`**. The test suite
+    builds its schema from `alembic upgrade head`, so a broken migration fails the build.
+  - `frontend` — bun, `bun install --frozen-lockfile`, `bun run lint` (0 errors allowed) and
+    `bun run typecheck` in `frontend/apps/web`.
+  - `security-scan` — Trivy filesystem + config scans, SARIF uploaded **report-only**
+    (`continue-on-error`), so findings are visible without blocking anything.
+- There is **no `deploy.yml`** — it was removed because nothing deploys from GitHub; production
+  bring-up is `docker compose -f docker-compose.prod.yml up -d`, documented in `deployment.md`.
 
-> **Viva trap:** GitHub only reads workflows from the **repo root** `.github/`. The two backend
-> workflows live at `backend/.github/workflows/`, and the root `.github/workflows/` contains only
-> `discord-notifications.yml` — so the backend CI as written is **not** actually executed by GitHub.
-> Same for the frontend: it has no test runner at all (no vitest/jest/playwright) and its ESLint
-> config installs `eslint-plugin-only-warn`, which demotes every error to a warning so `lint` can
-> never fail.
+> **Viva trap (and how it was caught):** GitHub only reads workflows from the **repo root**
+> `.github/`. Both backend workflows used to sit under `backend/.github/workflows/`, so they had
+> been silently never executed — the suites passed locally and CI meant nothing. Moving them was
+> the fix. Two related honest gaps: the frontend still has no test runner (no vitest/jest/playwright),
+> and its ESLint config *used to* install `eslint-plugin-only-warn`, demoting every error to a
+> warning so `lint` could never fail — the plugin is gone now; only four heuristic `react-hooks`
+> rules remain `warn` (chart packages), everything else fails the build.
 
 ---
 
@@ -521,8 +527,11 @@ From the module docstring (`manager.py:1`):
   `{"type":"subscribe","market_id":...}` / `unsubscribe` / `ping`.
 - `/ws/trades` — global trade feed.
 - `/ws/notifications/{user_id}` — token's uid must match the path uid (IDOR guard).
-- Auth: **cookie `access_token` first** (browsers send cookies on the WS handshake), `?token=`
-  query param as fallback. `verify_ws_token()` calls `deps.authenticate_token()`, which is the
+- Auth: **cookie `access_token`** (browsers send cookies on the WS handshake — cookies are
+  host-scoped, not port-scoped, so `localhost:3000 → localhost:8000` works). A `?token=` query
+  param is accepted **only** when `WS_ALLOW_QUERY_TOKEN=true` (default false: a token in a URL
+  lands in proxy logs, history and `Referer`).
+  `verify_ws_token()` calls `deps.authenticate_token()`, which is the
   *same* chain HTTP uses: signature + `type == "access"` + `jti` blacklist + `user.is_active` +
   `sid` session binding (revoked/expired/wrong owner ⇒ reject). Any failure — including a
   database error — rejects the connection, so auth fails closed.
