@@ -383,8 +383,13 @@ async def create_market(
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
             if data.initial_probability is not None:
-                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
-                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                # price(YES) = yes_shares / (yes_shares + no_shares), so the
+                # YES side must be seeded with `initial_probability` of the
+                # collateral — the inverse (the old behaviour) made a market
+                # created at 0.70 open at 0.30.
+                p = Decimal(str(data.initial_probability))
+                yes_shares = amount_dec * p
+                no_shares = amount_dec * (Decimal(1) - p)
                 pool.yes_shares += yes_shares
                 pool.no_shares += no_shares
             else:

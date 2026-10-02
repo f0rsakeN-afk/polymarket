@@ -2,7 +2,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +25,7 @@ from app.deps import (
     clear_auth_cookies,
     create_access_token,
     decode_token,
+    dummy_password_hash,
     get_current_user,
     hash_password,
     set_auth_cookies,
@@ -139,32 +139,17 @@ async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_
 
 def _get_client_ip(request: Request) -> str:
     """
-    Get real client IP. X-Forwarded-For is only trusted when the direct
-    connection is from a known proxy IP -- spoofing is otherwise trivially easy.
-    In production behind nginx, TRUSTED_PROXY_IPS must be set, otherwise all
-    users share the proxy IP bucket and rate limiting is ineffective.
-    Uses the same TRUSTED_PROXY_IPS logic as app/api/middleware.py.
+    Resolve the client IP for rate limiting / audit logging.
+
+    Delegates to the single implementation in app.api.middleware so both call
+    sites cannot drift apart again: X-Forwarded-For is trusted only when the
+    direct peer is a configured TRUSTED_PROXY_IPS entry (fail-closed), because
+    honouring an unvalidated header would let a client rotate fake IPs and
+    bypass every rate limit.
     """
-    direct_ip = request.client.host if request.client else None
-    forwarded = request.headers.get("x-forwarded-for")
+    from app.api.middleware import _get_client_ip as _client_ip_impl
 
-    # Read TRUSTED_PROXY_IPS once — consistent with middleware.py
-    trusted_proxies: list[str] = [
-        ip.strip() for ip in os.environ.get("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-    ]
-
-    if direct_ip in trusted_proxies and forwarded:
-        raw = forwarded.split(",")[0].strip()[:45]
-        return RateLimitService._normalize_ip(raw)
-
-    # If no trusted proxies configured but XFF present in production,
-    # log warning and use XFF (proper fix: set TRUSTED_PROXY_IPS)
-    if not trusted_proxies and forwarded and settings.app_env == "production":
-        logger.warning("TRUSTED_PROXY_IPS empty but X-Forwarded-For present")
-        raw = forwarded.split(",")[0].strip()[:45]
-        return RateLimitService._normalize_ip(raw)
-
-    return RateLimitService._normalize_ip(direct_ip or "unknown")
+    return _client_ip_impl(request)
 
 
 def _ip_matches(stored_ip: str, current_ip: str) -> bool:
@@ -833,6 +818,11 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
     await RateLimitService.record_failure(data.email, ip)
 
     if not user:
+        # Burn the same bcrypt work as a real password check so that an
+        # unregistered email takes ~as long as a registered one. Without this
+        # the response time is a reliable "does this account exist" oracle
+        # that defeats every other anti-enumeration measure here.
+        verify_password(data.password, dummy_password_hash())
         await AuthAuditService.log_login_fail(db, data.email, ip, ua, "user_not_found")
         raise UnauthorizedError("Invalid email or password")
 
@@ -1082,10 +1072,19 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not user or not user.is_active:
         raise ForbiddenError("Account is inactive")
 
-    # Absolute expiry check: reject refresh tokens older than 24 hours
-    # regardless of their individual expiry, to limit the replay window.
-    # With jwt_refresh_expire = 86400 (1 day), expires_at already caps this,
-    # but we add an explicit safety check here.
+    # Belt-and-braces issuance check: expires_at is written as (issued_at +
+    # jwt_refresh_expire), so subtracting the TTL recovers the issuance time
+    # of THIS token and we reject it if that moment has already passed.
+    # The default jwt_refresh_expire is 30 days (config.py) — earlier drafts
+    # of this comment claimed a 24-hour cap, which the config never honoured.
+    #
+    # Be precise about what this does NOT do: refresh rotates on every use and
+    # each rotation mints a token with a new issuance time, so this bounds a
+    # SINGLE token, not the total lifetime of a login chain. A chain that
+    # keeps being refreshed renews indefinitely. Capping that needs an anchor
+    # that survives rotation (a refresh_tokens.created_at column, or a Redis
+    # chain-start key set at login and checked here). Documented as a known
+    # limitation in docs/auth-and-security.md.
     from datetime import timedelta
     absolute_expiry = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
     if absolute_expiry <= datetime.now(UTC):

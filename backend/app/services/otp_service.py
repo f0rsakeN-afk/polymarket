@@ -58,8 +58,14 @@ class OTPService:
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
+        # Store ONLY the HMAC of the code — the plaintext must never be
+        # written to Redis. Verification recomputes the HMAC from the
+        # submitted code, so no plaintext is needed at check time either.
+        # (Older entries were stored as "<code>:<hash>"; verify_code accepts
+        # that format for its remaining ≤10 min TTL so a rolling deploy
+        # doesn't reject in-flight codes.)
         await redis_cb.call(
-            lambda: r.set(key, f"{code}:{OTPService._hash_code(code, secret)}", ex=CODE_TTL)
+            lambda: r.set(key, OTPService._hash_code(code, secret), ex=CODE_TTL)
         )
         logger.info(f"OTP issued for {email}, purpose={purpose}")
         return code
@@ -106,12 +112,23 @@ class OTPService:
 
         if not stored:
             return False
+        if isinstance(stored, bytes):
+            stored = stored.decode()
 
-        plain, expected_hash = stored.split(":", 1)
-        if not hmac.compare_digest(OTPService._hash_code(plain, secret), expected_hash):
-            return False
-        if not hmac.compare_digest(plain, code):
-            return False
+        if ":" in stored:
+            # Legacy "<code>:<hash>" format from before OTP storage became
+            # hash-only — accept until its TTL expires, never write it again.
+            plain, legacy_hash = stored.split(":", 1)
+            if not hmac.compare_digest(OTPService._hash_code(plain, secret), legacy_hash):
+                return False
+            if not hmac.compare_digest(plain, code):
+                return False
+        else:
+            # Hash-only format: hash the submitted code and compare in
+            # constant time. The plaintext code exists only in the caller's
+            # return value and the outbound email.
+            if not hmac.compare_digest(OTPService._hash_code(code, secret), stored):
+                return False
 
         # Invalidate after successful use
         await redis_cb.call(lambda: r.delete(key))

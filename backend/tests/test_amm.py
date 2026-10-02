@@ -56,13 +56,88 @@ def test_buy_yes_mutates_state():
 
 
 def test_buy_yes_returns_shares():
-    """Buyer receives YES shares at fair price (C*(1-fee)/price(YES))."""
+    """Buyer receives YES shares sized by the POST-trade price.
+
+    At 50/50 the marginal (spot) price is $0.50, but a $10 order moves the
+    pool, so the buyer pays more than spot for the later shares and gets
+    17.42 rather than the impact-free 20.00. Solving
+    C = S*(R+S)/(T+S) with R=T/2=50, C=10 gives S = (C-R+sqrt((R-C)^2+4CT))/2.
+    """
     amm = BinaryAMM(yes_shares=Decimal(50), no_shares=Decimal(50), fee_rate=Decimal(0))
     result = amm.buy("yes", Decimal(10))
     assert result.shares_out > 0
     assert result.collateral_in == Decimal(10)
-    # At 50/50 odds, $10 buys ~20 shares (fair price = $0.50/share)
-    assert float(result.shares_out) == pytest.approx(20.0, abs=0.01)
+    assert float(result.shares_out) == pytest.approx(17.4166, abs=0.001)
+    # ... and definitely fewer than the impact-free number.
+    assert result.shares_out < Decimal(20)
+
+
+def test_buy_charges_price_impact():
+    """Bigger orders get a worse average price than smaller ones."""
+    small_pool = BinaryAMM(yes_shares=Decimal(500), no_shares=Decimal(500), fee_rate=Decimal(0))
+    small = small_pool.buy("yes", Decimal(1))
+
+    big_pool = BinaryAMM(yes_shares=Decimal(500), no_shares=Decimal(500), fee_rate=Decimal(0))
+    big = big_pool.buy("yes", Decimal(100))
+
+    # Impact-free pricing would give exactly shares = C/price for both.
+    small_avg_price = Decimal(1) / small.shares_out
+    big_avg_price = Decimal(100) / big.shares_out
+    assert big_avg_price > small_avg_price
+    # And a tiny trade is still essentially spot.
+    assert float(small_avg_price) == pytest.approx(0.5, abs=0.01)
+
+
+def test_round_trip_returns_only_fees():
+    """Buy then immediately sell the same shares must never be profitable.
+
+    Regression for the pool-drain bug: the old formula charged the PRE-trade
+    price on a buy (zero price impact), so the buy pushed the price up and the
+    sell handed back more than was paid. With impact charged on the buy and
+    the pre-trade price credited on the sell, a round trip returns exactly
+    (1-fee)^2 of the input — the fee is the only thing it can cost.
+    """
+    for fee in (Decimal(0), Decimal("0.02")):
+        amm = BinaryAMM(yes_shares=Decimal(5000), no_shares=Decimal(5000), fee_rate=fee)
+        start = Decimal(1000)
+
+        quote = amm.buy("yes", start)
+        back = amm.sell("yes", quote.shares_out).collateral_in
+
+        if fee == 0:
+            # Exactly break-even (to dust) — no free money out of the pool.
+            assert float(back) == pytest.approx(float(start), rel=1e-6)
+        else:
+            expected = start * (Decimal(1) - fee) ** 2
+            assert float(back) == pytest.approx(float(expected), rel=1e-3)
+        assert back <= start
+
+
+def test_round_trip_large_size_never_profitable():
+    """The same invariant holds for a trade that visibly moves the pool."""
+    amm = BinaryAMM(yes_shares=Decimal(100), no_shares=Decimal(100), fee_rate=Decimal(0))
+    start = Decimal(50)  # 50% of one side — a huge order
+
+    quote = amm.buy("yes", start)
+    back = amm.sell("yes", quote.shares_out).collateral_in
+
+    assert back <= start, f"pool paid out {back} for {start} in"
+
+
+def test_sell_then_buy_round_trip_returns_only_fees():
+    """The inverse loop (sell shares, buy back with the proceeds) loses too."""
+    fee = Decimal("0.02")
+    amm = BinaryAMM(yes_shares=Decimal(5000), no_shares=Decimal(5000), fee_rate=fee)
+
+    proceeds = amm.sell("yes", Decimal(100)).collateral_in
+    assert proceeds > 0
+
+    # Spend every cent of the proceeds buying the same shares back.
+    quote = amm.buy("yes", proceeds)
+    assert quote.shares_out < Decimal(100), (
+        "buying back with the sale proceeds must not restore (or exceed) "
+        f"the 100 shares sold — got {quote.shares_out}"
+    )
 
 
 def test_buy_yes_fee_deducted():

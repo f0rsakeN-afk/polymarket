@@ -64,6 +64,26 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
+_DUMMY_PASSWORD_HASH: str | None = None
+
+
+def dummy_password_hash() -> str:
+    """Cached bcrypt hash of a throwaway secret, generated on first use.
+
+    Used when an email is not registered so that an unknown-user login costs
+    the same ~100 ms of bcrypt work as a known-user login. Without it, a
+    fast response means "no such account" — a reliable user-enumeration
+    oracle. Generated lazily (never at import) and cached: the value is
+    meaningless, it only exists to be slow.
+    """
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        import secrets as _secrets
+
+        _DUMMY_PASSWORD_HASH = hash_password(_secrets.token_urlsafe(32))
+    return _DUMMY_PASSWORD_HASH
+
+
 def create_access_token(
     user_id: str,
     expires_delta: timedelta | None = None,
@@ -175,6 +195,17 @@ async def _load_user(db: AsyncSession, payload: dict) -> User:
 
     await _validate_session(db, payload, user)
     return user
+
+
+async def authenticate_token(db: AsyncSession, token: str) -> User:
+    """Decode + fully validate a raw token string.
+
+    Identical to the HTTP auth path: JWT decode, token type, jti blacklist,
+    user active, session binding. Websocket routes call this so that a
+    revoked/blacklisted/logged-out token is rejected on the upgrade handshake
+    too, instead of only at issue time.
+    """
+    return await _load_user(db, decode_token(token))
 
 
 async def get_current_user(

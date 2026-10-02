@@ -1194,12 +1194,15 @@ def enqueue_otp(self, email: str, purpose: str):
         secret = _get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        # Store in Redis synchronously inside the task
+        # Store in Redis synchronously inside the task.
+        # Hash-only: the plaintext code goes into the email body below and
+        # nowhere else — see OTPService.verify_code, which re-hashes the
+        # submitted code instead of reading a stored plaintext one.
         async def _store():
             from app.redis import get_redis, redis_cb
             r = await get_redis()
             await redis_cb.call(
-                lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
+                lambda: r.setex(key, 600, _hash_code(code, secret))
             )
         celery_run(_store())
 

@@ -445,13 +445,19 @@ class OrderService:
         total_shares = matched_shares + amm_shares
         total_usdc_spent = matched_usdc + (remaining_usdc if data.side == "buy" else Decimal(0))
 
-        # FOK atomicity: if FOK couldn't fill the full amount, raise instead of creating pending order
-        if data.order_type == "fill_or_kill" and total_shares < amount:
-            raise ValidationError(
-                f"Fill-or-kill could not be fully filled. "
-                f"Total filled: {float(total_shares)}/{float(amount)} shares",
-                error_code="ORDER_NOT_FILLABLE",
-            )
+        # FOK atomicity: if FOK couldn't fill the full amount, raise instead of
+        # creating a pending order. Compare in the order's own units — `amount`
+        # is a USDC budget for BUY and a share count for SELL, so comparing
+        # shares against a USDC budget (the old check) would misfire.
+        if data.order_type == "fill_or_kill":
+            fok_filled = total_usdc_spent if data.side == "buy" else total_shares
+            if fok_filled < amount:
+                unit = "USDC" if data.side == "buy" else "shares"
+                raise ValidationError(
+                    f"Fill-or-kill could not be fully filled. "
+                    f"Total filled: {float(fok_filled)}/{float(amount)} {unit}",
+                    error_code="ORDER_NOT_FILLABLE",
+                )
         total_usdc_received = matched_usdc + sell_proceeds_amm
 
         # ── Step 6: Slippage validation ──
@@ -537,7 +543,11 @@ class OrderService:
                     }
                 )
 
-        market.total_volume += amount
+        # Volume is denominated in USDC for both sides: a buy spends
+        # `total_usdc_spent`, a sell receives `total_usdc_received`. Adding
+        # the raw `amount` would mix USDC (buy) with share counts (sell) in
+        # one column and corrupt every volume-based sort/analytic.
+        market.total_volume += total_usdc_spent if data.side == "buy" else total_usdc_received
         market.num_trades += 1
 
         for md in match_details:
@@ -552,7 +562,11 @@ class OrderService:
             )
             db.add(t)
 
-        if remaining_shares > 0:
+        # AMM (non-book) fill leg. Must key off `amm_shares`, not
+        # `remaining_shares` — that variable is pinned to 0 for BUY orders
+        # (their budget remainder is tracked by `remaining_usdc`), so keying
+        # off it silently dropped the trade row for every market BUY.
+        if amm_shares > 0:
             t = Trade(
                 user_id=user.id,
                 market_id=market.id,

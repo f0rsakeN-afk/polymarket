@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import InsufficientBalanceError
 from app.config import settings
+from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.position import Position
@@ -79,6 +80,23 @@ class MatchingEngine:
 
         usdc_value = match_shares * match_price
         fee = usdc_value * settings.protocol_fee_rate
+
+        # The 1% protocol fee is taken out of the seller's proceeds below, so it
+        # has to be credited somewhere or it simply vanishes from circulation
+        # (previously it was burned — no ledger row anywhere recorded it).
+        # Every production caller (order_service.execute_order and the
+        # check-limit-order beat task) locks Market → Pool *before* entering the
+        # matching engine, so this FOR UPDATE re-takes a lock we already hold and
+        # cannot deadlock; taking it here, before any wallet lock, keeps the
+        # canonical order Market → Pool → Wallet → Position intact.
+        pool_result = await db.execute(
+            select(LiquidityPool)
+            .where(LiquidityPool.market_id == maker.market_id)
+            .with_for_update()
+        )
+        pool = pool_result.scalar_one_or_none()
+        if pool is not None and fee > 0:
+            pool.protocol_fees += fee
 
         # Always lock wallets in deterministic order by user_id to prevent deadlocks
         user_ids = sorted([maker.user_id, taker_user_id], key=str)

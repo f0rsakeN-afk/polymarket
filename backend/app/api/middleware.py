@@ -32,10 +32,16 @@ _PRODUCTION_ALLOWED_ORIGINS: list[str] = [
 
 def _get_client_ip(request: Request) -> str:
     """
-    Get real client IP.  X-Forwarded-For is only trusted when the direct
-    connection is from a known proxy IP — spoofing is otherwise trivially easy.
-    In production behind nginx, TRUSTED_PROXY_IPS must be set, otherwise all
-    users share the proxy IP bucket and rate limiting is ineffective (#38 fix).
+    Get real client IP.
+
+    X-Forwarded-For is trusted ONLY when the direct connection comes from a
+    configured proxy IP (TRUSTED_PROXY_IPS). Anything else is ignored:
+    the header is attacker-controlled, so honouring it lets a client rotate
+    fake IPs to bypass every rate limit and poison the audit trail with
+    arbitrary source addresses. This is deliberately fail-closed — set
+    TRUSTED_PROXY_IPS to the nginx/container proxy address in production,
+    otherwise every request appears to come from that proxy and shares one
+    rate-limit bucket.
     """
     direct_ip = request.client.host if request.client else None
     forwarded = request.headers.get("x-forwarded-for")
@@ -44,13 +50,12 @@ def _get_client_ip(request: Request) -> str:
         raw = forwarded.split(",")[0].strip()[:45]
         return RateLimitService._normalize_ip(raw)
 
-    # Fail-closed helper: if no trusted proxies configured but XFF present,
-    # log warning once and use XFF (better than sharing nginx IP for all users).
-    # Proper fix is to set TRUSTED_PROXY_IPS in prod.
-    if not _TRUSTED_PROXIES and forwarded and settings.app_env == "production":
-        logger.warning("TRUSTED_PROXY_IPS empty but X-Forwarded-For present — using XFF (set TRUSTED_PROXY_IPS)")
-        raw = forwarded.split(",")[0].strip()[:45]
-        return RateLimitService._normalize_ip(raw)
+    if forwarded and not _TRUSTED_PROXIES and settings.app_env == "production":
+        logger.warning(
+            "TRUSTED_PROXY_IPS is empty but X-Forwarded-For was presented — "
+            "header ignored (fail-closed). Set TRUSTED_PROXY_IPS to the proxy "
+            "address so per-user rate limiting works behind nginx."
+        )
 
     return RateLimitService._normalize_ip(direct_ip or "unknown")
 
@@ -125,20 +130,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, enabled: bool = True):
         super().__init__(app)
         self.enabled = enabled
-        # Build allowed origins set once at init
+        # Build allowed origins once at init: explicit ALLOWED_ORIGINS env
+        # (the security-critical allowlist) plus the CORS_ORIGINS the API
+        # itself advertises, so a request from our own front end can never be
+        # rejected by this check just because the two settings were edited
+        # independently.
         self._allowed_origins = set(
             o.strip().lower() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
-        )
+        ) | set(o.strip().lower() for o in settings.cors_origins if o.strip())
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if not self.enabled:
             return await call_next(request)
 
-        # ── CORS origin validation in production ──
-        # Reject requests from untrusted origins to prevent CORS attacks.
+        # ── Origin validation (all environments) ────────────────────────────
+        # Browsers attach `Origin` to cross-origin and same-origin state-changing
+        # requests; enforcing the allowlist everywhere means a staging box or a
+        # local run is protected by the same rule as production, and an attacker
+        # can't rely on an environment being set to "development" to slip past it.
         # localhost/127.0.0.1 are always allowed for local development.
+        # Non-browser clients (curl, server-to-server) send no Origin and are
+        # unaffected — they are handled by SameSite + the JSON content-type rule.
         origin = request.headers.get("origin")
-        if origin and settings.app_env == "production":
+        if origin:
             is_allowed = False
             if not self._allowed_origins:
                 # No ALLOWED_ORIGINS configured — deny all cross-origin requests
@@ -151,7 +165,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 from fastapi.responses import JSONResponse
                 return JSONResponse(
                     status_code=403,
-                    content={"error_code": "ORIGIN_NOT_ALLOWED", "message": "CORS origin not permitted in production"},
+                    content={"error_code": "ORIGIN_NOT_ALLOWED", "message": "CORS origin not permitted"},
                     headers={**SECURITY_HEADERS, **{"Access-Control-Allow-Origin": "none"}},
                 )
 
