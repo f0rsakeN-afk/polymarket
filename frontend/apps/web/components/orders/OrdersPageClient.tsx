@@ -54,31 +54,57 @@ function formatTime(iso: string | null | undefined) {
 
 function SideBadge({ side }: { side: string }) {
   if (side === "buy") {
-    return <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white capitalize text-xs">buy</Badge>
+    return (
+      <Badge className="bg-emerald-600 text-xs text-white capitalize hover:bg-emerald-700">
+        buy
+      </Badge>
+    )
   }
-  return <Badge variant="destructive" className="capitalize text-xs">sell</Badge>
+  return (
+    <Badge variant="destructive" className="text-xs capitalize">
+      sell
+    </Badge>
+  )
 }
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
   if (outcome === "yes") {
-    return <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white capitalize text-xs">yes</Badge>
+    return (
+      <Badge className="bg-emerald-600 text-xs text-white capitalize hover:bg-emerald-700">
+        yes
+      </Badge>
+    )
   }
   if (outcome === "no") {
-    return <Badge variant="destructive" className="capitalize text-xs">no</Badge>
+    return (
+      <Badge variant="destructive" className="text-xs capitalize">
+        no
+      </Badge>
+    )
   }
-  return <Badge variant="secondary" className="capitalize text-xs truncate max-w-[80px]" title={outcome}>{outcome}</Badge>
+  return (
+    <Badge
+      variant="secondary"
+      className="max-w-[80px] truncate text-xs capitalize"
+      title={outcome}
+    >
+      {outcome}
+    </Badge>
+  )
 }
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
-    filled: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+    filled:
+      "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
     cancelled: "bg-muted text-muted-foreground",
-    pending: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    pending:
+      "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
     partial: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
     expired: "bg-muted text-muted-foreground",
   }
   const cls = variants[status] ?? "bg-muted text-muted-foreground"
-  return <Badge className={cn("capitalize text-xs", cls)}>{status}</Badge>
+  return <Badge className={cn("text-xs capitalize", cls)}>{status}</Badge>
 }
 
 // ── Cancel Dialog ─────────────────────────────────────────────────────────────
@@ -98,19 +124,24 @@ function CancelButton({ order }: { order: Order }) {
 
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger className="inline-flex items-center justify-center rounded-md text-xs px-2 py-1 h-6 text-destructive hover:bg-destructive/10 transition-colors">
+      <AlertDialogTrigger className="inline-flex h-6 items-center justify-center rounded-md px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10">
         Cancel
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel Order</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to cancel this order for {Number(order.amount).toFixed(2)} shares @ ${Number(order.price).toFixed(2)}?
+            Are you sure you want to cancel this order for{" "}
+            {Number(order.amount).toFixed(2)} shares @ $
+            {Number(order.price).toFixed(2)}?
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Keep Order</AlertDialogCancel>
-          <AlertDialogAction onClick={handleConfirm} className="bg-destructive hover:bg-destructive/90">
+          <AlertDialogAction
+            onClick={handleConfirm}
+            className="bg-destructive hover:bg-destructive/90"
+          >
             {isPending ? "Cancelling..." : "Cancel Order"}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -125,9 +156,8 @@ export function OrdersPageClient() {
   const qc = useQueryClient()
   const { data: user } = useCurrentUser()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
-  const { data, fetchNextPage, isFetchingNextPage, isLoading, error, refetch } = useOrders(
-    statusFilter === "all" ? {} : { status: statusFilter }
-  )
+  const { data, fetchNextPage, isFetchingNextPage, isLoading, error, refetch } =
+    useOrders(statusFilter === "all" ? {} : { status: statusFilter })
   const orders = data?.orders ?? []
   const hasMore = data?.hasMore ?? false
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -147,21 +177,34 @@ export function OrdersPageClient() {
     return () => observer.disconnect()
   }, [hasMore, isFetchingNextPage, fetchNextPage])
 
-  const handleWsMessage = useCallback((payload: unknown) => {
-    const msg = payload as { type?: string; notification?: { type?: string } }
-    if (msg?.type === "position:update" || msg?.notification?.type === "order_filled") {
-      qc.invalidateQueries({ queryKey: queryKeys.orders() })
-      qc.invalidateQueries({ queryKey: ["positions"] })
-    }
-  }, [qc])
+  const handleWsMessage = useCallback(
+    (payload: unknown) => {
+      const msg = payload as { type?: string; notification?: { type?: string } }
+      if (
+        msg?.type === "position:update" ||
+        msg?.notification?.type === "order_filled"
+      ) {
+        qc.invalidateQueries({ queryKey: queryKeys.orders() })
+        qc.invalidateQueries({ queryKey: ["positions"] })
+      }
+    },
+    [qc]
+  )
 
   const handleFilterClick = useCallback((filter: StatusFilter) => {
     setStatusFilter(filter)
   }, [])
 
-  const makeFilterHandler = useCallback((f: StatusFilter) => () => handleFilterClick(f), [handleFilterClick])
+  const makeFilterHandler = useCallback(
+    (f: StatusFilter) => () => handleFilterClick(f),
+    [handleFilterClick]
+  )
 
-  useUserSocket({ userId: user?.id ?? "", onMessage: handleWsMessage, enabled: Boolean(user?.id) })
+  useUserSocket({
+    userId: user?.id ?? "",
+    onMessage: handleWsMessage,
+    enabled: Boolean(user?.id),
+  })
 
   const columns: Column<Order>[] = [
     {
@@ -169,7 +212,9 @@ export function OrdersPageClient() {
       header: "Market",
       sortable: true,
       className: "w-[38%] font-medium max-w-xs truncate",
-      render: (row) => <span className="truncate block">{row.market_question ?? "—"}</span>,
+      render: (row) => (
+        <span className="block truncate">{row.market_question ?? "—"}</span>
+      ),
     },
     {
       key: "side",
@@ -223,19 +268,21 @@ export function OrdersPageClient() {
       header: "",
       className: "w-[4%]",
       render: (row) =>
-        (row.status === "pending" || row.status === "partial") ? (
+        row.status === "pending" || row.status === "partial" ? (
           <CancelButton order={row} />
         ) : null,
     },
   ]
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 space-y-6">
+    <div className="container mx-auto max-w-7xl space-y-6 px-4 py-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Orders</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{orders.length} orders</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {orders.length} orders
+          </p>
         </div>
       </div>
 
