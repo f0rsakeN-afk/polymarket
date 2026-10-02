@@ -1262,6 +1262,15 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
                 f"This code expires in 10 minutes. "
                 f"If you didn't request this, your account is safe."
             )
+        elif purpose == "exists":
+            subject = "You already have a Polymarket account"
+            body = (
+                "Someone tried to register with this email address, but an "
+                "account already exists.\n\n"
+                "If it was you: sign in as usual, or reset your password if "
+                "you have forgotten it. If it wasn't you, no action is needed "
+                "- your account and password are unchanged."
+            )
         else:
             subject = "Your Polymarket code"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."

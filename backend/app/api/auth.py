@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
-    ConflictError,
     ForbiddenError,
     NotFoundError,
     UnauthorizedError,
@@ -72,25 +71,113 @@ def _hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _issue_tokens(
+# ── Refresh-chain cap ─────────────────────────────────────────────────────────
+# Rotation mints a brand-new token with a brand-new `expires_at`, so the
+# per-token TTL alone bounds a single token, not the login chain: a client
+# that keeps refreshing renews forever. The chain therefore carries an anchor
+# in Redis — an absolute deadline set at login (or inherited from the previous
+# token on rotation) that no amount of renewing can move. The key is per-token
+# hash so two devices log in independently.
+_REFRESH_CHAIN_KEY = "refresh_chain:"
+
+
+def _chain_key(token_hash: str) -> str:
+    return f"{_REFRESH_CHAIN_KEY}{token_hash}"
+
+
+async def _refresh_chain_deadline(token_hash: str) -> float | None:
+    """Unix deadline after which this login chain must stop renewing.
+
+    `None` means "no anchor recorded" — a token issued before the feature, or
+    a Redis flush. The caller keeps the per-token bound and logs; it does not
+    reject, because failing closed here would cut every session loose the
+    moment Redis restarts.
+    """
+    try:
+        r = await get_redis()
+        raw = await redis_cb.call(lambda: r.get(_chain_key(token_hash)))
+        if not raw:
+            return None
+        return float(raw.decode() if isinstance(raw, bytes) else raw)
+    except Exception as e:  # noqa: BLE001 — Redis down must not lock everyone out
+        logger.warning(f"refresh-chain lookup failed ({e}) — chain cap skipped for this request")
+        return None
+
+
+async def _anchor_refresh_chain(
+    new_hash: str, previous_hash: str | None, issued_at: datetime
+) -> None:
+    """Write the chain deadline the freshly issued token must live under.
+
+    Login (no predecessor) starts the clock; rotation inherits the
+    predecessor's remaining deadline, which is what makes the cap absolute —
+    renewing never resets it. Failure is non-fatal and logged: a session that
+    cannot record an anchor still expires on the per-token TTL.
+    """
+    fresh_deadline = (
+        issued_at + timedelta(seconds=settings.refresh_chain_max_seconds)
+    ).timestamp()
+    try:
+        r = await get_redis()
+        if previous_hash is None:
+            await redis_cb.call(
+                lambda: r.set(
+                    _chain_key(new_hash),
+                    fresh_deadline,
+                    ex=settings.refresh_chain_max_seconds,
+                )
+            )
+            return
+
+        raw = await redis_cb.call(lambda: r.get(_chain_key(previous_hash)))
+        if raw:
+            inherited = float(raw.decode() if isinstance(raw, bytes) else raw)
+        else:
+            # Anchor lost mid-chain. Re-seed from THIS token's issuance rather
+            # than `fresh_deadline` — same window either way, and it keeps
+            # working instead of disabling the cap for the rest of the chain.
+            logger.warning(
+                "refresh-chain anchor missing for rotating token — re-seeded at issue time"
+            )
+            inherited = fresh_deadline
+        remaining = max(1, int(inherited - issued_at.timestamp()))
+        await redis_cb.call(
+            lambda: r.set(_chain_key(new_hash), inherited, ex=remaining)
+        )
+        # The old key's job is done; without this every rotation would leave
+        # a key behind until its TTL expires.
+        await redis_cb.call(lambda: r.delete(_chain_key(previous_hash)))
+    except Exception as e:  # noqa: BLE001 — logged above, never fatal to login
+        logger.warning(f"refresh-chain anchor not written ({e}) — chain cap not enforced")
+
+
+async def _issue_tokens(
     response: Response,
     user_id: str,
     db: AsyncSession,
     ip: str | None = None,
     ua: str | None = None,
+    previous_token_hash: str | None = None,
 ):
-    """Create access + refresh token + session record, set cookies. Caller commits."""
+    """Create access + refresh token + session record, set cookies. Caller commits.
+
+    `previous_token_hash` is passed when rotating an existing token: the new
+    token inherits the predecessor's refresh-chain deadline rather than
+    starting a fresh window, so renewing a session never extends it.
+    """
     refresh_token_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
     # Session row must exist before the access token is minted so the token can
     # carry `sid` — that's what lets GET /auth/sessions mark the caller's own row.
     access_token, jti = create_access_token(str(user_id), session_id=session_id)
-    expires_at = datetime.now(UTC) + timedelta(seconds=settings.jwt_refresh_expire)
+    issued_at = datetime.now(UTC)
+    expires_at = issued_at + timedelta(seconds=settings.jwt_refresh_expire)
 
+    token_hash = _hash_refresh_token(refresh_token_id)
     token_record = RefreshToken(
         id=refresh_token_id,
         user_id=user_id,
-        token_hash=_hash_refresh_token(refresh_token_id),
+        token_hash=token_hash,
         expires_at=expires_at,
         device_info=ua,
     )
@@ -105,6 +192,8 @@ def _issue_tokens(
         expires_at=expires_at,
     )
     db.add(session)
+
+    await _anchor_refresh_chain(token_hash, previous_token_hash, issued_at)
 
     return access_token, jti, refresh_token_id, token_record
 
@@ -135,6 +224,23 @@ async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_
             )
             .values(revoked=True)
         )
+
+
+async def _revoke_chain(db: AsyncSession, user_id: str, reason: str) -> None:
+    """Revoke every refresh token and live session for a user, then log why.
+
+    Shared by reuse detection and the refresh-chain cap: both mean "nothing
+    issued in this chain is trusted any more", and both must end with the same
+    blast radius — all tokens revoked, all sessions revoked, one commit.
+    """
+    await _revoke_all_refresh_tokens(db, user_id)
+    sessions_result = await db.execute(
+        select(Session).where(Session.user_id == user_id, Session.revoked.is_(False))
+    )
+    for s in sessions_result.scalars().all():
+        s.revoked = True
+    await db.commit()
+    logger.warning(f"{reason} — all sessions revoked for user {user_id}")
 
 
 def _get_client_ip(request: Request) -> str:
@@ -263,22 +369,38 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 
     ua = request.headers.get("user-agent")
 
-    # Check email — if verified, tell them to login; if not, resend code silently
+    # Every branch below returns the SAME status, body and message. Registering
+    # used to answer 409 "an account with this email already exists" for a
+    # verified address and 200 otherwise, which turned the endpoint into an
+    # oracle for "does this person have an account here?". What differs is the
+    # email the caller receives, never the HTTP response.
+    async def _pending_verification(email: str):
+        return success_response(
+            {"email": email, "status": "pending_verification"},
+            message="Check your email to continue",
+        )
+
     email_result = await db.execute(select(User).where(User.email == data.email))
     existing_user = email_result.scalar_one_or_none()
     if existing_user:
         if existing_user.is_email_verified:
-            raise ConflictError("An account with this email already exists. Please sign in.")
-        # Unverified — resend code so they can complete verification
+            # Tell the owner someone tried to register with their address —
+            # throttled, or the form becomes a way to flood an inbox. The
+            # caller is told nothing the new-account path would not have said.
+            r = await get_redis()
+            throttle = await redis_cb.call(
+                lambda: r.set(f"register_dup_notice:{data.email}", "1", ex=600, nx=True)
+            )
+            if throttle:
+                EmailService.send_account_exists(data.email)
+            await AuthAuditService.log_register(db, data.email, str(existing_user.id), ip, ua)
+            logger.info(f"Register attempted for an existing verified account: {data.email}")
+            return await _pending_verification(data.email)
+        # Unverified — resend the code so they can complete verification
         code = await OTPService.send_code(data.email, _OTP_VERIFY)
         EmailService.send_verification_code(data.email, code)
         await AuthAuditService.log_register(db, data.email, str(existing_user.id), ip, ua)
-        return success_response({
-            "id": str(existing_user.id),
-            "email": existing_user.email,
-            "username": existing_user.username,
-            "email_resent": True,
-        }, message="Verification email resent")
+        return await _pending_verification(data.email)
 
     user = User(email=data.email, username=data.username, password_hash=hash_password(data.password), is_email_verified=False)
     db.add(user)
@@ -306,7 +428,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     await AuthAuditService.log_register(db, data.email, str(user.id), ip, ua)
 
     logger.info(f"User registered (unverified): {data.email} ({user.id})")
-    return success_response({"id": str(user.id), "email": user.email, "username": user.username}, message="Account created — check your email to verify")
+    return await _pending_verification(user.email)
 
 
 @router.post("/verify-email", summary="Verify email")
@@ -474,7 +596,7 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
         await redis_cb.call(lambda: r.set(f"partial:{partial}", f"{user_id}:{ip}", ex=300))
         return success_response({"requires_2fa": True, "partial_token": partial}, message="Login successful")
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
+    access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -533,7 +655,7 @@ async def verify_magic_url_2fa(
     await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
     await RateLimitService.reset_friction(user.email, ip)
 
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -577,7 +699,7 @@ async def verify_magic(data: VerifyMagicRequest, request: Request, response: Res
             raise UnauthorizedError("Invalid 2FA code")
 
     await RateLimitService.reset_friction(data.email, ip)
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
+    access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -613,7 +735,7 @@ async def verify_magic_2fa(
     await redis_cb.call(lambda: r.delete(f"magic_partial:{data.partial_token}"))
     await RateLimitService.reset_friction(email, _get_client_ip(request))
     ip = _get_client_ip(request)
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
+    access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, request.headers.get("user-agent"))
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -852,7 +974,7 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
             raise UnauthorizedError("Invalid 2FA code")
 
     await RateLimitService.reset_friction(data.email, ip)
-    access_token, jti, refresh_token, token_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, ua)
     await db.commit()
     set_auth_cookies(response, access_token, refresh_token)
 
@@ -1015,7 +1137,7 @@ async def change_password(
     # must not survive a password change. User must re-authenticate fully.
     await _revoke_all_refresh_tokens(db, str(user.id))
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
-    new_access, new_jti, new_refresh, new_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    new_access, new_jti, new_refresh, new_record = await _issue_tokens(response, str(user.id), db, ip, ua)
     # Single atomic commit: password change + token revocation + new tokens + audit log
     await db.commit()
     set_auth_cookies(response, new_access, new_refresh)
@@ -1048,20 +1170,22 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     # Reuse detection: a revoked token presented again means it was stolen
     # (the legitimate client rotated it away). Revoke everything.
     if token_record.revoked:
-        await _revoke_all_refresh_tokens(db, str(token_record.user_id))
-        sessions_result = await db.execute(
-            select(Session).where(
-                Session.user_id == token_record.user_id,
-                Session.revoked.is_(False),
-            )
-        )
-        for s in sessions_result.scalars().all():
-            s.revoked = True
-        await db.commit()
-        logger.warning(
-            f"Refresh token reuse detected for user {token_record.user_id} — all sessions revoked"
-        )
+        await _revoke_chain(db, str(token_record.user_id), "Refresh token reuse detected")
         raise UnauthorizedError("Invalid or expired refresh token")
+
+    # Absolute cap on the whole login CHAIN. Rotation hands the new token the
+    # same deadline (_anchor_refresh_chain), so renewing cannot move this
+    # moment: after refresh_chain_max_seconds from login the session ends and
+    # the user has to authenticate again. Without this, each rotation mints a
+    # fresh jwt_refresh_expire and a client that keeps refreshing never logs
+    # out — the per-token checks below only bound one token at a time.
+    presented_hash = _hash_refresh_token(refresh_token)
+    chain_deadline = await _refresh_chain_deadline(presented_hash)
+    if chain_deadline is not None and datetime.now(UTC).timestamp() > chain_deadline:
+        await _revoke_chain(
+            db, str(token_record.user_id), "Refresh chain exceeded its maximum lifetime"
+        )
+        raise UnauthorizedError("Session expired — please sign in again")
 
     if token_record.expires_at <= datetime.now(UTC):
         token_record.revoked = True
@@ -1072,22 +1196,16 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not user or not user.is_active:
         raise ForbiddenError("Account is inactive")
 
-    # Belt-and-braces issuance check: expires_at is written as (issued_at +
-    # jwt_refresh_expire), so subtracting the TTL recovers the issuance time
-    # of THIS token and we reject it if that moment has already passed.
-    # The default jwt_refresh_expire is 30 days (config.py) — earlier drafts
-    # of this comment claimed a 24-hour cap, which the config never honoured.
-    #
-    # Be precise about what this does NOT do: refresh rotates on every use and
-    # each rotation mints a token with a new issuance time, so this bounds a
-    # SINGLE token, not the total lifetime of a login chain. A chain that
-    # keeps being refreshed renews indefinitely. Capping that needs an anchor
-    # that survives rotation (a refresh_tokens.created_at column, or a Redis
-    # chain-start key set at login and checked here). Documented as a known
-    # limitation in docs/auth-and-security.md.
+    # Belt-and-braces, and DB-only: recover THIS token's issuance time from
+    # (expires_at - jwt_refresh_expire) and refuse it once it is older than
+    # the chain cap. The previous form compared the issuance time to `now`
+    # (`absolute_expiry <= now`) — true for every token ever issued — so
+    # /auth/refresh answered 401 on every call and sessions silently died
+    # after one access token. Nothing caught it because no test exercised the
+    # endpoint; the Redis deadline above is the bound that actually matters.
     from datetime import timedelta
-    absolute_expiry = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
-    if absolute_expiry <= datetime.now(UTC):
+    issued_at = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
+    if issued_at + timedelta(seconds=settings.refresh_chain_max_seconds) <= datetime.now(UTC):
         token_record.revoked = True
         await db.commit()
         raise UnauthorizedError("Refresh token expired")
@@ -1100,11 +1218,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("Device mismatch — please re-authenticate")
 
     # Rotate: revoke old token + old session, issue new token + new session
-    # bound to the current ip/user-agent.
+    # bound to the current ip/user-agent. The new token inherits this chain's
+    # deadline — that inheritance is what makes the cap absolute.
     token_record.revoked = True
     if token_record.current_session:
         token_record.current_session.revoked = True
-    new_access, _jti, new_refresh, _new_record = _issue_tokens(response, str(user.id), db, ip, ua)
+    new_access, _jti, new_refresh, _new_record = await _issue_tokens(
+        response, str(user.id), db, ip, ua, previous_token_hash=presented_hash
+    )
     set_auth_cookies(response, new_access, new_refresh)
     await db.commit()
     return success_response({"status": "refreshed"}, message="Token refreshed")

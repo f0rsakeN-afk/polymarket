@@ -38,6 +38,10 @@ os.environ["REDIS_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
 # Rate limiting is an infrastructure concern, not under test here — and the
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# The `?token=` WebSocket fallback is OFF by default (it puts a JWT in URLs).
+# The websocket suite authenticates with it on purpose, so turn it on here and
+# let test_ws_query_token_is_off_by_default flip it back for the negative case.
+os.environ["WS_ALLOW_QUERY_TOKEN"] = "true"
 # Stripe webhook tests sign real deliveries, so a secret must exist even when
 # .env leaves STRIPE_WEBHOOK_SECRET blank (the endpoint fails closed otherwise).
 if not os.environ.get("STRIPE_WEBHOOK_SECRET"):

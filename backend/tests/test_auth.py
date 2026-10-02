@@ -1,7 +1,12 @@
 """Auth endpoint tests."""
+import time
+
 import pytest
 from conftest import token_for
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from app.models.user import User
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -18,7 +23,11 @@ async def test_register_success(client: AsyncClient):
     data = resp.json()
     assert data["success"] is True
     assert data["data"]["email"] == "newuser@example.com"
-    assert "id" in data["data"]
+    # Registration never returns an account id: the response has to be
+    # identical whether or not the address already existed (see the
+    # duplicate-email test below).
+    assert data["data"]["status"] == "pending_verification"
+    assert data["message"] == "Check your email to continue"
 
 
 @pytest.mark.asyncio
@@ -46,15 +55,43 @@ async def test_register_short_username(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_register_duplicate_email(client: AsyncClient, test_user):
-    resp = await client.post("/api/v1/auth/register", json={
+async def test_register_duplicate_email_is_not_enumerable(client: AsyncClient, test_user, db_session):
+    """Registering an address that already has a *verified* account must be
+    indistinguishable from registering a new one.
+
+    It used to answer 409 "An account with this email already exists. Please
+    sign in." — a free oracle for "does this person have an account here?",
+    which is exactly what login brute-force tooling wants. The owner is told
+    by email instead; the HTTP response never changes shape.
+    """
+    existing = await client.post("/api/v1/auth/register", json={
         "email": test_user.email,
-        "username": "anotheruser",
+        "username": "someoneelse",
         "password": "MyStr0ng!Pass",
     })
-    assert resp.status_code == 409
-    assert resp.json()["success"] is False
-    assert "already exists" in resp.json()["error"]
+    fresh = await client.post("/api/v1/auth/register", json={
+        "email": "brand.new.person@example.com",
+        "username": "brandnewperson",
+        "password": "MyStr0ng!Pass",
+    })
+
+    assert existing.status_code == 200, existing.text
+    assert fresh.status_code == 200, fresh.text
+
+    a, b = existing.json(), fresh.json()
+    assert a["success"] is True and b["success"] is True
+    # Same message, same data keys, same status — only the echoed email differs.
+    assert a["message"] == b["message"]
+    assert set(a["data"]) == set(b["data"]) == {"email", "status"}
+    assert a["data"]["status"] == b["data"]["status"] == "pending_verification"
+    assert a["data"]["email"] == test_user.email
+    assert b["data"]["email"] == "brand.new.person@example.com"
+
+    # The duplicate attempt must not have created a second account.
+    rows = (await db_session.execute(
+        select(User).where(User.email == test_user.email)
+    )).scalars().all()
+    assert len(rows) == 1
 
 
 # ── Login ──────────────────────────────────────────────────────────────────────
@@ -293,3 +330,94 @@ async def test_logout_all_token_revoked(client: AsyncClient, test_user):
     me_resp2 = await client.get("/api/v1/auth/me")
     assert me_resp2.status_code == 401
     assert me_resp2.json()["success"] is False
+
+
+# ── Refresh-chain absolute cap ────────────────────────────────────────────────
+# Rotation mints a new token with a new expiry every time, so the per-token TTL
+# alone lets a client renew forever. The chain carries a deadline in Redis that
+# rotation inherits instead of resetting.
+
+
+def _cookie_value(resp, name: str) -> str:
+    """Pull one cookie out of a response's Set-Cookie headers.
+
+    The auth cookies are scoped to Domain=localhost, and httpx's jar drops a
+    cookie whose domain does not match the request host (tests hit
+    `testserver`) — so read the header directly instead of the jar.
+    """
+    prefix = f"{name}="
+    for header in resp.headers.get_list("set-cookie"):
+        if header.startswith(prefix):
+            return header[len(prefix):].split(";", 1)[0]
+    return ""
+
+
+async def _login(client: AsyncClient, user) -> str:
+    resp = await client.post("/api/v1/auth/login", json={
+        "email": user.email,
+        "password": "User!Pass1",
+    })
+    assert resp.status_code == 200, resp.text
+    token = _cookie_value(resp, "refresh_token")
+    assert token, "login must set the refresh cookie"
+    # Hand it back to the client so /auth/refresh receives it as a cookie.
+    client.cookies.set("refresh_token", token)
+    return token
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotation_inherits_the_chain_deadline(client: AsyncClient, test_user):
+    """A rotated token must keep the original chain deadline — renewing the
+    session cannot buy it more time than the login granted."""
+    from app.api.auth import _hash_refresh_token, _refresh_chain_deadline
+
+    first = await _login(client, test_user)
+    deadline_before = await _refresh_chain_deadline(_hash_refresh_token(first))
+    assert deadline_before is not None, "login must record a chain anchor"
+
+    resp = await client.post("/api/v1/auth/refresh")
+    assert resp.status_code == 200, resp.text
+    second = _cookie_value(resp, "refresh_token")
+    assert second and second != first, "refresh must rotate the cookie"
+    client.cookies.set("refresh_token", second)
+
+    deadline_after = await _refresh_chain_deadline(_hash_refresh_token(second))
+    assert deadline_after is not None
+    # Same absolute instant (the write happens in the same request), i.e.
+    # inherited rather than restarted.
+    assert abs(deadline_after - deadline_before) <= 1
+    assert deadline_after > time.time()
+
+
+@pytest.mark.asyncio
+async def test_refresh_chain_stops_at_the_absolute_deadline(
+    client: AsyncClient, test_user, db_session
+):
+    """Past the chain deadline the refresh is refused AND the whole chain is
+    revoked — not just the presented token."""
+    from sqlalchemy import select
+
+    from app.api.auth import _chain_key, _hash_refresh_token
+    from app.models.user import RefreshToken, Session
+    from app.redis import get_redis
+
+    await _login(client, test_user)
+
+    # Pretend the chain started long enough ago to be over.
+    r = await get_redis()
+    await r.set(_chain_key(_hash_refresh_token(client.cookies.get("refresh_token", domain=""))),
+                str(time.time() - 60))
+
+    resp = await client.post("/api/v1/auth/refresh")
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["success"] is False
+
+    tokens = (await db_session.execute(
+        select(RefreshToken).where(RefreshToken.user_id == test_user.id)
+    )).scalars().all()
+    assert tokens and all(t.revoked for t in tokens), "chain deadline must revoke every token"
+
+    sessions = (await db_session.execute(
+        select(Session).where(Session.user_id == test_user.id)
+    )).scalars().all()
+    assert sessions and all(s.revoked for s in sessions), "chain deadline must revoke every session"

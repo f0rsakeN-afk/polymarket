@@ -54,14 +54,35 @@ async def cache_invalidate_pattern(pattern: str):
             break
 
 
+def _bcrypt_input(password: str) -> bytes:
+    """Normalise a password to ≤72 bytes for bcrypt.
+
+    bcrypt only reads the first 72 bytes of input: longer input used to raise
+    (`ValueError: password cannot be longer than 72 bytes`) — which made
+    registration with a long password a 500, and made *first-ever settlement*
+    crash, because the system treasury account derives its password hash from
+    `jwt_secret + 32 random bytes` (well over 72 bytes). Pre-hashing keeps the
+    full entropy of long secrets while staying inside the limit; silently
+    truncating instead would make every long password sharing its first 72
+    bytes collide. Passwords ≤72 bytes are untouched, so every existing hash
+    still verifies.
+    """
+    raw = password.encode()
+    if len(raw) <= 72:
+        return raw
+    import hashlib
+
+    return hashlib.sha256(raw).hexdigest().encode()
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     if not hashed:
         return False
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
 
 
 _DUMMY_PASSWORD_HASH: str | None = None

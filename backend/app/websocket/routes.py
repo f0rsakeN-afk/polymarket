@@ -60,13 +60,24 @@ async def verify_ws_token(token: str | None) -> str | None:
 def _get_token_from_request(websocket: WebSocket) -> str | None:
     """
     Extract auth token from cookie first (secure), then query param (fallback).
-    Cookies are sent with WebSocket handshake in modern browsers.
+
+    Cookies are sent with the WebSocket handshake by every modern browser and
+    are scoped to the host rather than the port, so the cookie path works for
+    the web app on any origin pair the API already serves. The `?token=`
+    fallback is disabled by default (`WS_ALLOW_QUERY_TOKEN=false`): a JWT in a
+    URL lands in proxy access logs, browser history and Referer headers.
     """
     # HttpOnly cookie set by set_auth_cookies
     cookie_token = websocket.cookies.get("access_token")
     if cookie_token:
         return cookie_token
-    # Fallback: query param (for convenience / legacy compatibility)
+    from app.config import settings
+
+    if not settings.ws_allow_query_token:
+        # Not a warning: this is the default for every browser client, and a
+        # probe with ?token= should leave only a debug trace.
+        logger.debug("WS query-param token rejected (WS_ALLOW_QUERY_TOKEN is false)")
+        return None
     return websocket.query_params.get("token")
 
 

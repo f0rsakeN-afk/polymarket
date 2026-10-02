@@ -77,8 +77,30 @@ async def test_websocket_rejects_blacklisted_token(ws_client, test_user, db_sess
     assert exc.value.code == 1008
 
 
-# ── 2. X-Forwarded-For fail-closed ────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_websocket_query_token_is_gated_off_by_default(ws_client, test_user, monkeypatch):
+    """`?token=` puts a live JWT into URLs — proxy logs, browser history and
+    Referer headers all keep it. It stays a legacy fallback that must be
+    switched on with WS_ALLOW_QUERY_TOKEN=true; with it off (the shipped
+    default) a *valid* token in the query string is rejected, while the
+    supported cookie path keeps working."""
+    from app.config import settings
 
+    monkeypatch.setattr(settings, "ws_allow_query_token", False)
+    token = token_for(test_user.id)
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with ws_client.websocket_connect(f"/ws/trades?token={token}"):
+            pass
+    assert exc.value.code == 1008
+
+    # Same token, cookie path — accepted.
+    ws_client.cookies.set("access_token", token)
+    with ws_client.websocket_connect("/ws/trades"):
+        pass
+
+
+# ── 2. X-Forwarded-For fail-closed ────────────────────────────────────────────
 
 def _request_with_xff(direct_ip: str, forwarded: str | None) -> Request:
     headers = []

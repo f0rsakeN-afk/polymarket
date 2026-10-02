@@ -76,19 +76,32 @@ class EmailService:
     ):
         # Build email content
         if purpose == "verify":
-            subject = f"Your PredictX verification code: {code}"
+            subject = f"Your Polymarket verification code: {code}"
             body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "magic" and magic_url:
-            subject = "Your PredictX login link"
+            subject = "Your Polymarket login link"
             body = f"Click this link to sign in: {magic_url}\n\nThis link expires in 15 minutes."
         elif purpose == "magic":
-            subject = f"Your PredictX login code: {code}"
+            subject = f"Your Polymarket login code: {code}"
             body = f"Your login code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "resetpwd":
-            subject = f"Your PredictX password reset code: {code}"
+            subject = f"Your Polymarket password reset code: {code}"
             body = f"Your password reset code is: {code}\nThis code expires in 10 minutes."
+        elif purpose == "exists":
+            # Sent when someone tries to register an address that already has
+            # a verified account. The HTTP response stays byte-identical to a
+            # fresh registration (no account enumeration) — this email is the
+            # only thing that tells the owner what happened.
+            subject = "You already have a Polymarket account"
+            body = (
+                "Someone tried to register with this email address, but an "
+                "account already exists.\n\n"
+                "If it was you: sign in as usual, or reset your password if "
+                "you have forgotten it. If it wasn't you, no action is needed "
+                "- your account and password are unchanged."
+            )
         else:
-            subject = f"Your PredictX code: {code}"
+            subject = f"Your Polymarket code: {code}"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
         # Try Celery first, fall back to direct sync send
@@ -109,6 +122,9 @@ class EmailService:
     # Convenience wrappers
     def send_verification_code(e: str, c: str) -> None:  # noqa: N805
         EmailService.send_auth_email(e, "verify", code=c)
+
+    def send_account_exists(e: str) -> None:  # noqa: N805
+        EmailService.send_auth_email(e, "exists")
 
     def send_magic_code(e: str, c: str) -> None:  # noqa: N805
         EmailService.send_auth_email(e, "magic", code=c)
