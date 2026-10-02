@@ -7,7 +7,6 @@ import "sileo/styles.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Providers } from "@/components/providers"
 import { Toaster } from "@/components/toaster"
-import { Toaster as SonnerToaster } from "sonner"
 import { AppCommandMenu } from "@/components/shared/app-command-menu"
 import { cn } from "@workspace/ui/lib/utils"
 import { config } from "@/lib/config"
@@ -94,7 +93,6 @@ export default function RootLayout({
         <ThemeProvider>
           <Providers>
             <Toaster />
-            <SonnerToaster position="top-right" richColors />
             <AppCommandMenu />
             <a
               href="#main-content"
