@@ -3,9 +3,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, Request, Response
 from jose import JWTError, jwt
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ForbiddenError, UnauthorizedError
@@ -129,6 +128,55 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         raise
 
 
+async def _validate_session(db: AsyncSession, payload: dict, user: User) -> None:
+    """Reject the token unless its session is alive.
+
+    An access token is only valid for the session it was minted for: the `sid`
+    claim names that row. This is what makes revocation exact — `logout` and
+    `DELETE /auth/sessions/{id}` kill that device's tokens immediately, and
+    `logout-all` kills every device's, instead of the token surviving as long
+    as some other session of the same user is still alive. Expiry is checked
+    against the session too, not just against the 15-minute JWT.
+    """
+    sid = payload.get("sid")
+    if not sid:
+        raise UnauthorizedError("Token is not bound to a session")
+
+    session = await db.get(Session, sid)
+    if session is None or session.user_id != user.id:
+        raise UnauthorizedError("Session not found")
+    if session.revoked:
+        raise UnauthorizedError("Session has been revoked")
+    if session.expires_at <= datetime.now(UTC):
+        raise UnauthorizedError("Session expired")
+
+
+async def _load_user(db: AsyncSession, payload: dict) -> User:
+    """Shared token → user resolution for both required and optional auth.
+
+    Raises UnauthorizedError / ForbiddenError; callers decide whether to
+    propagate (required auth) or treat as anonymous (optional auth).
+    """
+    sub = payload.get("sub")
+    if not sub:
+        raise UnauthorizedError("Invalid token")
+    if payload.get("type") != "access":
+        raise UnauthorizedError("Invalid token type")
+
+    jti = payload.get("jti")
+    if jti and await is_token_blacklisted(jti):
+        raise UnauthorizedError("Token has been revoked")
+
+    user = await db.get(User, sub)
+    if not user:
+        raise UnauthorizedError("User not found")
+    if not user.is_active:
+        raise ForbiddenError("Account is inactive")
+
+    await _validate_session(db, payload, user)
+    return user
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -141,28 +189,7 @@ async def get_current_user(
     if not token:
         raise UnauthorizedError("No access token provided")
 
-    payload = decode_token(token)
-    if payload.get("type") != "access":
-        raise UnauthorizedError("Invalid token type")
-
-    jti = payload.get("jti")
-    if jti and await is_token_blacklisted(jti):
-        raise UnauthorizedError("Token has been revoked")
-
-    user = await db.get(User, payload["sub"])
-    if not user:
-        raise UnauthorizedError("User not found")
-    if not user.is_active:
-        raise ForbiddenError("Account is inactive")
-    # Also check if all of the user's sessions have been revoked.
-    # This ensures logout_all invalidates tokens from all sessions,
-    # not just the one whose cookie is present in the current request.
-    sessions = await db.execute(
-        select(Session).where(Session.user_id == user.id, Session.revoked.is_(False))
-    )
-    if not sessions.scalars().first():
-        raise UnauthorizedError("All sessions have been revoked")
-    return user
+    return await _load_user(db, decode_token(token))
 
 
 async def get_optional_user(
@@ -177,18 +204,10 @@ async def get_optional_user(
         return None
 
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            return None
-        jti = payload.get("jti")
-        if jti and await is_token_blacklisted(jti):
-            return None
-        user = await db.get(User, payload["sub"])
-        if user and user.is_active:
-            return user
-    except HTTPException:
-        pass
-    return None
+        return await _load_user(db, decode_token(token))
+    except (UnauthorizedError, ForbiddenError):
+        # Optional auth: a bad/expired/revoked token is anonymous, not an error.
+        return None
 
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str | None = None):

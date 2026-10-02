@@ -376,14 +376,16 @@ async def resend_verification(data: ResendVerificationRequest, db: AsyncSession 
 
 @router.post("/set-password", summary="Set password (requires email verification)")
 async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # Resolve these before any early raise — record_failure() needs `ip`.
+    ip = _get_client_ip(request)
+    ua = request.headers.get("user-agent")
+
     strong, reason = PasswordStrengthService.check(data.password)
     if not strong:
         await RateLimitService.record_failure(data.email, ip)
         raise ValidationError(reason)
 
     user = await get_current_user(request, db)
-    ip = _get_client_ip(request)
-    ua = request.headers.get("user-agent")
 
     user.password_hash = hash_password(data.password)
     await db.commit()

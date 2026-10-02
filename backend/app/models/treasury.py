@@ -1,4 +1,12 @@
-from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -13,7 +21,9 @@ class Treasury(Base, UUIDMixin, TimestampMixin):
         CheckConstraint("singleton = true", name="ck_treasury_singleton_true"),
     )
 
-    singleton = Column(Boolean, default=True, nullable=False, unique=True)
+    # unique + named constraint come from __table_args__ above (declaring
+    # unique=True here as well makes autogenerate emit a second, unnamed one)
+    singleton = Column(Boolean, default=True, nullable=False)
     balance = Column(Numeric(20, 8), default=0, nullable=False)
     total_fees_collected = Column(Numeric(20, 8), default=0, nullable=False)
     total_fees_distributed = Column(Numeric(20, 8), default=0, nullable=False)

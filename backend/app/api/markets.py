@@ -16,10 +16,16 @@ from app.api.exceptions import (
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db, get_db_replica
-from app.deps import get_current_user
+from app.deps import get_current_user, get_optional_user
 from app.models.faq import MarketFAQ
 from app.models.liquidity import LiquidityPool
-from app.models.market import Market, Outcome
+from app.models.market import (
+    STATUS_ACTIVE,
+    STATUS_PENDING_REVIEW,
+    UNPUBLISHED_STATUSES,
+    Market,
+    Outcome,
+)
 from app.models.position import Position
 from app.models.wallet import Transaction, Wallet
 from app.redis import get_redis
@@ -91,6 +97,15 @@ async def list_markets(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
+    # Visibility gate first — it must run before the shared cache is read, or a
+    # cached moderator view could be served to an anonymous caller.
+    if status and status in UNPUBLISHED_STATUSES:
+        raise ValidationError(
+            f"Status '{status}' is not available on the public catalogue; "
+            "use GET /api/v1/admin/markets",
+            error_code="STATUS_NOT_PUBLIC",
+        )
+
     # Cache key no longer includes page/page_size when cursor is used
     if cursor:
         cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}"
@@ -119,6 +134,10 @@ async def list_markets(
             base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
         base = base.where(Market.status == status)
+    else:
+        # No filter → the public catalogue: hide markets awaiting review (and
+        # rejected ones) unless the caller explicitly asked for a status above.
+        base = base.where(Market.status.notin_(UNPUBLISHED_STATUSES))
     if category:
         base = base.where(Market.category == category)
 
@@ -231,11 +250,19 @@ async def list_categories(db: AsyncSession = Depends(get_db_replica)):
 
 
 @router.get("/{slug}")
-async def get_market(slug: str, db: AsyncSession = Depends(get_db_replica)):
+async def get_market(slug: str, request: Request, db: AsyncSession = Depends(get_db_replica)):
     result = await db.execute(select(Market).where(Market.slug == slug))
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
+
+    # Unpublished markets (pending review / rejected) are only readable by the
+    # user who submitted them and by admins — and 404 rather than 403 for
+    # everyone else, so the existence of unpublished submissions isn't leaked.
+    if market.status in UNPUBLISHED_STATUSES:
+        viewer = await get_optional_user(request, db)
+        if viewer is None or (not viewer.is_admin and viewer.id != market.created_by):
+            raise NotFoundError(f"Market '{slug}' not found")
 
     # Check cache using market_id
     cached = await cache_get_market(str(market.id))
@@ -291,8 +318,11 @@ async def create_market(
     data: CreateMarketRequest, request: Request, db: AsyncSession = Depends(get_db)
 ):
     user = await get_current_user(request, db)
+    # Anyone with a verified email may submit a market; it lands in
+    # pending_review and only becomes visible/tradable once an admin approves
+    # it. Admins bypass the review queue.
     if not user.is_admin and not user.is_email_verified:
-        raise ForbiddenError("Only admins or email-verified users can create markets")
+        raise ForbiddenError("Verify your email before creating markets")
 
     if data.closes_at <= datetime.now(UTC):
         raise ValidationError("closes_at must be in the future")
@@ -310,7 +340,7 @@ async def create_market(
         description=data.description,
         category=data.category,
         created_by=user.id,
-        status="active",
+        status=STATUS_ACTIVE if user.is_admin else STATUS_PENDING_REVIEW,
         closes_at=data.closes_at,
     )
     db.add(market)
@@ -365,9 +395,16 @@ async def create_market(
             pool.lp_token_supply = amount_dec * Decimal(2)
 
     await db.commit()
-    logger.info(f"Market created: {data.slug} by admin={user.id}")
+    logger.info(f"Market created: {data.slug} by user={user.id} status={market.status}")
     await cache_invalidate_market_lists()
-    return success_response({"slug": data.slug, "id": str(market.id)}, message="Market created")
+    return success_response(
+        market_to_response(market).model_dump(),
+        message=(
+            "Market created"
+            if market.status == STATUS_ACTIVE
+            else "Market submitted — pending admin approval"
+        ),
+    )
 
 
 @router.get("/{slug}/faqs")

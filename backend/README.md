@@ -12,34 +12,63 @@ FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery — a prediction market 
 # 1. Install dependencies
 uv sync
 
-# 2. Start PostgreSQL + Redis (Docker)
-docker compose -f docker-compose.dev.yml up -d postgres redis  # ports 5433/6380 per .env
+# 2. Create .env — the app refuses to boot with the placeholder secrets
+cp .env.example .env
+for v in JWT_SECRET SECRET_KEY TOTP_ENCRYPTION_KEY; do
+  sed -i "s|^$v=.*|$v=$(openssl rand -hex 32)|" .env
+done
+# .env ships with host-side URLs (postgres → localhost:5433, redis → localhost:6380);
+# docker-compose.dev.yml overrides them with the in-network service names.
 
+# 3. Start PostgreSQL + Redis (Docker) — ports 5433/6380 per .env
+docker compose -f docker-compose.dev.yml up -d postgres redis
 
-# 3. Run migrations
+# No compose plugin? Equivalent plain docker commands:
+#   docker run -d --name pm-postgres -p 5433:5432 \
+#     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=polymarket \
+#     postgres:16-alpine
+#   docker run -d --name pm-redis -p 6380:6379 \
+#     redis:7-alpine redis-server --appendonly yes --requirepass devpass
+
+# 4. Run migrations, then confirm models and migrations agree
 uv run alembic upgrade head
+uv run alembic check        # must print "No new upgrade operations detected."
 
-# 4. Start API + Celery (3 terminals)
-./start.sh              # Terminal 1: API (8 workers) + auto-starts celery worker + beat
-./start-workers.sh      # Terminal 2: Celery worker + beat (if not started by start.sh)
+# 5. (Optional) Load sample data
+uv run python -m scripts.seed
+
+# 6. Start API + Celery
+./start.sh                  # Terminal 1: API + celery worker + beat
+./start-workers.sh          # Terminal 2: celery worker + beat only
+
+# 7. Verify
+curl localhost:8000/health          # {"status":"ok"}
+curl localhost:8000/health/ready    # db + redis checks, 200 only when both are up
 ```
+
+**Startup ordering:** the API never serves before Postgres accepts connections. Two
+layers enforce it — `depends_on: condition: service_healthy` in Compose for the first
+`up`, and a retry loop in the app's lifespan (`Waiting for Postgres...` every 2s,
+60s budget) that also covers a dependency restarting later. While it waits the process
+holds `Application startup in progress` and `/health` does not answer; if the budget
+runs out it exits non-zero (Compose `restart: unless-stopped` brings it back).
 
 ### Docker Compose (Production-ready)
 
 ```bash
-# Start everything (API × 4 replicas, celery × 2 workers, postgres, redis)
-cp .env.example .env    # fill in secrets
-docker compose up --build -d
+# Start everything (API, celery worker + beat, postgres, redis, nginx)
+cp .env.example .env    # then generate the secrets (see "Environment" below)
+docker compose -f docker-compose.prod.yml up --build -d
 
 # Watch logs
-docker compose logs -f api
-docker compose logs -f celery_worker
+docker compose -f docker-compose.prod.yml logs -f api
+docker compose -f docker-compose.prod.yml logs -f celery_worker
 
 # Stop everything
-docker compose down
+docker compose -f docker-compose.prod.yml down
 
 # Restart after code changes
-docker compose up --build -d
+docker compose -f docker-compose.prod.yml up --build -d
 ```
 
 ### Load Testing
@@ -80,6 +109,42 @@ uv run alembic downgrade -1
 
 # Drop and recreate (dev only)
 uv run alembic downgrade base && uv run alembic upgrade head
+
+# Verify model ↔ migration sync (fails if a model change has no migration)
+uv run alembic check
+```
+
+### Seeding
+
+`scripts/seed.py` loads deterministic sample data. It is **not** baked into the images
+(`scripts/` is in `.dockerignore`) and not mounted by the dev compose file, so run it
+on the host against the published DB ports — not inside a container.
+
+```bash
+# Migrations must be applied first (idempotent: skips rows that already exist)
+uv run alembic upgrade head
+
+# Seed (default test password: testpass123)
+uv run python -m scripts.seed
+
+# Custom password for the seeded accounts
+SEED_PASSWORD=otherpass uv run python -m scripts.seed
+```
+
+| Account | Email | Password |
+|---------|-------|----------|
+| `alice_trades`, `bob_predicts`, `carol_markets`, … (10 users) | `alice@test.com`, `bob@test.com`, … | `testpass123` (or `$SEED_PASSWORD`) |
+
+What it creates: 10 users + wallets + notification prefs, 17 markets with outcomes,
+liquidity pools and LP shares, FAQs, disputes, flags, ~1400 trades, 30-day price
+history, transactions, treasury, notifications, alerts, comments, positions, pending
+orders, referrals, refresh tokens and sessions. Re-running it is safe — every block
+checks for existing rows first.
+
+```bash
+# Spot-check the result
+curl "localhost:8000/api/v1/markets/" | head -c 300
+docker exec pm-postgres psql -U postgres -d polymarket -c "SELECT count(*) FROM users;"
 ```
 
 ### Celery
@@ -100,11 +165,11 @@ uv run celery -A app.workers.celery_app inspect stats
 ### Code Quality
 
 ```bash
-# Lint
+# Lint (ruff is a dev dependency — `uv run ruff` resolves from the dev group)
 uv run ruff check app/ tests/ --fix
 
-# Type check
-uv run pyright app/
+# Type check (run via uvx — pyright is intentionally not a project dependency)
+uvx pyright app/
 
 # Format
 uv run ruff format app/ tests/
@@ -113,8 +178,15 @@ uv run ruff format app/ tests/
 ### Environment
 
 ```bash
-# Copy env and edit
+# Copy env
 cp .env.example .env
+
+# Secrets are validated at startup — the API refuses to boot while
+# JWT_SECRET / SECRET_KEY / TOTP_ENCRYPTION_KEY still equal
+# "change-me-in-production" (app/app.py lifespan). Generate real values:
+for v in JWT_SECRET SECRET_KEY TOTP_ENCRYPTION_KEY; do
+  sed -i "s|^$v=.*|$v=$(openssl rand -hex 32)|" .env
+done
 
 # For Docker deployment, update these in .env:
 # DATABASE_URL=postgresql+asyncpg://myuser:mypassword@postgres:5432/mydatabase
@@ -124,26 +196,36 @@ cp .env.example .env
 
 ---
 
----
-
 ## Quick Start
+
+```bash
 # 1. Install dependencies
 uv sync
 
-# 2. Run migrations
+# 2. Env file + secrets (see "Environment" above)
+cp .env.example .env
+
+# 3. Databases (Docker)
+docker compose -f docker-compose.dev.yml up -d postgres redis
+
+# 4. Run migrations
 uv run alembic upgrade head
 
-# 3. Start server
+# 5. (Optional) Seed sample data
+uv run python -m scripts.seed
+
+# 6. Start server
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
-# 4. (Separate terminal) Start Celery worker
+# 7. (Separate terminal) Start Celery worker
 uv run celery -A app.workers.celery_app worker --loglevel=info
 
-# 5. (Separate terminal) Start Celery beat (scheduler)
+# 8. (Separate terminal) Start Celery beat (scheduler)
 uv run celery -A app.workers.celery_app beat
 ```
 
 Swagger UI: http://localhost:8000/docs
+Health: http://localhost:8000/health · http://localhost:8000/health/ready
 
 ---
 
@@ -191,11 +273,33 @@ Swagger UI: http://localhost:8000/docs
 
 ```
 backend/
-├── Dockerfile              # API image (uvicorn)
+├── Dockerfile              # Prod image (multi-stage, gunicorn, non-root)
+├── Dockerfile.dev          # Dev image (uvicorn --reload, dev deps included)
 ├── docker-compose.dev.yml  # Local stack (postgres+redis+api, hot reload)
 ├── docker-compose.prod.yml # Prod stack (+nginx, celery)
 └── scripts/postgres.conf  # PostgreSQL tuning
 ```
+
+### Images
+
+```bash
+# Dev image (uvicorn --reload, full dependency set incl. psycopg2 + test tools)
+docker build -f Dockerfile.dev -t polymarket-backend-dev .
+
+# Prod image (multi-stage: uv sync --frozen --no-dev, non-root appuser, HEALTHCHECK)
+docker build -t polymarket-backend-prod .
+
+# Smoke-run outside Compose (needs a reachable postgres/redis)
+docker run --rm --env-file .env -p 6000:8000 polymarket-backend-dev
+docker run --rm --env-file .env -p 6001:8000 polymarket-backend-prod
+```
+
+Notes:
+- `.dockerignore` excludes `scripts/`, `tests/`, `*.sh`, `deploy/` and `.env` —
+  secrets never reach the image, and seeding runs on the host.
+- Both images fail fast on placeholder secrets; set them in `.env` first.
+- Only `Dockerfile.dev` is meant for local iteration; `Dockerfile` is what
+  `docker-compose.prod.yml` builds.
 
 ### Deploy
 
@@ -205,17 +309,17 @@ cp .env.example .env
 # Edit .env — set all *change-me* secrets
 
 # 2. Build and start
-docker compose up --build -d
+docker compose -f docker-compose.prod.yml up --build -d
 
 # 3. Watch
-docker compose logs -f api
-docker compose logs -f celery_worker
+docker compose -f docker-compose.prod.yml logs -f api
+docker compose -f docker-compose.prod.yml logs -f celery_worker
 
 # 4. Stop
-docker compose down
+docker compose -f docker-compose.prod.yml down
 
 # 5. Scale API (requires more RAM/CPU)
-docker compose up -d --scale api=8
+docker compose -f docker-compose.prod.yml up -d --scale api=8
 ```
 
 ### Nginx Config Highlights
@@ -1102,21 +1206,54 @@ check_price_alerts(market_id, outcome, current_price):
 
 | Method | Path | Auth | Query/Body | Response |
 |--------|------|------|------------|----------|
-| GET | `/` | No | `q?, category?, status?, page?, page_size?` | `{success, data: Market[], page, page_size, has_more}` |
-| GET | `/{slug}` | No | - | `MarketDetailResponse` (prices, outcomes, spread) |
-| POST | `/` | Admin | `CreateMarketRequest` | Created market |
+| GET | `/` | No | `q?, category?, status?, sort?, cursor?, page?, page_size?` | `{success, data: Market[], page, page_size, has_more}` |
+| GET | `/{slug}` | No¹ | - | `MarketDetailResponse` (prices, outcomes, spread) |
+| POST | `/` | Verified² | `CreateMarketRequest` | Created market (`status: pending_review`, or `active` for admins) |
 | PATCH | `/{id}/resolve` | Admin | `{winning_outcome_id}` | Updated market |
 | PATCH | `/{id}/close` | Admin | - | Updated market (status=closed) |
 | GET | `/{slug}/orderbook` | No | - | `{bids: [], asks: []}` |
 | GET | `/{slug}/faqs` | No | - | `FAQResponse[]` |
 | GET | `/{slug}/related` | No | - | `MarketResponse[]` (same category) |
 
+¹ Markets awaiting review (`pending_review`) or already `rejected` are hidden from
+the public catalogue: they 404 for everyone except the user who submitted them and
+admins, and are excluded from `GET /` (filtering by those statuses there returns
+422 — use the admin endpoint below).
+
+² Any email-verified user can submit a market; it enters the review queue and only
+becomes publicly visible and tradable once an admin approves it. Admins skip the
+queue and publish immediately. Unverified users get 403.
+
+### Market statuses
+
+| Status | Meaning |
+|--------|---------|
+| `pending_review` | Submitted by a regular user, awaiting admin approval — not listed, not tradable |
+| `rejected` | Admin declined the submission — still visible to its submitter only |
+| `active` | Published and tradable (admins' own submissions land here directly) |
+| `closed` | No new orders, awaiting resolution |
+| `resolving` | Resolution proposed, settlement pending |
+| `dispute_window` | A dispute was filed; outcome under review |
+| `resolved` | Final |
+
+### Admin — market review queue (`/api/v1/admin`)
+
+| Method | Path | Auth | Query/Body | Response |
+|--------|------|------|------------|----------|
+| GET | `/markets` | Admin | `status?, page?, page_size?` | Moderation view of **every** market, incl. `pending_review` + submitter email |
+| POST | `/markets/{id}/approve` | Admin | - | `pending_review → active` (published, tradable) |
+| POST | `/markets/{id}/reject` | Admin | - | `pending_review → rejected` (stays hidden; submitter keeps read access) |
+
+Approval is a compare-and-set on the status: if another admin decided on the same
+market first you get 409. Approving a market whose `closes_at` already passed is
+rejected (422 `MARKET_ALREADY_CLOSED`) — it would go live dead.
+
 ### Orders (`/api/v1/orders`)
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
 | POST | `/` | Required | `OrderRequest` | Order result (filled shares, price, etc.) |
-| GET | `/` | Required | `page?, page_size?` | Paginated order list |
+| GET | `/` | Required | `cursor?, page_size?` (+ filters) | `{orders, total, page_size, has_more, next_cursor}` |
 | GET | `/{order_id}` | Required | - | Order detail |
 | DELETE | `/{order_id}` | Required | - | Cancel (only pending) |
 
@@ -1181,11 +1318,25 @@ check_price_alerts(market_id, outcome, current_price):
 |--------|------|------|----------|
 | GET | `/{slug}/activity` | No | `{market_stats, top_holders_by_outcome[], recent_trades[], recent_comments[]}` |
 
+### Treasury (`/api/v1/treasury`) — admin only
+
+| Method | Path | Auth | Query | Response |
+|--------|------|------|-------|----------|
+| GET | `/` | Admin | - | Balance + fee totals (zeros before the first distribution) |
+| GET | `/logs` | Admin | `page?, page_size?, event?` | Audit log of money movements |
+| POST | `/distribute` | Admin | `amount` | Sweeps accumulated protocol fees into the treasury |
+
 ### Webhooks (`/api/v1/webhooks`)
 
 | Method | Path | Auth | Body | Response |
 |--------|------|------|------|----------|
-| POST | `/stripe` | Signature | Stripe event JSON | `{received: true}` |
+| POST | `/stripe` | Stripe signature | Stripe event JSON | `{status: credited \| already_processed \| ignored \| …}` |
+
+Signature verification is real: 401 for a missing/malformed/mismatched signature or
+a timestamp outside the 300s window (and for an unconfigured
+`STRIPE_WEBHOOK_SECRET` — it fails closed), 422 only when the body is correctly
+signed but isn't a usable Stripe event. Deposits are idempotent on the payment
+intent, so redeliveries never double-credit.
 
 ### WebSocket
 

@@ -35,11 +35,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/.venv /app/.venv
 
-COPY . .
+# --chown in the COPY itself: a separate `chown -R` would duplicate the whole
+# tree in its own layer, roughly doubling the image.
+COPY --chown=appuser:appuser . .
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s CMD curl -f http://localhost:8000/health/ready || exit 1
-
-RUN chown -R appuser:appuser /app
 
 USER appuser
 
