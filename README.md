@@ -1,4 +1,4 @@
-# PredictX — Prediction Market Platform
+# Polymarket — Prediction Market Platform
 
 A Polymarket-style exchange for event outcomes: an order book plus an automated market maker, with
 wallets, positions, settlement at $1 per correct share, and realtime prices over WebSockets.

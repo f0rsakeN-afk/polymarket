@@ -55,7 +55,7 @@ const faqs = [
     questions: [
       {
         q: "How are markets created?",
-        a: "Markets are created by PredictX or authorized market makers. Each market has defined resolution criteria and an expiration date.",
+        a: "Markets are created by Polymarket or authorized market makers. Each market has defined resolution criteria and an expiration date.",
       },
       {
         q: "How are markets resolved?",
@@ -121,12 +121,12 @@ const faqs = [
         a: "A prediction market is a platform where participants trade contracts based on the outcome of real-world events. Prices reflect the collective probability assessment of all traders.",
       },
       {
-        q: "What makes PredictX different from other exchanges?",
-        a: "PredictX focuses specifically on prediction markets with real-world event resolution, offering a curated set of markets rather than general financial instruments.",
+        q: "What makes Polymarket different from other exchanges?",
+        a: "Polymarket focuses specifically on prediction markets with real-world event resolution, offering a curated set of markets rather than general financial instruments.",
       },
       {
-        q: "Does PredictX provide investment advice?",
-        a: "No. PredictX does not provide investment, legal, or tax advice. All trading decisions are your own. Please consult qualified professionals for financial advice.",
+        q: "Does Polymarket provide investment advice?",
+        a: "No. Polymarket does not provide investment, legal, or tax advice. All trading decisions are your own. Please consult qualified professionals for financial advice.",
       },
       {
         q: "Where can I find API documentation?",
@@ -186,7 +186,7 @@ export default function FAQPage() {
           Frequently Asked Questions
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Common questions about PredictX prediction markets, trading, and
+          Common questions about Polymarket prediction markets, trading, and
           platform features.
         </p>
       </div>

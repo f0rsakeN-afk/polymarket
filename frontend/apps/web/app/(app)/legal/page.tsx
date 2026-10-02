@@ -3,7 +3,7 @@ import Link from "next/link"
 export const metadata = {
   title: "Legal",
   description:
-    "PredictX legal information including terms of service, privacy policy, and risk disclosure.",
+    "Polymarket legal information including terms of service, privacy policy, and risk disclosure.",
 }
 
 const docs = [
@@ -36,7 +36,7 @@ export default function LegalPage() {
       <div className="mb-12">
         <h1 className="text-2xl font-bold tracking-tight">Legal</h1>
         <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
-          PredictX is a decentralized prediction market platform. Please read
+          Polymarket is a decentralized prediction market platform. Please read
           and understand these documents before using the platform.
         </p>
       </div>
@@ -79,7 +79,7 @@ export default function LegalPage() {
       </div>
 
       <p className="mt-10 text-xs leading-relaxed text-muted-foreground">
-        By using PredictX, you agree to be bound by our{" "}
+        By using Polymarket, you agree to be bound by our{" "}
         <Link href="/legal/terms" className="underline hover:text-foreground">
           Terms of Service
         </Link>

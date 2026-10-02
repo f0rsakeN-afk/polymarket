@@ -68,7 +68,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       {/* Header row */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
-          PredictX
+          Polymarket
         </span>
         {market.category && (
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
