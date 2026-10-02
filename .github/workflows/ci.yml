@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Scan dependencies and source
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         continue-on-error: true
         with:
           scan-type: fs
@@ -120,7 +120,7 @@ jobs:
 
       # Dockerfiles, compose files and workflow misconfiguration.
       - name: Scan configuration
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         continue-on-error: true
         with:
           scan-type: config
