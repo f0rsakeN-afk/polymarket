@@ -17,7 +17,7 @@ const faqs = [
       },
       {
         q: "How do I reset my password?",
-        a: "Since PredictX uses wallet-based authentication, there is no traditional password. Simply reconnect your wallet to access your account.",
+        a: "Use the 'Forgot password?' link on the sign-in page: we email you a short-lived code, you pick a new password, and every other session is signed out. Accounts are email + password with optional authenticator-app 2FA — there is no wallet or seed phrase.",
       },
       {
         q: "How do I delete my account?",
@@ -80,11 +80,11 @@ const faqs = [
     questions: [
       {
         q: "What fees do you charge?",
-        a: "A protocol fee is applied to each trade as displayed before confirmation. There are no deposit or withdrawal fees from PredictX. Network gas fees apply for on-chain transactions.",
+        a: "Pool trades pay a 2% trading fee plus a 1% protocol fee, order-book matches pay 1%, and splitting or merging collateral into shares costs 2% — each is shown before you confirm. Deposits and withdrawals are free, and because balances live inside the platform rather than on a chain there are no gas fees.",
       },
       {
         q: "Are there withdrawal fees?",
-        a: "PredictX does not charge withdrawal fees. However, network gas fees apply for blockchain withdrawals.",
+        a: "None. Deposits and withdrawals move platform balance only, so nothing is charged on either side and no network fee applies.",
       },
       {
         q: "How do deposits work?",
@@ -100,8 +100,8 @@ const faqs = [
     category: "Security",
     questions: [
       {
-        q: "Is PredictX safe to use?",
-        a: "PredictX uses industry-standard security practices including encryption, cold storage for funds, and regular security audits. However, always use strong wallet security practices on your end.",
+        q: "Is Polymarket safe to use?",
+        a: "Passwords are hashed with bcrypt, session cookies are HttpOnly and rotated on refresh, optional authenticator-app 2FA is available, and the auth endpoints are rate limited. Funds are held custodially as balances in the platform's database, not in a wallet you control — so your password and 2FA device are what to protect.",
       },
       {
         q: "How do I enable two-factor authentication?",
