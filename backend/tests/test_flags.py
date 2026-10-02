@@ -2,21 +2,15 @@
 import uuid
 
 import pytest
+from conftest import token_for
 from httpx import AsyncClient
-
-
-def _token(user_id: str) -> str:
-    from app.deps import create_access_token
-    t, _ = create_access_token(str(user_id))
-    return t
-
 
 # ── Flag market ────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_flag_market_success(client: AsyncClient, test_user, test_market):
     """User can flag a market with a reason."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/flags", json={
         "market_id": str(test_market.id),
         "reason": "Inappropriate content",
@@ -31,7 +25,7 @@ async def test_flag_market_success(client: AsyncClient, test_user, test_market):
 @pytest.mark.asyncio
 async def test_flag_market_duplicate_rejected(client: AsyncClient, test_user, test_market):
     """Same user cannot flag the same market twice."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     await client.post("/api/v1/flags", json={
         "market_id": str(test_market.id),
         "reason": "First flag",
@@ -47,7 +41,7 @@ async def test_flag_market_duplicate_rejected(client: AsyncClient, test_user, te
 @pytest.mark.asyncio
 async def test_flag_nonexistent_market(client: AsyncClient, test_user):
     """Flagging non-existent market returns 404."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/flags", json={
         "market_id": str(uuid.uuid4()),
         "reason": "No market",
@@ -77,7 +71,7 @@ async def test_get_market_flags_admin(client: AsyncClient, admin_user, test_user
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get(f"/api/v1/flags/market/{test_market.id}")
     assert resp.status_code == 200
     data = resp.json()
@@ -89,7 +83,7 @@ async def test_get_market_flags_admin(client: AsyncClient, admin_user, test_user
 @pytest.mark.asyncio
 async def test_get_market_flags_non_admin_forbidden(client: AsyncClient, test_user, test_market):
     """Non-admin cannot view flags."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get(f"/api/v1/flags/market/{test_market.id}")
     assert resp.status_code == 403
 
@@ -106,7 +100,7 @@ async def test_resolve_flag_admin(client: AsyncClient, admin_user, test_user, te
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
 
     resp = await client.patch(f"/api/v1/flags/{flag.id}/resolve", json={"status": "dismissed"})
     assert resp.status_code == 200
@@ -123,7 +117,7 @@ async def test_resolve_flag_non_admin_forbidden(client: AsyncClient, test_user, 
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.patch(f"/api/v1/flags/{flag.id}/resolve", json={"status": "dismissed"})
     assert resp.status_code == 403
 
@@ -138,7 +132,7 @@ async def test_resolve_flag_already_resolved(client: AsyncClient, admin_user, te
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.patch(f"/api/v1/flags/{flag.id}/resolve", json={"status": "actioned"})
     assert resp.status_code == 422
 
@@ -146,6 +140,6 @@ async def test_resolve_flag_already_resolved(client: AsyncClient, admin_user, te
 @pytest.mark.asyncio
 async def test_resolve_nonexistent_flag(client: AsyncClient, admin_user):
     """Resolving non-existent flag returns 404."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.patch(f"/api/v1/flags/{uuid.uuid4()}/resolve", json={"status": "dismissed"})
     assert resp.status_code == 404

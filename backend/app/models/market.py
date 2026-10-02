@@ -18,6 +18,29 @@ from sqlalchemy.orm import relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
+# ── Market lifecycle statuses ────────────────────────────────────────────────────
+# `markets.status` is a plain VARCHAR with no DB check constraint, so these
+# values are a contract enforced by the API/service layer.
+STATUS_ACTIVE = "active"            # live and tradable
+STATUS_CLOSED = "closed"            # no new orders, awaiting resolution
+STATUS_RESOLVING = "resolving"      # resolution proposed, in dispute window
+STATUS_RESOLVED = "resolved"        # final
+STATUS_DISPUTE_WINDOW = "dispute_window"
+STATUS_PENDING_REVIEW = "pending_review"  # submitted by a regular user, not yet approved
+STATUS_REJECTED = "rejected"              # admin declined the submission
+
+# Visible in the public catalogue (and therefore in GET /markets/ without a status filter).
+PUBLIC_STATUSES = (
+    STATUS_ACTIVE,
+    STATUS_CLOSED,
+    STATUS_RESOLVING,
+    STATUS_RESOLVED,
+    STATUS_DISPUTE_WINDOW,
+)
+# Hidden from the public catalogue until an admin approves (pending) or the
+# admin rejects it. Only the creator and admins can read these markets.
+UNPUBLISHED_STATUSES = (STATUS_PENDING_REVIEW, STATUS_REJECTED)
+
 
 class Market(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "markets"
@@ -33,8 +56,9 @@ class Market(Base, UUIDMixin, TimestampMixin):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
     # Resolution
-    status = Column(String(20), default="active", nullable=False, index=True)
-    # status: active, closed, resolved, cancelled
+    status = Column(String(20), default=STATUS_ACTIVE, nullable=False, index=True)
+    # status: see STATUS_* above — active, closed, resolving, resolved,
+    # dispute_window, pending_review, rejected
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     resolution_criteria = Column(String(2000))
     resolution_source = Column(String(1000))  # URL or data feed for resolution

@@ -4,16 +4,10 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from conftest import token_for
 from starlette.testclient import TestClient
 
-from app.deps import create_access_token
-
 # ── Helpers ─────────────────────────────────────────────────────────────────────
-
-def _token(user_id: str) -> str:
-    t, _ = create_access_token(str(user_id))
-    return t
-
 
 # ── WS client fixture ──────────────────────────────────────────────────────────
 
@@ -33,7 +27,7 @@ def ws_client():
 
 def test_market_websocket_connect_and_ping(ws_client, test_market, test_user):
     """WS connects, accepts, and responds to ping."""
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -46,7 +40,7 @@ def test_market_websocket_connect_and_ping(ws_client, test_market, test_user):
 def test_market_websocket_reconnect_subscribes_different_market(ws_client, test_market, test_user):
     """Opening a WS to a different market subscribes to that market's channel."""
     new_market_id = str(uuid4())
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -59,7 +53,7 @@ def test_market_websocket_reconnect_subscribes_different_market(ws_client, test_
 
 def test_market_websocket_disconnect(ws_client, test_market, test_user):
     """WS disconnects cleanly without error."""
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -69,22 +63,35 @@ def test_market_websocket_disconnect(ws_client, test_market, test_user):
 
 # ── Global Trades WebSocket ────────────────────────────────────────────────────
 
-def test_global_trades_websocket_connect_and_ping(ws_client):
-    """WS connects to global trades feed and responds to ping."""
+def test_global_trades_websocket_connect_and_ping(ws_client, test_user):
+    """WS connects to the authenticated global trades feed and responds to ping."""
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_global_trades = AsyncMock()
         mock_pubsub.unsubscribe_global_trades = AsyncMock()
-        with ws_client.websocket_connect("/ws/trades") as ws:
+        with ws_client.websocket_connect(f"/ws/trades?token={token}") as ws:
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
 
 
+def test_global_trades_websocket_rejects_anonymous(ws_client):
+    """Every WS surface requires auth — an anonymous handshake is closed 1008."""
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with ws_client.websocket_connect("/ws/trades") as ws:
+            ws.send_json({"type": "ping"})
+            ws.receive_json()
+    assert exc_info.value.code == 1008
+    assert "Authentication required" in (exc_info.value.reason or "")
+
+
 # ── User Notifications WebSocket ───────────────────────────────────────────────
 
-def test_user_notifications_websocket_valid_token(ws_client, test_user):
+def test_user_notifications_websocket_validtoken_for(ws_client, test_user):
     """WS connects with valid token matching user_id."""
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()
         with ws_client.websocket_connect(
@@ -97,7 +104,7 @@ def test_user_notifications_websocket_valid_token(ws_client, test_user):
 
 def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
     """WS rejects token that doesn't match user_id in path — server closes with 4001."""
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     wrong_user_id = str(uuid4())
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()
@@ -109,7 +116,7 @@ def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
                 pass  # should not reach here
 
 
-def test_user_notifications_websocket_invalid_token(ws_client, test_user):
+def test_user_notifications_websocket_invalidtoken_for(ws_client, test_user):
     """WS rejects invalid token — server closes with 4001."""
     invalid_token = "invalid.token.here"
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
@@ -125,7 +132,7 @@ def test_user_notifications_websocket_invalid_token(ws_client, test_user):
 
 def test_market_websocket_unknown_message_type(ws_client, test_market, test_user):
     """Market WS ignores unknown message types without crashing."""
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -140,7 +147,7 @@ def test_market_websocket_unknown_message_type(ws_client, test_market, test_user
 def test_market_websocket_rapid_resubscribe(ws_client, test_market, test_user):
     """WS subscribe message switches market subscription without closing the connection."""
     new_market_id = str(uuid4())
-    token = _token(test_user.id)
+    token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -155,7 +162,7 @@ def test_market_websocket_rapid_resubscribe(ws_client, test_market, test_user):
             mock_pubsub.subscribe_market.assert_called_with(new_market_id)
 
 
-def test_user_notifications_websocket_missing_token(ws_client, test_user):
+def test_user_notifications_websocket_missingtoken_for(ws_client, test_user):
     """WS with no token in query string closes connection."""
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()

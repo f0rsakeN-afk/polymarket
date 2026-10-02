@@ -2,9 +2,9 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.responses import success_response
 from app.database import get_db

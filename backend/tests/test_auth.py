@@ -1,14 +1,9 @@
 """Auth endpoint tests."""
 import pytest
+from conftest import token_for
 from httpx import AsyncClient
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _token(user_id: str) -> str:
-    from app.deps import create_access_token
-    t, _ = create_access_token(str(user_id))
-    return t
-
 
 # ── Registration ────────────────────────────────────────────────────────────────
 
@@ -133,7 +128,7 @@ async def test_login_inactive_user(db_session):
 
 @pytest.mark.asyncio
 async def test_setup_2fa(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/auth/2fa/setup")
     assert resp.status_code == 200
     data = resp.json()
@@ -144,7 +139,7 @@ async def test_setup_2fa(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_2fa_status(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/auth/2fa/status")
     assert resp.status_code == 200
     assert resp.json()["data"]["is_2fa_enabled"] is False
@@ -152,7 +147,7 @@ async def test_2fa_status(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_2fa_enable_wrong_code(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     # First set up
     await client.get("/api/v1/auth/2fa/setup")
     # Try enable with wrong code
@@ -165,7 +160,7 @@ async def test_2fa_enable_wrong_code(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_me_authenticated(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/auth/me")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -181,7 +176,7 @@ async def test_me_unauthenticated(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_sessions_list(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/auth/sessions")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -191,7 +186,7 @@ async def test_sessions_list(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_logout(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/auth/logout")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -200,7 +195,7 @@ async def test_logout(client: AsyncClient, test_user):
 @pytest.mark.asyncio
 async def test_logout_all(client: AsyncClient, test_user):
     """logout_all invalidates all sessions."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/auth/logout-all")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -210,7 +205,7 @@ async def test_logout_all(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_change_password_success(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/auth/change-password", json={
         "old_password": "User!Pass1",
         "new_password": "New!Str0ngPass",
@@ -221,7 +216,7 @@ async def test_change_password_success(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_change_password_wrong_old(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/auth/change-password", json={
         "old_password": "Wrong!Old1",
         "new_password": "New!Str0ngPass",
@@ -233,7 +228,7 @@ async def test_change_password_wrong_old(client: AsyncClient, test_user):
 @pytest.mark.asyncio
 async def test_change_password_same_as_old(client: AsyncClient, test_user):
     """Changing password to the same value should either succeed (re-issuing token) or reject."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/auth/change-password", json={
         "old_password": "User!Pass1",
         "new_password": "User!Pass1",
@@ -283,7 +278,7 @@ async def test_login_missing_password(client: AsyncClient, test_user):
 @pytest.mark.asyncio
 async def test_logout_all_token_revoked(client: AsyncClient, test_user):
     """After logout_all, the old token should be blacklisted and subsequent requests fail."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
 
     # Verify token works before logout_all
     me_resp = await client.get("/api/v1/auth/me")

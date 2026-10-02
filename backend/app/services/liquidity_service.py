@@ -43,8 +43,6 @@ class LiquidityService:
         pool = pool_result.scalar_one_or_none()
         if not pool:
             raise ValidationError("Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY")
-        if market.status != "active":
-            raise ValidationError("Market is not active for liquidity removal")
 
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -61,9 +59,10 @@ class LiquidityService:
             )
 
         # Capture pre-operation prices to detect adverse price movement.
+        # Share counts are Decimal, so prices stay Decimal — never mix float in.
         pre_total = pool.yes_shares + pool.no_shares
-        pre_yes_price = float(pool.yes_shares) / pre_total if pre_total > 0 else 0.5
-        pre_no_price = float(pool.no_shares) / pre_total if pre_total > 0 else 0.5
+        pre_yes_price = pool.yes_shares / pre_total if pre_total > 0 else Decimal("0.5")
+        pre_no_price = pool.no_shares / pre_total if pre_total > 0 else Decimal("0.5")
 
         if pool.lp_token_supply > 0:
             pool_total = pool.yes_shares + pool.no_shares
@@ -98,10 +97,10 @@ class LiquidityService:
 
         # Validate slippage: check if prices moved adversely beyond tolerance.
         post_total = pool.yes_shares + pool.no_shares
-        post_yes_price = float(pool.yes_shares) / post_total if post_total > 0 else 0.5
-        post_no_price = float(pool.no_shares) / post_total if post_total > 0 else 0.5
+        post_yes_price = pool.yes_shares / post_total if post_total > 0 else Decimal("0.5")
+        post_no_price = pool.no_shares / post_total if post_total > 0 else Decimal("0.5")
         max_price_change = max(abs(post_yes_price - pre_yes_price), abs(post_no_price - pre_no_price))
-        if max_price_change > float(slippage_tolerance):
+        if max_price_change > slippage_tolerance:
             await db.rollback()
             raise ValidationError(
                 f"Adverse price movement detected: {max_price_change:.2%} exceeds slippage tolerance of {float(slippage_tolerance):.2%}. "
@@ -185,8 +184,8 @@ class LiquidityService:
 
         # Capture pre-operation prices for slippage detection.
         pre_total = pool.yes_shares + pool.no_shares
-        pre_yes_price = float(pool.yes_shares) / pre_total if pre_total > 0 else 0.5
-        pre_no_price = float(pool.no_shares) / pre_total if pre_total > 0 else 0.5
+        pre_yes_price = pool.yes_shares / pre_total if pre_total > 0 else Decimal("0.5")
+        pre_no_price = pool.no_shares / pre_total if pre_total > 0 else Decimal("0.5")
 
         lp_fraction = lp_tokens / pool.lp_token_supply
         yes_redeemed = pool.yes_shares * lp_fraction
@@ -204,10 +203,10 @@ class LiquidityService:
 
         # Validate slippage: check if prices moved adversely beyond tolerance.
         post_total = pool.yes_shares + pool.no_shares
-        post_yes_price = float(pool.yes_shares) / post_total if post_total > 0 else 0.5
-        post_no_price = float(pool.no_shares) / post_total if post_total > 0 else 0.5
+        post_yes_price = pool.yes_shares / post_total if post_total > 0 else Decimal("0.5")
+        post_no_price = pool.no_shares / post_total if post_total > 0 else Decimal("0.5")
         max_price_change = max(abs(post_yes_price - pre_yes_price), abs(post_no_price - pre_no_price))
-        if max_price_change > float(slippage_tolerance):
+        if max_price_change > slippage_tolerance:
             await db.rollback()
             raise ValidationError(
                 f"Adverse price movement detected: {max_price_change:.2%} exceeds slippage tolerance of {float(slippage_tolerance):.2%}. "

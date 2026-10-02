@@ -1,17 +1,33 @@
 import logging
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.api.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.audit import AuthAuditEvent
+from app.models.market import (
+    STATUS_ACTIVE,
+    STATUS_PENDING_REVIEW,
+    STATUS_REJECTED,
+    Market,
+)
 from app.models.user import RefreshToken, Session, User
 from app.services.audit_service import AuthAuditService
+from app.services.cache_service import (
+    cache_invalidate_market,
+    cache_invalidate_market_lists,
+)
 from app.services.liquidity_service import LiquidityService
 
 logger = logging.getLogger("polymarket")
@@ -222,3 +238,143 @@ async def distribute_protocol_fees(request: Request, db: AsyncSession = Depends(
     await _get_admin_user(request, db)
     result = await LiquidityService.distribute_protocol_fees(db)
     return success_response(result, message="Protocol fees distributed to treasury")
+
+
+# ─── Market review queue ─────────────────────────────────────────────────────────
+# Regular users submit markets (POST /markets/ → status=pending_review); the
+# market only enters the public catalogue and becomes tradable once approved.
+
+
+def _parse_market_id(market_id: str) -> uuid.UUID:
+    """Reject malformed ids as 422 instead of letting asyncpg raise inside a
+    session that is then left in a failed state."""
+    try:
+        return uuid.UUID(market_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValidationError("Invalid market id", error_code="INVALID_ID")
+
+
+async def _pending_market(db: AsyncSession, market_id: str) -> Market:
+    market = await db.get(Market, _parse_market_id(market_id))
+    if market is None:
+        raise NotFoundError("Market not found")
+    if market.status != STATUS_PENDING_REVIEW:
+        raise ValidationError(
+            f"Market is '{market.status}', only pending markets can be moderated",
+            error_code="MARKET_NOT_PENDING",
+        )
+    return market
+
+
+async def _set_market_status(db: AsyncSession, market: Market, new_status: str) -> None:
+    """Compare-and-set on the status the moderator actually read.
+
+    Two admins clicking at the same time must not both apply their decision:
+    whoever's UPDATE matches 0 rows loses and gets a 409 to re-read.
+    """
+    result = await db.execute(
+        update(Market)
+        .where(Market.id == market.id, Market.status == market.status)
+        .values(status=new_status)
+        .returning(Market.id)
+    )
+    if result.first() is None:
+        await db.rollback()
+        raise ConflictError("Market was changed by another request — reload and retry")
+    market.status = new_status
+    await db.commit()
+    # The public list/detail caches would otherwise keep serving the old status.
+    await cache_invalidate_market(str(market.id))
+    await cache_invalidate_market_lists()
+
+
+@router.get("/markets", summary="List markets for moderation (admin)")
+async def list_markets_admin(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    status: str | None = Query(None, max_length=32, description="e.g. pending_review, rejected, active"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """Every market including ones the public catalogue hides (`status=pending_review`)."""
+    await _get_admin_user(request, db)
+
+    filters = [Market.status == status] if status else []
+    total = (
+        await db.execute(select(func.count(Market.id)).where(*filters))
+    ).scalar() or 0
+
+    result = await db.execute(
+        select(Market)
+        .where(*filters)
+        .order_by(Market.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    markets = list(result.scalars().all())
+
+    creators: dict = {}
+    creator_ids = {m.created_by for m in markets if m.created_by}
+    if creator_ids:
+        creators_result = await db.execute(select(User).where(User.id.in_(creator_ids)))
+        creators = {u.id: u for u in creators_result.scalars().all()}
+
+    return PaginatedResponse(
+        data=[
+            {
+                "id": str(m.id),
+                "slug": m.slug,
+                "question": m.question,
+                "category": m.category,
+                "status": m.status,
+                "closes_at": m.closes_at,
+                "created_at": m.created_at,
+                "created_by": str(m.created_by) if m.created_by else None,
+                "created_by_email": creators[m.created_by].email if m.created_by in creators else None,
+            }
+            for m in markets
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < total,
+    )
+
+
+@router.post("/markets/{market_id}/approve", summary="Approve a submitted market (admin)")
+async def approve_market(market_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Publish a user-submitted market: status → active, visible and tradable."""
+    await _get_admin_user(request, db)
+    market = await _pending_market(db, market_id)
+
+    # An already-expired submission would go straight into the catalogue dead —
+    # it can never be traded, and there is no edit endpoint to fix closes_at.
+    if market.closes_at <= datetime.now(UTC):
+        raise ValidationError(
+            "Market closes_at is in the past — reject it so the author can resubmit",
+            error_code="MARKET_ALREADY_CLOSED",
+        )
+
+    await _set_market_status(db, market, STATUS_ACTIVE)
+    logger.info(f"Market approved: {market.slug} ({market.id})")
+    return success_response(
+        {"id": str(market.id), "slug": market.slug, "status": market.status},
+        message="Market approved and published",
+    )
+
+
+@router.post("/markets/{market_id}/reject", summary="Reject a submitted market (admin)")
+async def reject_market(market_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Decline a submission: status → rejected, stays hidden from the catalogue.
+
+    The author keeps read access to their own submission (see GET /markets/{slug}).
+    """
+    await _get_admin_user(request, db)
+    market = await _pending_market(db, market_id)
+
+    await _set_market_status(db, market, STATUS_REJECTED)
+    logger.info(f"Market rejected: {market.slug} ({market.id})")
+    return success_response(
+        {"id": str(market.id), "slug": market.slug, "status": market.status},
+        message="Market rejected",
+    )

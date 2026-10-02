@@ -235,6 +235,16 @@ async def merge(
     )
     no_pos = no_pos_result.scalar_one_or_none()
 
+    # You must actually hold `amount` shares of BOTH sides. Without this check
+    # a user could merge shares they don't own and drive balances negative
+    # (or crash on a missing position row).
+    if yes_pos is None or yes_pos.shares_held < amount_dec:
+        held = yes_pos.shares_held if yes_pos is not None else Decimal(0)
+        raise ValidationError(f"Insufficient YES shares: held={held}, requested={amount_dec}")
+    if no_pos is None or no_pos.shares_held < amount_dec:
+        held = no_pos.shares_held if no_pos is not None else Decimal(0)
+        raise ValidationError(f"Insufficient NO shares: held={held}, requested={amount_dec}")
+
     fee = amount_dec * settings.split_merge_fee_rate
     amount_after_fee = amount_dec - fee
     if pool is not None:

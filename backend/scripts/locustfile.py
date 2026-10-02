@@ -19,12 +19,12 @@ Usage:
         --users=1000 --spawn-rate=100 --run-time=30s --headless \
         --class-picker WebSocketUser
 """
+import os
 import random
 import uuid
 
 from locust import HttpUser, between, task
 from locust.contrib.fasthttp import FastHttpUser
-
 
 # ── Shared test user credentials ────────────────────────────────────────────────
 _SHARED_EMAIL = "loadtest@example.com"
@@ -302,8 +302,9 @@ class MarketWSUser(WebSocketUser):
 
     @task
     def market_feed(self):
-        import websocket
         import json
+
+        import websocket
 
         # Try to get a real active market slug
         resp = self.client.get("/api/v1/markets?status=active&page=1&page_size=5")
@@ -321,7 +322,7 @@ class MarketWSUser(WebSocketUser):
             # Stay connected and receive updates for a few seconds
             for _ in range(random.randint(5, 15)):
                 try:
-                    msg = ws.recv()
+                    ws.recv()  # drain frames — proves the feed actually delivers
                 except Exception:
                     break
             ws.close()
@@ -334,8 +335,9 @@ class GlobalTradesWSUser(WebSocketUser):
 
     @task
     def global_feed(self):
-        import websocket
         import json
+
+        import websocket
 
         try:
             ws = websocket.create_connection("ws://localhost:8000/ws/trades", timeout=10)
