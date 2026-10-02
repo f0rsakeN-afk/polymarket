@@ -2,6 +2,11 @@
 
 This guide explains every concept in plain language. No jargon. No math. Just what's happening and why.
 
+> Written to be read by *anyone* on the team — no coding background needed. For the deeper version,
+> see the siblings in this folder: `trading-engine.md` (exact formulas, order matching), 
+> `architecture.md` (how the system is built), `auth-and-security.md`, `docker-concurrency-realtime.md`,
+> and `viva-questions.md` (the question bank).
+
 ---
 
 ## What Is This Platform?
@@ -44,7 +49,7 @@ Imagine a big jar of money in the middle of the room. Two types of tokens live i
 
 ### Who fills the jar?
 
-**Liquidity Providers (LPs)**. They put in USDC (the platform's money) and get token shares in return. In exchange, they earn a small cut (1% fee) from every trade that happens in the market.
+**Liquidity Providers (LPs)**. They put in USDC (the platform's money) and get LP tokens in return — a receipt showing what fraction of the jar they own. In exchange, they earn a share of the **2% trading fee** that stays inside the jar on every trade (and, at settlement, a share of the platform's collected protocol fees too).
 
 Example: Someone puts in $1000 into a new market. The jar splits it evenly:
 - 500 YES tokens
@@ -73,21 +78,21 @@ With good liquidity:
 
 A brand-new market with no money in it starts at **$0.50** for both YES and NO. It's like a coin flip — the market has no opinion yet.
 
-### When you put in money without a probability: still $0.50
+### The market creator seeds it: liquidity + an optional belief
 
-Even if you deposit $1000, if you don't say what you think, the split is 50/50. The market still thinks it's a coin flip.
+When someone creates a market they can pour in **initial liquidity** and optionally state an **initial probability** — their own belief about how likely YES is.
 
-### When you put in money AND say what you think: informed price
+With $1000 of initial liquidity and an initial probability of 70%:
+- YES side of the jar gets: $1000 × 0.70 = **$700**
+- NO side of the jar gets: $1000 × 0.30 = **$300**
 
-This is the interesting part. You can tell the market **"I think there's a 70% chance this event happens."** The system then splits your money according to that belief:
+Because price is just "this side ÷ total", the prices open at **YES = $0.70, NO = $0.30** — exactly the belief the creator stated. (If they don't state a probability, the money is split 50/50 and the market opens at $0.50/$0.50.)
 
-With $1000 and a 70% belief:
-- YES tokens get: $1000 × (1 - 0.70) = **$300 worth**
-- NO tokens get: $1000 × 0.70 = **$700 worth**
+Why does this matter? Because the market doesn't start ignorant. It starts with someone's informed opinion, and from there, other traders can agree or disagree — and the price moves as the crowd updates what it collectively believes.
 
-The market price becomes: **YES costs $0.70, NO costs $0.30** — matching your stated belief.
+### Important: this only happens at creation
 
-Why does this matter? Because now the market doesn't start ignorant. It starts with someone's informed opinion, and from there, other traders can agree or disagree — and the price moves based on what the crowd collectively decides.
+After that, ordinary traders cannot "state a belief". The `/split` endpoint gives everyone an **equal** YES+NO pair, and only **buying and selling** moves the price — your trade pushes the side you traded towards up, and the other side down.
 
 ---
 
@@ -97,7 +102,7 @@ When you **buy YES shares**, you're saying: "I believe this event will happen."
 
 Here's what happens:
 1. You deposit USDC (the platform's money)
-2. The AMM (the jar) takes a **2% fee**
+2. The jar takes a **2% trading fee** out of your deposit (the platform separately records a **1% protocol fee** — together roughly 3% of the trade, and both are charged whether you end up winning or losing)
 3. The jar gives you YES shares in return
 
 Think of it like buying a receipt that says "I own a piece of the truth that X happened." If X does happen, your receipt is worth $1. If X doesn't happen, your receipt is worth $0.
@@ -111,7 +116,7 @@ You can also **buy NO shares** if you think the event WON'T happen.
 When you **sell your shares**, you're cashing out.
 
 1. You give back your YES shares (or NO shares)
-2. The jar gives you USDC minus a **2% fee**
+2. The jar gives you USDC minus the **2% trading fee** (again, the 1% protocol fee is recorded on top)
 
 You might be selling because:
 - You want to lock in your profit
@@ -124,16 +129,16 @@ You might be selling because:
 
 The AMM (Automated Market Maker) is a simple formula that always sets a fair price based on the ratio of shares in the jar.
 
-The formula is: **YES price = NO shares in jar ÷ total shares in jar**
+The formula is: **YES price = YES shares in jar ÷ total shares in jar** (and NO price is the other share, so the two always add up to exactly $1).
 
 Simple example:
-- Jar has 700 NO tokens and 300 YES tokens (total = 1000)
+- Jar holds 700 YES tokens and 300 NO tokens (total = 1000)
 - YES price = 700 / 1000 = **$0.70**
 - NO price = 300 / 1000 = **$0.30**
 
-When you buy YES shares, you're adding NO tokens to the jar (yes, the opposite). This shifts the ratio, and the price goes up slightly. That's called **price impact** — your trade moves the market a tiny bit.
+When you buy YES shares, they go *into* the jar, so the YES side grows and **the YES price rises** (and NO falls with it). That's called **price impact** — your own trade moves the market a little bit.
 
-Small trades? Barely any impact. Big trades? More impact. This discourages people from manipulating the market with huge single trades.
+Small trades? Barely any impact. Big trades? More impact: your order is charged at the *new, worse* price it created, all the way through. This is also why you can't cheat the jar — buy and immediately sell the same shares and you get back exactly what you put in **minus the fee**: the price you pushed up is the price you paid, the price you pushed down is the price you're paid at. The only thing trading can ever cost you is the fee.
 
 ---
 
@@ -144,23 +149,28 @@ Small trades? Barely any impact. Big trades? More impact. This discourages peopl
 **Splitting** is when you turn your USDC into a balanced pair of YES and NO tokens. You put in $100, the system takes a 2% fee, and you get $49 of YES tokens and $49 of NO tokens.
 
 Why split?
-- You want to become a **liquidity provider** (the jar needs both sides to work)
-- You want to hedge your bets — you're not sure which way things will go
-- You want to earn trading fees as an LP
+- You want both sides at once: a YES+NO pair is always worth exactly $1, no matter what happens — so it's a *neutral* position you can later sell one side of
+- You want to prepare shares to sell or to provide depth with
+- (Becoming an LP — earning a cut of trading fees — is a **separate** "add liquidity" action that deposits into the jar itself, not a split.)
 
 ### Merging: YES + NO → $1 (minus fees)
 
 **Merging** is the reverse. You give back equal YES and NO tokens and get USDC back. The system takes a 2% fee.
 
 Why merge?
-- You want to cash out your liquidity
-- You're done being an LP in this market
+- You want to cash out a balanced pair back into dollars
 - You want to redeploy your money elsewhere
+
+Because you must hold *both* sides to merge, merging realizes the profit or loss on each side separately.
+
+### Do split and merge move the price?
+
+No. They only create or destroy shares **you** hold — they never touch the jar's own reserves, so the market price is unchanged. Split → merge in one go costs you exactly the fee, the same rule as trading.
 
 ### How is this different from buying/selling?
 
 - **Buy/Sell** — you're trading your opinion. You're picking a side.
-- **Split/Merge** — you're depositing or withdrawing balanced value. You're not picking a side, you're just moving money in and out of the jar.
+- **Split/Merge** — you're depositing or withdrawing balanced value. You're not picking a side, you're just moving money in and out of *your own holdings*.
 
 ---
 
@@ -202,6 +212,23 @@ With disputes:
 
 ---
 
+## When the Event Ends — Settlement
+
+Resolution is the moment the truth becomes official: did it rain, did the team win, did the candidate get elected?
+
+1. **The market resolves.** An admin marks it `resolved` with YES or NO as the outcome (after the dispute window, if anyone challenged it).
+2. **Winning shares pay $1 each.** If YES won, every YES share in your account is worth exactly $1 and is added to your wallet balance. NO shares are worth $0 and are recorded as a loss.
+3. **Nobody is charged anything at this step.** The trading fee was already paid when you traded. Settlement itself takes no cut.
+4. **It can only happen once.** Each position is flagged with a `settled_at` timestamp under a row lock, so a retried background job or a double-click on "claim" can never pay you twice.
+5. **Where the money comes from:** the losing side and the pool. Pool fees that were collected along the way are swept to the platform's treasury, and liquidity providers are paid out of the side that won — which is exactly why being an LP carries real risk.
+
+> Honest footnote: this project's money ledger is **single-entry** (balances are updated, but not every
+> movement is mirrored by a matching debit *and* credit), so payouts are not strictly pre-funded by an
+> escrow account. It's the biggest known weakness of the system and the first thing we'd fix —
+> `trading-engine.md` §6.1 sketches how.
+
+---
+
 ## How Is This Different from Gambling?
 
 This is the most common question, and honestly, on the surface it looks similar. At 1xBet, people bet "Will Gol score a goal or not?" And 1xBet also has a **cashout** feature where you can sell your bet early before the match ends — at a price the house offers. So the resemblance is real. But here's what's different underneath:
@@ -222,7 +249,7 @@ On our platform, the price moves based on **what traders actually believe**. If 
 
 Casinos are businesses that profit from your losses over time. Their odds are structured so the house always wins more than it pays out. That's the entire business model.
 
-Our platform charges a flat **1% fee on every trade** — whether you win or lose. Whether you profit or lose on a specific trade, the platform earns the same 1%. It's the same model as a stock broker's commission. The platform provides the infrastructure (the jar, the AMM, the matching engine) and charges a small service fee. It doesn't profit from your losses.
+Our platform charges a small **flat trading fee — 2% inside the pool plus a 1% protocol fee, about 3% of the trade — whether you win or lose**, and **nothing at all is taken when you're paid out**. Whether you profit or lose on a specific trade, the platform earns the same fee. It's the same model as a stock broker's commission. The platform provides the infrastructure (the jar, the AMM, the matching engine) and charges a small service fee. It doesn't profit from your losses.
 
 ### 4. Outcomes Are Verifiable Facts, Not Random
 
@@ -237,7 +264,7 @@ Prediction markets resolve based on **verifiable real-world facts**. Did Ronaldo
 | **Who decides your exit price?** | The house — unilaterally, at their discretion | The market — AMM formula based on real trades |
 | **Can the house reject your cashout?** | Yes — they can delay or deny it | No — you can always sell if someone buys from you |
 | **Your opponent?** | The house (which always profits) | Other people with different opinions |
-| **How does the platform profit?** | From your losses over time | Flat 1% fee on every trade, regardless of outcome |
+| **How does the platform profit?** | From your losses over time | A flat ~3% trading fee (2% pool + 1% protocol), same on every trade, and nothing at settlement |
 | **What determines the outcome?** | Random chance (dice, roulette) | Verifiable real-world fact |
 | **Does the price encode information?** | No — odds are set by the house to guarantee profit | Yes — price reflects what the crowd collectively believes |
 | **Can you trade freely?** | You're locked in once you place a bet | You can buy, sell, or exit anytime before resolution |

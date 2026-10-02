@@ -1,5 +1,9 @@
 # Production Migration Guide
 
+> Moved here from `backend/MIGRATION.md` — all project documentation lives in `/docs`.
+> Run every command below from the **`backend/`** directory (`cd backend` first), where
+> `alembic.ini`, `pyproject.toml` and the compose files live.
+
 ## Pre-Deployment Checklist
 
 ### Required Environment Variables
@@ -21,7 +25,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ### Database Migrations
 
-**1 migration exists** (squashed initial schema) — always use Alembic in production:
+**5 migrations exist** (initial squashed schema + 4 follow-ups) — always use Alembic in production:
 ```bash
 # Dry run first
 alembic upgrade --sql
@@ -62,9 +66,9 @@ Set all three before starting the container.
 
 ## Docker Compose Production Stack
 
-See `deploy/docker-compose.prod.yml` for the full stack:
+See `backend/docker-compose.prod.yml` for the full stack:
 - **nginx** — reverse proxy, SSL termination, rate limiting
-- **FastAPI app** — gunicorn (4 workers, uvicorn)
+- **FastAPI app** — gunicorn (8 UvicornWorkers, one event loop each)
 - **Celery worker** — async task processing
 - **Celery beat** — scheduled tasks
 - **PostgreSQL** — external (not in compose)
@@ -72,7 +76,8 @@ See `deploy/docker-compose.prod.yml` for the full stack:
 
 ### Deploy
 ```bash
-docker compose -f deploy/docker-compose.prod.yml up -d
+cd backend
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -124,13 +129,17 @@ All background tasks log structured JSON with `task_id`, `task_name`, `duration_
 {"event": "task_complete", "task_id": "...", "task_name": "app.workers.tasks.sync_amm_prices", "duration_ms": 142.3}
 ```
 
-Key scheduled tasks:
-- `sync_amm_prices` — keeps AMM prices in Redis (every 30s via Celery beat)
-- `snapshot_price_history` — OHLCV candles for price charts (every 5min via beat)
-- `check_limit_order_execution` — executes limit orders when price crosses threshold (every 1min)
-- `check_markets_ready_to_resolve` — auto-resolves markets past close date (every 5min)
-- `check_price_alerts` — fires price alert notifications (every 1min)
-- `cleanup_expired_sessions` — purges old revoked sessions (daily)
+Key scheduled tasks (cadence from `app/workers/celery_app.py`):
+- `expire_stale_orders` — frees locked funds on expired orders (every 30 s)
+- `check_limit_order_execution` — re-tests resting limit orders against the AMM price (every 30 s)
+- `sync_amm_prices` — re-announces prices, only when |Δ| > 0.0001 (every 60 s)
+- `check_markets_ready_to_resolve` — auto-resolves markets past close date (every 5 min)
+- `snapshot_price_history` — OHLCV candles for price charts (every 5 min)
+- `cleanup_expired_sessions` — purges old revoked sessions (daily, 03:00)
+- `distribute_protocol_fees` — sweeps `pool.protocol_fees` to the treasury (daily, 03:30)
+
+Event-driven, not scheduled: `check_price_alerts` fires from `sync_amm_prices` whenever a price
+actually moves.
 
 ---
 
@@ -151,4 +160,7 @@ Ship logs to your aggregator (Datadog, Loki, ELK) via stdout → log shipper (fi
 - **CSP headers** — Content-Security-Policy set via Next.js `next.config.ts` on the frontend
 - **Refresh token hashing** — tokens stored as SHA-256 hashes in DB, not plaintext
 - **OTP rate limiting** — 5 codes per 5 min per email+purpose
-- **Token blacklist fail-open** — if Redis is down, revoked tokens work until natural expiry (15 min). Redis Sentinel HA eliminates this window.
+- **Token blacklist fails closed in production** — if Redis is down, revoked tokens are *rejected*
+  rather than accepted (deny-by-default). Development fails open so a Redis restart doesn't break
+  the dev loop. The blacklist *write* fails closed everywhere: a logout that can't be recorded is
+  refused instead of silently succeeding.

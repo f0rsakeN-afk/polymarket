@@ -1,112 +1,103 @@
 # PredictX — Prediction Market Platform
 
-## Dev Setup (hot reload)
+A Polymarket-style exchange for event outcomes: an order book plus an automated market maker, with
+wallets, positions, settlement at $1 per correct share, and realtime prices over WebSockets.
+
+> **All project documentation lives in [`docs/`](docs/README.md)** — start there.
+
+## Documentation
+
+| I want to… | Read |
+|---|---|
+| Understand the product with no jargon | [`docs/concepts.md`](docs/concepts.md) |
+| Rehearse for a viva (227 questions + answers) | [`docs/viva-questions.md`](docs/viva-questions.md) |
+| See how the system is built | [`docs/architecture.md`](docs/architecture.md) |
+| Understand matching, AMM maths, split/merge, "is this gambling?" | [`docs/trading-engine.md`](docs/trading-engine.md) |
+| Understand auth and security | [`docs/auth-and-security.md`](docs/auth-and-security.md) |
+| Understand Docker, concurrency and realtime | [`docs/docker-concurrency-realtime.md`](docs/docker-concurrency-realtime.md) |
+| Deploy to production | [`docs/deployment.md`](docs/deployment.md) |
+| Find the index / reading order | [`docs/README.md`](docs/README.md) |
+
+## Repository layout
+
+```
+backend/    FastAPI + async SQLAlchemy/Postgres + Redis + Celery, Dockerfiles, compose files
+frontend/   Bun + Turborepo monorepo: apps/web (Next.js 16 / React 19), packages/ui
+docs/       All project documentation (this is the only place docs live)
+```
+
+## Dev setup
+
+**Backend** (full commands in [`backend/README.md`](backend/README.md)):
 
 ```bash
-# 1. Copy env — fill in DB_PASSWORD, JWT_SECRET, TOTP_ENCRYPTION_KEY
-cp .env.example .env
-nano .env
-
-# 2. Start backend + ws + postgres + redis (all hot reload)
-make dev
-
-# 3. Frontend (separate terminal)
-cd frontend && bun run dev
+cd backend
+cp .env.example .env          # fill in DB_PASSWORD, JWT_SECRET, TOTP_ENCRYPTION_KEY
+docker compose -f docker-compose.dev.yml up -d   # postgres :5433, redis :6380
+uv run alembic upgrade head
+./start.sh                    # API :8000 + celery worker + beat
+curl localhost:8000/health
 ```
 
-Dev stack: postgres · redis · api · ws1
-
-## Prod Setup
+**Frontend** (separate terminal):
 
 ```bash
-# Build and start everything
-make prod
-
-# Or build images separately then start
-make prod-build && make prod
+cd frontend
+bun install
+bun run dev                   # http://localhost:3000
 ```
 
-## Tear Down
+**Tests:**
 
 ```bash
-make down          # stop containers, keep data volumes
-make clean         # stop + wipe data volumes
+docker start pm-postgres pm-redis     # test infra on ports 5433 / 6380
+cd backend && .venv/bin/pytest -q     # 308 tests, DB rebuilt from migrations each run
+.venv/bin/ruff check app/ tests/
 ```
 
-## What Gets Built
-
-### Services
-
-| Service | Dev Port | Prod Port | Notes |
-|---------|----------|-----------|-------|
-| Frontend | `:3000` | — | Run separately: `cd frontend && bun run dev` |
-| API | `:8000` | via nginx `:8000` | Hot reload in dev |
-| WS Gateway | `:7080` | via nginx `:8000/ws/` | Hot reload in dev |
-| Postgres | `:5435` | docker only | |
-| Redis | `:6382` | docker only | |
-
-### Architecture
-
-```
-Browser
-  │
-  ├─ HTTP/REST ──► Nginx (:8000) ──► FastAPI (4 replicas)
-  │                              └─► PostgreSQL
-  │                              └─► Redis (pub/sub + cache)
-  │
-  └─ WebSocket ──► Nginx (:8000/ws/) ──► WS Gateway (3 Bun instances)
-                                          └─► Redis
-```
-
-Celery Workers ──► Redis (broker) ──► PostgreSQL
-
-## Docker Commands
+## Production
 
 ```bash
-# Dev: hot reload services only
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-
-# Dev: just infra
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis
-
-# Prod: everything
-docker compose up
-
-# Prod: rebuild
-docker compose build && docker compose up
-
-# Logs
-docker compose logs -f api
-docker compose logs -f ws1
-
-# Health
-make health
+cd backend
+cp .env.example .env          # generate real secrets — see docs/deployment.md
+docker compose -f docker-compose.prod.yml up --build -d
 ```
 
-## Generate Secrets
+Frontend: `cd frontend && docker compose -f docker-compose.prod.yml up --build -d` (built image is
+served by nginx, which also proxies `/api` and `/ws` to the backend).
+
+## Architecture
+
+```
+Browser ── HTTP/REST ──► Next.js :3000 ──► nginx ──► FastAPI (gunicorn, 8 UvicornWorkers)
+   │                                                    ├──► PostgreSQL (source of truth)
+   └──── WebSocket ─────────────────────────────────────┤
+                                                        └──► Redis (cache · rate limits · pub/sub)
+                                                                    ▲
+                                          Celery worker + beat ─────┘
+                                          (settlement, order expiry, price snapshots)
+```
+
+WebSockets are served by the FastAPI process itself — there is no separate gateway service. All 8
+workers subscribe to Redis pub/sub so any instance can push to its own connected clients.
+
+## Ports
+
+| Service | Dev (host) | Notes |
+|---|---|---|
+| Frontend | `:3000` | `cd frontend && bun run dev` |
+| Backend API | `:8000` | `./start.sh` — REST **and** `/ws` |
+| Postgres | `:5433` | container `pm-postgres` / `docker-compose.dev.yml` |
+| Redis | `:6380` | container `pm-redis` / `docker-compose.dev.yml` |
+
+## Generate secrets
 
 ```bash
-# Database password
-openssl rand -base64 32
-
 # JWT secret
 openssl rand -base64 64
-
 # TOTP encryption key
 openssl rand -base64 32
 ```
 
-## Frontend (without Docker)
-
-```bash
-cd frontend
-cp .env.local.example .env.local 2>/dev/null || true
-bun install
-bun run dev
-```
-
-## Backend Migrations
-
-```bash
-make migrate
-```
+The app refuses to boot while any of `JWT_SECRET`, `SECRET_KEY` or `TOTP_ENCRYPTION_KEY` is still
+`change-me-in-production`.
