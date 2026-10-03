@@ -355,21 +355,25 @@ class LiquidityService:
         for pool, market in pools:
             if pool.protocol_fees <= 0:
                 continue
-            owed = pool.protocol_fees
+            owed = Decimal(str(pool.protocol_fees))
             # The sweep is paid out of the pool's escrow: protocol_fees is a
             # sub-ledger *inside* pool.collateral, not extra money. A shortfall
             # means recorded fees exceed backing collateral — an invariant
-            # violation: pay what the escrow covers, keep the rest recorded for
-            # the next sweep, and shout about it.
-            amount = pool.debit_collateral(owed, allow_shortfall=True)
+            # violation. Pay what the escrow actually holds and keep the rest
+            # recorded, so the next sweep retries it; never zero the record
+            # while handing the treasury less than it claims.
+            available = Decimal(str(pool.collateral or 0))
+            amount = min(owed, available)
             if amount < owed:
                 logger.error(
                     f"Protocol fee sweep shortfall: market={market.slug} "
-                    f"owed={float(owed)} paid={float(amount)}"
+                    f"owed={float(owed)} paid={float(amount)} "
+                    f"carried_forward={float(owed - amount)}"
                 )
             pool.protocol_fees = owed - amount
             if amount <= 0:
                 continue
+            pool.debit_collateral(amount)
             treasury_wallet.balance += amount
             total += amount
             distributed.append({

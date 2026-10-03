@@ -30,6 +30,7 @@ from app.models import (
     User,
     Wallet,
 )
+from app.models.liquidity import EscrowShortfallError
 from app.services.liquidity_service import LiquidityService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
@@ -830,6 +831,47 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         else:
             wallet_map = {}
 
+        # ── Pre-flight: can the escrow fund the WHOLE obligation? ──
+        # Checked once, up front, before a single wallet is touched. Paying
+        # per-position and reacting to a shortfall part-way through is what
+        # used to happen: the first winners were paid in full, the last one
+        # got whatever was left, and *every* position was still stamped
+        # settled — so the remainder was owed to nobody and reachable by
+        # nobody. A shortfall can only mean the ledger upstream is broken, so
+        # the correct response is to abort the whole settlement, leave every
+        # position claimable, and surface it loudly.
+        winner_total = sum(
+            (Decimal(str(pos.shares_held)) for pos in positions
+             if str(pos.outcome_id) == winning_outcome_id and Decimal(str(pos.shares_held or 0)) > 0),
+            Decimal(0),
+        )
+        if winner_total > 0 and pool is None:
+            # No pool row means no escrow to pay from. Paying here would mint
+            # the winner's shares out of nothing (the old `pool is not None`
+            # guard silently skipped the debit and credited the wallet anyway).
+            raise EscrowShortfallError(
+                f"market {market.id}: {winner_total} shares owed to winners but no "
+                f"liquidity pool exists to fund them from"
+            )
+        owed_fees = Decimal(str(pool.protocol_fees or 0)) if pool is not None else Decimal(0)
+        available = Decimal(str(pool.collateral or 0)) if pool is not None else Decimal(0)
+        required = winner_total + owed_fees
+        if required > available:
+            logger.error(json.dumps({
+                "event": "settlement_escrow_shortfall",
+                "market_id": str(market.id),
+                "market_slug": market.slug,
+                "winners_owed": float(winner_total),
+                "protocol_fees_owed": float(owed_fees),
+                "required": float(required),
+                "available": float(available),
+                "action": "settlement_aborted_positions_left_claimable",
+            }))
+            raise EscrowShortfallError(
+                f"market {market.id}: escrow cannot fund settlement — need {required}, "
+                f"hold {available}. Positions left unsettled and claimable."
+            )
+
         winners_credited = 0
         for pos in positions:
             # Extra guard: skip if raced with claim_winnings (defense in depth)
@@ -843,21 +885,11 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
             # Use Decimal throughout to avoid float rounding — convert to float only at DB write
             payout: Decimal = pos.shares_held if is_winner else Decimal(0)
 
-            # Winners are paid out of the pool escrow — funded, never
-            # minted (single-entry ledger). A shortfall is an invariant
-            # violation: pay what the escrow covers and shout, rather
-            # than driving collateral negative or failing the settle.
-            if payout > 0 and pool is not None:
-                escrow_paid = pool.debit_collateral(payout, allow_shortfall=True)
-                if escrow_paid < payout:
-                    logger.error(json.dumps({
-                        "event": "settlement_escrow_shortfall",
-                        "market_id": str(market.id),
-                        "owed": float(payout),
-                        "paid": float(escrow_paid),
-                        "remaining_collateral": float(pool.collateral),
-                    }))
-                payout = escrow_paid
+            # Strict debit: the pre-flight proved the escrow covers the entire
+            # obligation, so a shortfall here is a bug and must fail the whole
+            # settlement rather than quietly underpay.
+            if payout > 0:
+                pool.debit_collateral(payout)
 
             # Mark as settled — prevents double-claim if claim_winnings is called after Celery settles
             pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
@@ -895,16 +927,11 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         # sub-ledger inside pool.collateral, so removing the claim and
         # the backing dollars happen together.
         if pool and pool.protocol_fees > 0:
-            owed_fees = pool.protocol_fees
-            treasury_amount = pool.debit_collateral(owed_fees, allow_shortfall=True)
-            if treasury_amount < owed_fees:
-                logger.error(json.dumps({
-                    "event": "protocol_fee_escrow_shortfall",
-                    "market_id": str(market.id),
-                    "owed": float(owed_fees),
-                    "paid": float(treasury_amount),
-                    "remaining_collateral": float(pool.collateral),
-                }))
+            owed_fees = Decimal(str(pool.protocol_fees))
+            # Covered by the pre-flight check — strict debit fails the whole
+            # settlement if it somehow isn't, rather than zeroing the fee
+            # record while paying the treasury less than it recorded.
+            treasury_amount = pool.debit_collateral(owed_fees)
             pool.protocol_fees = Decimal(0)
             if treasury_amount > 0:
                 treasury_wallet.balance += treasury_amount
@@ -943,19 +970,29 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 else Decimal(0)
             )
 
+            # These payouts are pro-rata of the residual, so they sum to it —
+            # strict debit cannot fail, and if it ever did that would mean the
+            # token supply and the share rows disagree (a real bug), so fail
+            # loudly rather than underpaying an LP and burning their tokens.
+            outstanding_tokens = sum(
+                (Decimal(str(lp.lp_tokens or 0)) for lp in lp_shares), Decimal(0)
+            )
+            if outstanding_tokens > Decimal(str(pool.lp_token_supply or 0)):
+                logger.error(json.dumps({
+                    "event": "lp_token_supply_drift",
+                    "market_id": str(market.id),
+                    "share_rows_total": float(outstanding_tokens),
+                    "lp_token_supply": float(pool.lp_token_supply),
+                }))
+                raise EscrowShortfallError(
+                    f"market {market.id}: LP share rows total {outstanding_tokens} but "
+                    f"lp_token_supply is {pool.lp_token_supply} — refusing to redeem"
+                )
+
             for lp in lp_shares:
-                lp_payout = lp.lp_tokens * lp_payout_per_token
+                lp_payout = Decimal(str(lp.lp_tokens or 0)) * lp_payout_per_token
                 if lp_payout > 0:
-                    escrow_paid = pool.debit_collateral(lp_payout, allow_shortfall=True)
-                    if escrow_paid < lp_payout:
-                        logger.error(json.dumps({
-                            "event": "lp_escrow_shortfall",
-                            "market_id": str(market.id),
-                            "lp_user_id": str(lp.user_id),
-                            "owed": float(lp_payout),
-                            "paid": float(escrow_paid),
-                        }))
-                    lp_payout = escrow_paid
+                    pool.debit_collateral(lp_payout)
                 wallet_result = await db.execute(
                     select(Wallet).where(Wallet.user_id == lp.user_id).with_for_update()
                 )

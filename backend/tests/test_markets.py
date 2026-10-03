@@ -687,6 +687,17 @@ async def test_claim_idempotent(client: AsyncClient, admin_user, db_session, tes
     m.winning_outcome_id = yes_outcome.id
     await db_session.flush()
 
+    # A funded escrow. This test previously created the market with no pool at
+    # all and still expected a 200 — it only passed because the claim endpoint
+    # had an `else payout` branch that credited the wallet in full with no
+    # escrow behind it. Claiming has to be funded like every other payout.
+    db_session.add(
+        LiquidityPool(
+            market_id=m.id, yes_shares="10", no_shares="10",
+            collateral="20", lp_token_supply="0",
+        )
+    )
+
     pos = Position(
         user_id=test_user.id,
         market_id=m.id,
