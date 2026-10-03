@@ -206,7 +206,18 @@ per trade. If Redis or the broker is down, the beat run is the fallback and noth
 **Test:** `tests/test_safety_limits.py::test_a_fill_enqueues_the_limit_order_sweep_immediately`.
 
 While an order rests, its budget sits in `wallet.locked_balance` — locked, not spent. It is
-released on fill, cancel, or expiry.
+released on fill, cancel, or expiry. Placing it writes a `limit_order_lock` transaction (negative
+amount) so the reservation is visible in the ledger rather than being a silent balance change.
+
+> **A bug worth naming, because it made this whole section fiction.** The "AMM price is worse than
+> my limit, leave it resting" branch used to `return` from inside `execute_order`, *above* the
+> single commit at the end of the fill path. `get_db` then closed the session and rolled
+> everything back: the order row, the locked funds, the lot. The client still got a `200` saying
+> `status: "pending"` — with an empty `order_id`, so nothing it did next could find the order —
+> and the sweeper below had nothing to ever service. **Resting limit orders did not exist in
+> production.** It stayed invisible because the API session could read its own uncommitted writes,
+> so any test using the request session would happily "pass"; `tests/test_resting_orders.py`
+> distinguishes them with a rollback, which discards uncommitted data and keeps committed data.
 
 ---
 

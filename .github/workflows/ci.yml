@@ -67,7 +67,7 @@ jobs:
 
       # conftest.py builds `mydatabase_test` from `alembic upgrade head` on
       # every run, so migrations are exercised by the test suite itself.
-      # --cov-fail-under is the measured baseline (66% at time of writing);
+      # --cov-fail-under is the measured baseline (72.5% at time of writing);
       # ratchet it up, never down.
       - name: Run tests with pytest
         run: uv run pytest -q --cov=app --cov-report=term-missing --cov-fail-under=65
