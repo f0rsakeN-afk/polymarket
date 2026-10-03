@@ -267,20 +267,35 @@ Transaction(type="merge", amount=+amount_after_fee)
    `resolving → resolved` status flip make double-settlement impossible, and the Celery task does
    the rest under `FOR UPDATE` on unsettled positions.
 2. **Winners**: `wallet.balance += shares_held` ($1 per winning share) **paid out of
-   `pool.collateral`** (`debit_collateral(allow_shortfall=True)` — if the escrow can't cover the
-   full payout the worker pays what it holds and logs the shortfall instead of failing),
-   `Transaction type="settlement_win"`, `position.settled_at` set — and `claim_winnings`
-   re-checks `settled_at IS NULL` under the same row lock, so a claim racing the worker can't pay
-   twice. The claim endpoint is stricter than the worker: it is **all-or-nothing**, so any
-   shortfall raises `ESCROW_INSUFFICIENT` (422) and leaves the position claimable rather than
-   handing a partial payout through the API.
+   `pool.collateral`**, `Transaction type="settlement_win"`, `position.settled_at` set — and
+   `claim_winnings` re-checks `settled_at IS NULL` under the same row lock, so a claim racing the
+   worker can't pay twice.
+
+   Settlement is **all-or-nothing on the escrow**. Before it pays a single wallet it adds up the
+   entire obligation — every winning share plus the recorded protocol fees — and compares it to
+   `pool.collateral`. If the escrow cannot cover it, it raises `EscrowShortfallError` and the whole
+   transaction rolls back: nobody is paid, no position is stamped settled, and the market stays
+   `resolving` rather than `resolved`. `debit_collateral()` has no "pay what you can" mode at all,
+   because a partial payment that then marks the obligation satisfied destroys the remainder —
+   nothing records it as still owed and nothing retries it. A shortfall can only mean the ledger
+   upstream is broken, so the honest response is to stop, alert (`settlement_escrow_shortfall`, one
+   structured `logger.error`) and let Celery retry.
+
+   A winner is never locked out by that: `claim_winnings` accepts a `resolving` market as well as a
+   `resolved` one, because both callers that record a winning outcome commit it together with the
+   move out of `active`. Claim stays all-or-nothing (`ESCROW_INSUFFICIENT`, 422, position left
+   untouched), takes the same Pool → Position → Wallet locks, so it cannot double-pay a
+   concurrent settle.
 3. **Losers**: `settlement_loss` transaction for the history, payout 0.
 4. **Protocol fees**: the treasury takes `pool.protocol_fees` — a sub-ledger *inside* the escrow —
-   with the same shortfall discipline. Order is fixed and deliberate: **winners → fees → LPs**.
+   debited strictly, and only after the pre-flight has proved it is covered. Order is fixed and
+   deliberate: **winners → fees → LPs**.
 5. **LPs**: `lp_payout = lp_tokens / lp_token_supply × (escrow left after winners and fees)` — a
    pro-rata slice of *collateral*, so an LP carries the pool's trading P&L and the fees, not the
    outcome. The same formula governs an LP exit mid-market, and `remove_liquidity` refuses any
-   withdrawal that would leave less than the open claims behind (§6.6).
+   withdrawal that would leave less than the open claims behind (§6.6). If the LP share rows ever
+   total more than `lp_token_supply`, settlement refuses too rather than redeeming tokens against
+   an inconsistent supply.
 6. Positions are zeroed and the market becomes `resolved`; the frontend shows the claim button.
 
 The creator's first LP position is a real `LPShare` row minted when the market is seeded (with
@@ -303,8 +318,9 @@ The first group was real six weeks ago and has been closed since — know the st
    choke point, `LiquidityPool.credit_collateral()` / `debit_collateral()` in
    `app/models/liquidity.py`. Buys, splits and deposits credit; sells, merges, LP exits, fee
    sweeps, claims and settlement debit. `debit_collateral` refuses to drive the escrow negative —
-   only callers that pass `allow_shortfall=True` (the settlement sweep and the treasury sweep)
-   may pay less than owed, and they log the shortfall instead of failing. **Tests:**
+   `debit_collateral()` raises `EscrowShortfallError` rather than let a balance go below zero, and
+   settlement pre-flights the whole obligation before touching a wallet, so an underfunded escrow
+   aborts the run instead of quietly underpaying anyone). **Tests:**
    `tests/test_ledger.py` (15 cases: split/merge symmetry, wallet-delta == collateral-delta, the
    full settlement payout table, underfunded escrow paying capped/zero, claim-time refusal).
 2. **LPs used to be exposed to the outcome** — redeemed from the winning side's reserve, so an LP
