@@ -361,12 +361,16 @@ The first group was real six weeks ago and has been closed since — know the st
 
 8. **The AMM is thin and linear-impact.** One $10 order in a $100 pool moves the price 7 points.
    Real venues have deeper liquidity, partial fills and a mid-price from the book.
-9. **No periodic invariant audit.** The floor in 6 covers the one path that removes dollars without
-   removing claims (LP exits), and `debit_collateral` refuses to go negative — but nothing runs
-   over every pool each night comparing `pool.collateral` against
-   `max(open YES claims, open NO claims)`. That query is ten lines and would catch data drift from
-   a bug nobody has found yet; it is not written because the honest answer is "we have not needed
-   it", not because it is hard.
+9. **The invariant audit is nightly, not continuous.** `app/services/escrow_audit.py` re-checks
+   every pool at 4am (Celery beat, after the fee sweep) and
+   `./scripts/audit_escrow.py --market <uuid>` runs the same check on demand, exiting non-zero
+   when it finds something. It checks `collateral >= max(open YES shares, open NO shares) +
+   protocol_fees` — the exact pre-flight from §5 — plus fees-backing, LP supply drift, negative
+   collateral, and positions owed with no pool at all. So an imbalance surfaces overnight instead
+   of at resolution. **What it doesn't do:** repair anything (a repair written by something that
+   doesn't understand the drift is how a rounding bug becomes a loss), alert anyone — it logs
+   structured `ERROR`s that nothing watches yet — or run more than once a day, so drift that
+   develops and resolves inside a day is still only caught if it persists.
 10. **`pool.yes_shares`/`no_shares` are AMM pricing state, not the claim ledger.** Settlement reads
     position rows. They agree by construction now (7 closed the known divergence), but they are
     still two representations of the same fact.
