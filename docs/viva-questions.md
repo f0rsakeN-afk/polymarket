@@ -965,9 +965,10 @@ full one on the site including `frame-ancestors 'none'` — plus HSTS in product
 
 **H22. What would you do first with more time?**
 **Answer:** Frontend tests — that layer is empty and it's where a user meets everything else.
-Then a nightly invariant audit (compare each pool's escrow against its open claims), then depth:
-deeper liquidity and an LP position that isn't just a number in a dropdown. Accounting and the
-refresh-chain cap are done, which is why they're not on this list.
+Then alerting on the invariant violations the nightly escrow audit already emits (today they
+only reach a log file), then depth: deeper liquidity and an LP position that isn't just a number
+in a dropdown. Accounting and the refresh-chain cap are done, which is why they're not on this
+list.
 → `docs/trading-engine.md` §6.
 
 **H23. What's your threat model in one line?**
@@ -1097,9 +1098,9 @@ only happen once, and the claim endpoint is all-or-nothing: if the escrow can't 
 answers `ESCROW_INSUFFICIENT` and leaves the position claimable rather than paying a part.
 Honest caveat to volunteer: settlement is all-or-nothing — it adds up the entire obligation first
 and aborts if the escrow can't cover it, so nobody is ever paid partially, but the market stays
-`resolving` until someone funds it or the worker retries. And nothing audits every pool nightly
-against its open claims, so drift from an unknown bug would surface at resolution rather than
-before it.
+`resolving` until someone funds it or the worker retries. The nightly audit re-checks every pool
+against its open claims so drift surfaces at 4am rather than at resolution — but it only writes
+`ERROR` lines to a log file that nobody watches, which is the honest weakest part of this setup.
 → `docs/trading-engine.md` §5, §6.
 
 **★ I10. How is this not gambling?**
@@ -1160,10 +1161,11 @@ the formula back to the old one.
 **I18. What's the weakest part of the trading design?**
 **Answer:** Depth: the pool is thin and linear-impact — one $10 order moves the price 7 points, so a
 whale can push it around, and there's no mid-price from a book. Second, defence in depth on the
-accounting: the escrow now holds every inflow and pays every outflow, and an LP exit is floored by
-open claims — but nothing runs over each pool nightly comparing `pool.collateral` against
-`max(open YES, open NO)` to catch drift from a bug nobody has found yet. Both are in
-`docs/trading-engine.md` §6.
+accounting: the escrow now holds every inflow and pays every outflow, an LP exit is floored by
+open claims, settlement pre-flights the whole obligation before paying anyone, and a 4am job
+re-checks every pool against `max(open YES, open NO)` + fees. What that last part can't do is
+*repair* anything or tell anyone — it writes `ERROR` lines to a log file, and a detection nobody
+is paged for is only as good as someone reading that file. Both are in `docs/trading-engine.md` §6.
 → `docs/trading-engine.md` §6.
 
 **I19. How would you add a new order type (e.g. stop-limit)?**
@@ -1443,12 +1445,14 @@ under N concurrent connections. Frontend tests first, since that's the empty lay
 ## M. Open / reflective ("what would you change?")
 
 **★ M1. What's the biggest weakness of this system?**
-**Answer:** Depth, and the accounting confidence that comes with depth. The pool is thin — one $10
-order in a $100 market moves the price seven points — and while the escrow now holds every inflow
-and pays every outflow (an LP exit is floored by open claims), nothing audits each pool nightly
-against `max(open YES, open NO)` to catch drift from a bug nobody has found. Both are in §6 of the
-trading doc and I'd volunteer them before being asked. The single-entry ledger that used to head
-this answer is fixed: one choke point debits and credits, and settlement pays from escrow.
+**Answer:** Depth, and the confidence that comes with being able to watch it. The pool is thin — one
+$10 order in a $100 market moves the price seven points. The accounting is in much better shape
+than when this answer led with a broken ledger: the escrow holds every inflow and pays every
+outflow through one choke point, LP exits are floored by open claims, settlement refuses to
+underpay anyone, and a 4am job re-checks every pool's escrow against what it still owes. But that
+job's findings go to a log file nobody tails, and nothing repairs a violation automatically. So my
+weakest link is now *observability*, not correctness. Both are in §6 of the trading doc and I'd
+volunteer them before being asked.
 → `docs/trading-engine.md` §6.
 
 **★ M2. What did you learn the hard way?**
@@ -1458,9 +1462,10 @@ round-trip test exposed. Others: trade rows silently disappearing because a buy'
 was set to zero, and wallet deadlocks solved by sorting user IDs.
 
 **★ M3. If you had another month?**
-**Answer:** In order: frontend tests (the only empty test layer), then a nightly invariant audit
-over every pool's escrow versus its open claims, then deeper liquidity and a real LP position with
-a P&L view, then cross-node sharding for the WebSocket registries, then the observability metrics.
+**Answer:** In order: frontend tests (the only empty test layer), then actually *alerting* on the
+nightly invariant audit instead of only logging it, then deeper liquidity and a real LP position
+with a P&L view, then cross-node sharding for the WebSocket registries, then the observability
+metrics.
 The three that used to head this answer — the escrow ledger, CI moved to the repository root, and
 the refresh-chain cap — are done.
 
@@ -1583,8 +1588,8 @@ delivered in realtime over Redis fan-out."
   reverts it.
 
 * **"What's a thing you knowingly left wrong?"**
-  → No frontend test suite at all, a thin AMM with linear impact, and no nightly invariant audit
-  comparing each pool's escrow to its open claims — all listed in `trading-engine.md` §6 and
+  → No frontend test suite at all, a thin AMM with linear impact, and an invariant audit whose
+  findings only ever reach a log file nobody tails — all listed in `trading-engine.md` §6 and
   `auth-and-security.md` §12. The three that used to be the answer here (single-entry ledger,
   register email enumeration, uncapped refresh chains) are fixed and tested; naming what's *still*
   wrong yourself is the answer.

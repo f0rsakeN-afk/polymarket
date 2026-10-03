@@ -69,6 +69,28 @@ Restores are deliberately manual: `./scripts/backup_db.sh --restore latest` (or 
 `BACKUP_DIR`, default `~/backups/polymarket`). The script exits non-zero rather than pruning when
 a dump fails verification, and prints the count of dumps retained.
 
+### Escrow invariant audit
+
+`settle_market` refuses to run if a pool's escrow cannot cover what it owes, which is correct but
+only tells you at resolution. A nightly Celery task (`audit-escrow-invariants`, 4am, after the fee
+sweep) re-checks every pool: `collateral >= max(open YES, open NO) + protocol_fees`, fees backed
+by collateral, LP share rows not exceeding `lp_token_supply`, no negative escrow, and no positions
+owed on a market with no pool. Violations are logged as structured `ERROR`s with the market id.
+
+Run it on demand — exit code 1 means "violations found", so it drops straight into a cron or a
+monitoring check:
+
+```bash
+cd backend
+./scripts/audit_escrow.py                    # everything, human-readable
+./scripts/audit_escrow.py --market <uuid>    # one market, while investigating
+./scripts/audit_escrow.py --json             # machine-readable
+```
+
+It only reports; it never repairs a ledger, because a repair written by something that doesn't
+understand the drift is how a rounding bug becomes a loss. Wire the exit code into whatever
+alerts you have — an audit nobody is paged for is the current weakest link.
+
 ### First Production Boot
 
 The app will **fail to start** if these placeholders are still set:
@@ -110,6 +132,9 @@ picks workflows up from the root `.github/`, which is why they moved out of `bac
 | `security-scan` | Trivy filesystem + config scans, SARIF uploaded **report-only** (`continue-on-error`) — findings are visible without blocking a deploy nobody runs |
 
 The test suite builds its own schema from `alembic upgrade head`, so CI needs no migration step.
+`celery beat` also schedules `audit-escrow-invariants` at 4am — the beat schedule lives in
+`app/workers/celery_app.py`, so a worker without beat running will quietly skip it (as it skips the
+order sweeper).
 
 ---
 

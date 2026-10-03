@@ -227,8 +227,9 @@ Resolution is the moment the truth becomes official: did it rain, did the team w
 
 > Honest footnote: the escrow is enforced by one debit/credit choke point on the pool row, and
 > settlement refuses to run at all if the escrow cannot cover the whole payout — nobody is paid
-> partially, and a winner can always claim instead. What is missing is a nightly audit comparing
-> every pool's escrow against its open claims. `trading-engine.md` §6 lists that alongside the
+> partially, and a winner can always claim instead — and a nightly job re-checks every pool's
+> escrow against its open claims so an imbalance surfaces before resolution rather than during
+> it. What is missing is anyone *watching* those alerts. `trading-engine.md` §6 lists that alongside the
 > other limits we admit to.
 
 ---

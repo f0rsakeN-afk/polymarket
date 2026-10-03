@@ -38,8 +38,8 @@ CI workflow parked in `backend/.github/` where GitHub never runs it). Naming wha
 how it was closed is the answer that scores.
 
 Still open, deliberately: **no frontend test suite** (needs network access to install a test
-runner in CI — D1), plus the honest limits in `trading-engine.md` §6 "Still true" (thin AMM, no
-nightly invariant audit).
+runner in CI — D1), plus the honest limits in `trading-engine.md` §6 "Still true" (thin AMM) and
+the fact that the nightly invariant audit only *logs* its findings — nothing watches them yet.
 
 ### Related tests
 
@@ -49,7 +49,8 @@ Behaviour described here is pinned by `backend/tests/`: `test_amm.py` (pricing +
 (order units, book matching, protocol-fee crediting), `test_ledger.py` (escrow in/out, settlement
 payout table, claim shortfalls, and the refusal to settle an underfunded market rather than pay a
 winner partially), `test_safety_limits.py` (LP-exit escrow floor, split/merge reserve sync,
-immediate limit-order sweep), `test_auth.py` (including the refresh-chain cap and the
+immediate limit-order sweep), `test_escrow_audit.py` (every pool invariant, plus the beat task
+itself so the 4am job can't silently stop working), `test_auth.py` (including the refresh-chain cap and the
 non-enumerable register form).
 
 Run them with:
