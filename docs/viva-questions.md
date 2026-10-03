@@ -1095,8 +1095,11 @@ escrow every buy, split and deposit credited and every sell, merge, LP exit and 
 and nothing is taken from you at settlement. A `settled_at` flag set under a row lock means it can
 only happen once, and the claim endpoint is all-or-nothing: if the escrow can't cover a winner it
 answers `ESCROW_INSUFFICIENT` and leaves the position claimable rather than paying a part.
-Honest caveat to volunteer: the settlement worker pays what the escrow holds and logs any shortfall
-instead of failing, and nothing audits every pool nightly against open claims.
+Honest caveat to volunteer: settlement is all-or-nothing — it adds up the entire obligation first
+and aborts if the escrow can't cover it, so nobody is ever paid partially, but the market stays
+`resolving` until someone funds it or the worker retries. And nothing audits every pool nightly
+against its open claims, so drift from an unknown bug would surface at resolution rather than
+before it.
 → `docs/trading-engine.md` §5, §6.
 
 **★ I10. How is this not gambling?**

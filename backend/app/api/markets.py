@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -670,7 +671,14 @@ async def claim_winnings(
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
-    if market.status != "resolved":
+    # "resolving" is claimable too: both callers that record a winning
+    # outcome (POST /resolve and the dispute flow) set it in the same commit
+    # that moves the market out of "active", and settlement may refuse to run
+    # if the escrow is short — refusing to settle must NOT lock a winner out of
+    # money they already won. Claiming here is safe against a concurrent
+    # settle: both paths take Pool → Position → Wallet locks in that order and
+    # both require settled_at IS NULL, so exactly one of them pays.
+    if market.status not in ("resolving", "resolved"):
         raise ValidationError("Market is not yet resolved")
     if not market.winning_outcome_id:
         raise ValidationError("Market has no winning outcome set")
@@ -716,22 +724,34 @@ async def claim_winnings(
     # position (settled_at, shares_held = 0) for less than it is worth, so a
     # shortfall refuses instead — the position stays claimable and an ops top-up
     # makes it succeed on retry.
-    escrow_paid = pool.debit_collateral(payout, allow_shortfall=True) if pool else payout
-    if escrow_paid < payout:
-        logger.error(
-            f"Claim escrow shortfall: market={slug} user={user.id} "
-            f"owed={payout} paid={escrow_paid} pool_collateral={pool.collateral if pool else 'n/a'}"
-        )
+    available = Decimal(str(pool.collateral or 0)) if pool is not None else Decimal(0)
+    if payout > available:
+        # Nothing has been debited yet — compare, don't probe-and-mutate. A
+        # partial claim would consume the position (settled_at, shares_held=0)
+        # for less than it is worth, and the remainder would be owed to nobody:
+        # the position is the record that the debt is still open, so it stays
+        # exactly as it is and the claim can be retried once the escrow is
+        # funded. `pool is None` lands here too — the old `else payout` branch
+        # credited the wallet in full with no escrow behind it.
+        logger.error(json.dumps({
+            "event": "claim_escrow_shortfall",
+            "market_id": str(market.id),
+            "market_slug": slug,
+            "user_id": str(user.id),
+            "owed": float(payout),
+            "available": float(available),
+            "pool_exists": pool is not None,
+        }))
         raise ValidationError(
             "This claim cannot be paid in full right now — the market escrow is "
             "underfunded. Your position is untouched; try again later or "
             "contact support.",
             error_code="ESCROW_INSUFFICIENT",
         )
-    payout = escrow_paid
 
     # Mark as settled atomically — prevents double-claim on client retry
     winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
+    pool.debit_collateral(payout)   # strict: proved coverable, must not race away
     wallet.balance += payout
     winning_pos.realized_pnl += payout
     winning_pos.shares_held = Decimal(0)

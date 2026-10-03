@@ -47,9 +47,10 @@ Behaviour described here is pinned by `backend/tests/`: `test_amm.py` (pricing +
 `test_security_fixes.py` (websocket auth, XFF, OTP storage, Origin allowlist, trade rows),
 `test_concurrency.py` (parallel orders), `test_websocket.py` (realtime), `test_orders.py`
 (order units, book matching, protocol-fee crediting), `test_ledger.py` (escrow in/out, settlement
-payout table, claim shortfalls), `test_safety_limits.py` (LP-exit escrow floor, split/merge
-reserve sync, immediate limit-order sweep), `test_auth.py` (including the refresh-chain cap and
-the non-enumerable register form).
+payout table, claim shortfalls, and the refusal to settle an underfunded market rather than pay a
+winner partially), `test_safety_limits.py` (LP-exit escrow floor, split/merge reserve sync,
+immediate limit-order sweep), `test_auth.py` (including the refresh-chain cap and the
+non-enumerable register form).
 
 Run them with:
 

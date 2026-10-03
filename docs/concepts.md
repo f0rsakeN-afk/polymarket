@@ -225,9 +225,10 @@ Resolution is the moment the truth becomes official: did it rain, did the team w
    **winners, then the platform's fees, then liquidity providers** (a pro-rata slice of whatever is
    left) — so an LP carries the pool's trading P&L and the fees, not the outcome.
 
-> Honest footnote: the escrow is enforced by one debit/credit choke point on the pool row and the
-> settlement worker pays what it holds (logging any shortfall instead of failing), but nothing
-> audits each pool nightly against its open claims. `trading-engine.md` §6 lists that alongside the
+> Honest footnote: the escrow is enforced by one debit/credit choke point on the pool row, and
+> settlement refuses to run at all if the escrow cannot cover the whole payout — nobody is paid
+> partially, and a winner can always claim instead. What is missing is a nightly audit comparing
+> every pool's escrow against its open claims. `trading-engine.md` §6 lists that alongside the
 > other limits we admit to.
 
 ---

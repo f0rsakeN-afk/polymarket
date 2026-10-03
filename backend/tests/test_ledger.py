@@ -15,7 +15,8 @@ from conftest import token_for
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.models.liquidity import LiquidityPool, LPShare
+from app.models.liquidity import EscrowShortfallError, LiquidityPool, LPShare
+from app.models.market import Market
 from app.models.position import Position
 from app.models.user import User
 from app.models.wallet import Wallet
@@ -69,17 +70,41 @@ def test_credit_collateral_rejects_negative():
 
 
 def test_debit_is_bounded_by_escrow():
-    """The escrow can never go negative — it is a hard payout bound."""
+    """The escrow can never go negative — it is a hard payout bound.
+
+    There is no "pay what you can" mode any more: a caller that debits less
+    than it records as paid destroys the difference. A shortfall raises, and
+    `can_cover` is the read-only probe callers branch on instead.
+    """
     pool = _pool("10")
-    assert pool.debit_collateral(D("25"), allow_shortfall=True) == D("10")
+    assert pool.can_cover(D("10")) is True
+    assert pool.can_cover(D("10.00000001")) is False
+    assert pool.debit_collateral(D("10")) == D("10")
     assert pool.collateral == D("0")
-    assert pool.debit_collateral(D("5"), allow_shortfall=True) == D("0")
+    with pytest.raises(EscrowShortfallError):
+        pool.debit_collateral(D("5"))
+    # The failed debit left the balance exactly where it was.
+    assert pool.collateral == D("0")
+
+
+def test_debit_never_leaves_a_partial_payment_behind():
+    """Regression: the old `allow_shortfall` path returned the available cash
+    and *mutated* the balance, so a caller that then recorded the obligation as
+    settled had quietly destroyed the remainder. `min(owed, available)` is now
+    the caller's job, and the unpaid part stays visible in their own ledger."""
+    pool = _pool("10")
+    owed = D("25")
+    payable = min(owed, D("10"))
+    assert pool.debit_collateral(payable) == D("10")
+    assert pool.collateral == D("0")
+    # `owed - payable` is still owed, and the caller still holds it.
+    assert owed - payable == D("15")
 
 
 def test_strict_debit_raises_and_leaves_escrow_intact():
     """Trading paths fail closed: a broken ledger rolls the trade back."""
     pool = _pool("10")
-    with pytest.raises(ValueError):
+    with pytest.raises(EscrowShortfallError):
         pool.debit_collateral(D("11"))
     assert pool.collateral == D("10")
 
@@ -375,11 +400,17 @@ async def test_settlement_refuses_a_stale_outcome(
 
 
 @pytest.mark.asyncio
-async def test_settlement_never_pays_more_than_the_escrow_holds(
+async def test_settlement_refuses_rather_than_underpaying_a_winner(
     client: AsyncClient, test_user, admin_user, test_market, db_session
 ):
-    """Underfunded escrow: winners are capped at what is backed, LPs take the
-    residual (zero), and collateral lands on exactly 0 — never negative."""
+    """Underfunded escrow aborts the whole settlement.
+
+    This test used to assert the opposite: that a winner owed $400 was paid the
+    $50 the escrow held, the residual went to LPs, and the market settled. That
+    "capping" *is* the bug — the unpaid $350 was then stamped `settled_at`,
+    so it was owed to nobody and claimable by nobody. Refusing keeps the whole
+    $400 claimable, which is the only outcome that loses nothing.
+    """
     yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")
     no = next(o for o in test_market.outcomes if o.name.lower() == "no")
     pool = await _seed_settlement(
@@ -389,19 +420,19 @@ async def test_settlement_never_pays_more_than_the_escrow_holds(
     pool.collateral = D("50")   # promises 400, holds 50
     await db_session.commit()
 
-    user_before = await _balance(db_session, test_user.id)
-    admin_before = await _balance(db_session, admin_user.id)
+    user_id, admin_id, market_id = test_user.id, admin_user.id, test_market.id
+    user_before = await _balance(db_session, user_id)
+    admin_before = await _balance(db_session, admin_id)
 
-    assert "Settled market" in await settle_market(str(test_market.id), str(yes.id), "t1")
+    with pytest.raises(EscrowShortfallError):
+        await settle_market(str(market_id), str(yes.id), "t1")
 
-    pool = await _get_pool(db_session, test_market.id)
-    # The escrow is a hard bound: 50 was owed-and-paid, 350 was owed-and
-    # refused, and the residual (0) went to LPs. Never below zero.
-    assert pool.collateral == D(0)
-    assert pool.collateral >= 0
-    assert await _balance(db_session, test_user.id) == user_before + D("50")
-    # LPs are last in line and get nothing when the escrow is empty.
-    assert await _balance(db_session, admin_user.id) == admin_before
+    await db_session.rollback()
+    # Nobody was paid — not the winner, not the LP.
+    assert await _balance(db_session, user_id) == user_before
+    assert await _balance(db_session, admin_id) == admin_before
+    # The escrow is untouched: still a hard bound, never negative.
+    assert (await _get_pool(db_session, market_id)).collateral == D("50")
 
 
 # ── Claim endpoint (manual payout path) ───────────────────────────────────────
@@ -466,3 +497,153 @@ async def test_claim_refuses_to_pay_an_unfunded_escrow(
     assert pos_after.settled_at is None
     assert await _balance(db_session, user_id) == D(1000)
     assert (await _get_pool(db_session, market_id)).collateral == D("10")
+
+
+# ── The bug this section exists for ───────────────────────────────────────────
+#
+# Settlement used to pay each winner with `allow_shortfall=True`, then stamp
+# `settled_at` on every position regardless. An underfunded escrow therefore
+# paid the first winners in full, gave the last one whatever was left, and
+# marked everybody settled — so the remainder was owed to nobody and reachable
+# by nobody. It also had a `pool is not None` guard that *skipped the debit
+# entirely* and credited the wallet anyway: money from nothing.
+#
+# Both are invariant violations, and a shortfall can only be caused by one, so
+# the correct response is to abort the settlement rather than absorb it.
+
+@pytest.mark.asyncio
+async def test_settlement_refuses_to_run_on_an_underfunded_escrow(
+    client: AsyncClient, test_user, admin_user, test_market, db_session
+):
+    """An escrow that cannot cover winners + fees must abort the whole settle.
+
+    Nothing is paid, nothing is marked settled, and the market is not marked
+    resolved — so the position stays claimable and a later top-up (or retry)
+    can settle it in full. Nothing is lost.
+    """
+    yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    no = next(o for o in test_market.outcomes if o.name.lower() == "no")
+    pool = await _seed_settlement(
+        db_session, test_market, test_user, admin_user, yes, no,
+        winner_shares="40", fees="5",
+    )
+    # Drain the escrow below what settlement owes (45), leaving 10.
+    pool.collateral = D("10")
+    await db_session.commit()
+
+    market_id, user_id = test_market.id, test_user.id
+    user_before = await _balance(db_session, user_id)
+
+    with pytest.raises(EscrowShortfallError):
+        await settle_market(str(market_id), str(yes.id), "short-task")
+
+    await db_session.rollback()
+    # No money moved …
+    assert await _balance(db_session, user_id) == user_before
+    # … the escrow is untouched …
+    assert (await _get_pool(db_session, market_id)).collateral == D("10")
+    # … the fee record is not silently zeroed …
+    assert (await _get_pool(db_session, market_id)).protocol_fees == D("5")
+    # … and the position is still open, so it remains claimable.
+    pos = (
+        await db_session.execute(
+            select(Position)
+            .where(Position.market_id == market_id, Position.user_id == user_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert pos.settled_at is None
+    assert pos.shares_held == D("40")
+
+    # The market is NOT resolved, so the retry/top-up path still works and
+    # the winner can still self-serve via the claim endpoint.
+    market = (
+        await db_session.execute(
+            select(Market).where(Market.id == market_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert market.status == "resolving"
+
+
+@pytest.mark.asyncio
+async def test_settlement_never_mints_money_when_the_pool_row_is_missing(
+    db_session, test_user, admin_user, test_market
+):
+    """`pool is not None` used to guard the debit, so with no pool the wallet
+    was credited in full with nothing behind it. Now it raises."""
+    yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    no = next(o for o in test_market.outcomes if o.name.lower() == "no")
+    await _seed_settlement(
+        db_session, test_market, test_user, admin_user, yes, no,
+        winner_shares="40", fees="0", lp_tokens="0",
+    )
+    pool = await _get_pool(db_session, test_market.id)
+    await db_session.delete(pool)
+    await db_session.commit()
+
+    market_id, user_id = test_market.id, test_user.id
+    before = await _balance(db_session, user_id)
+    with pytest.raises(EscrowShortfallError):
+        await settle_market(str(market_id), str(yes.id), "no-pool")
+    await db_session.rollback()
+    assert await _balance(db_session, user_id) == before
+
+
+@pytest.mark.asyncio
+async def test_escrow_exactly_covering_the_obligation_settles(
+    db_session, test_user, admin_user, test_market
+):
+    """The boundary must not fail: escrow == winners + fees settles in full,
+    and the LP residual is exactly zero rather than a rounding crumb."""
+    yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    no = next(o for o in test_market.outcomes if o.name.lower() == "no")
+    pool = await _seed_settlement(
+        db_session, test_market, test_user, admin_user, yes, no,
+        winner_shares="40", fees="10", lp_tokens="0",
+    )
+    pool.collateral = D("50")          # exactly 40 winners + 10 fees
+    await db_session.commit()
+
+    market_id, user_id = test_market.id, test_user.id
+    before = await _balance(db_session, user_id)
+    result = await settle_market(str(market_id), str(yes.id), "exact")
+    assert "Settled market" in result, result
+
+    after_pool = await _get_pool(db_session, market_id)
+    assert after_pool.collateral == D("0")        # every dollar accounted for
+    assert await _balance(db_session, user_id) - before == D("40")
+
+
+@pytest.mark.asyncio
+async def test_winner_can_claim_while_the_market_is_still_resolving(
+    client: AsyncClient, test_user, test_market, db_session
+):
+    """If settlement refuses (underfunded escrow, worker down, retry pending),
+    the winner must not be locked out of money they already won.
+
+    Both callers that record a winning outcome commit it together with the
+    move out of "active", so a `resolving` market has a decided outcome. Claim
+    stays all-or-nothing out of the escrow and takes the same Pool → Position →
+    Wallet locks as settlement, so it can never double-pay a concurrent settle.
+    """
+    yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+    db_session.add(Position(
+        user_id=test_user.id, market_id=test_market.id, outcome_id=yes.id,
+        shares_held=D("12"), average_price=D("0.5"), realized_pnl=D(0),
+    ))
+    pool = await _get_pool(db_session, test_market.id)
+    pool.collateral = D("30")
+    test_market.status = "resolving"
+    test_market.winning_outcome_id = yes.id
+    await db_session.commit()
+
+    client.cookies.set("access_token", token_for(test_user.id))
+    before = await _balance(db_session, test_user.id)
+
+    resp = await client.post(f"/api/v1/markets/{test_market.slug}/claim")
+    assert resp.status_code == 200, resp.text
+    assert D(resp.json()["data"]["claimed"]) == D("12")
+
+    assert await _balance(db_session, test_user.id) - before == D("12")
+    assert (await _get_pool(db_session, test_market.id)).collateral == D("18")
