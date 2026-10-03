@@ -3,13 +3,13 @@ Seed script for Polymarket.
 Run with: python -m scripts.seed
 """
 import asyncio
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from random import choice, randint, uniform
 
 from sqlalchemy import select, text
-from sqlalchemy.orm import selectinload
 
 from app.database import _get_async_session_maker
 from app.deps import hash_password
@@ -107,9 +107,7 @@ async def seed():
         print("Seeding database...")
 
         now = datetime.now(UTC)
-        one_week_ago = now - timedelta(days=7)
         two_weeks_ago = now - timedelta(days=14)
-        one_month_ago = now - timedelta(days=30)
         three_months_ago = now - timedelta(days=90)
 
         # Get or create test users with wallets

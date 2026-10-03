@@ -2,14 +2,8 @@
 from datetime import UTC
 
 import pytest
+from conftest import token_for
 from httpx import AsyncClient
-
-
-def _token(user_id: str) -> str:
-    from app.deps import create_access_token
-    t, _ = create_access_token(str(user_id))
-    return t
-
 
 # ── Trades ──────────────────────────────────────────────────────────────────────
 
@@ -33,7 +27,7 @@ async def test_list_trades_by_market(client: AsyncClient, test_market):
 
 @pytest.mark.asyncio
 async def test_create_comment(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "This is a test comment!"},
@@ -56,7 +50,7 @@ async def test_create_comment_unauthenticated(client: AsyncClient, test_market):
 
 @pytest.mark.asyncio
 async def test_list_comments(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     # Create a comment first
     await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
@@ -71,7 +65,7 @@ async def test_list_comments(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_edit_comment(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     create_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Original content"},
@@ -88,7 +82,7 @@ async def test_edit_comment(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_delete_comment(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     create_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "To be deleted"},
@@ -104,7 +98,7 @@ async def test_delete_comment(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_comment_not_found_market(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         "/api/v1/markets/nonexistent/comments",
         json={"content": "Comment on nothing"},
@@ -117,7 +111,7 @@ async def test_comment_not_found_market(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_create_alert(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/alerts/", json={
         "market_id": str(test_market.id),
         "outcome": "yes",
@@ -131,7 +125,7 @@ async def test_create_alert(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_create_alert_invalid_price(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/alerts/", json={
         "market_id": str(test_market.id),
         "outcome": "yes",
@@ -144,7 +138,7 @@ async def test_create_alert_invalid_price(client: AsyncClient, test_user, test_m
 
 @pytest.mark.asyncio
 async def test_list_alerts(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/alerts/")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -152,7 +146,7 @@ async def test_list_alerts(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_delete_alert(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     # Create alert
     create_resp = await client.post("/api/v1/alerts/", json={
         "market_id": str(test_market.id),
@@ -172,7 +166,7 @@ async def test_delete_alert(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_get_notification_preferences(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/notifications/preferences")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -180,7 +174,7 @@ async def test_get_notification_preferences(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_update_notification_preferences(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.put("/api/v1/notifications/preferences", json={
         "email_alerts": False,
     })
@@ -190,7 +184,7 @@ async def test_update_notification_preferences(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_list_notifications(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/notifications")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -198,7 +192,7 @@ async def test_list_notifications(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_mark_notification_read(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         "/api/v1/notifications/00000000-0000-0000-0000-000000000000/read",
     )
@@ -210,7 +204,7 @@ async def test_mark_notification_read(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_get_referral_code(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/referrals/code")
     assert resp.status_code == 200
     data = resp.json()
@@ -220,7 +214,7 @@ async def test_get_referral_code(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_get_referral_stats(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get("/api/v1/referrals/stats")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -230,7 +224,7 @@ async def test_get_referral_stats(client: AsyncClient, test_user):
 
 @pytest.mark.asyncio
 async def test_flag_market(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/flags", json={
         "market_id": str(test_market.id),
         "reason": "Inappropriate content",
@@ -241,7 +235,7 @@ async def test_flag_market(client: AsyncClient, test_user, test_market):
 
 @pytest.mark.asyncio
 async def test_flag_market_duplicate(client: AsyncClient, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     await client.post("/api/v1/flags", json={
         "market_id": str(test_market.id),
         "reason": "Duplicate flag",
@@ -260,7 +254,7 @@ async def test_flag_market_duplicate(client: AsyncClient, test_user, test_market
 @pytest.mark.asyncio
 async def test_propose_resolution(client: AsyncClient, admin_user, test_market, db_session):
     """Admin can propose resolution, opening a dispute window."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
 
     resp = await client.post("/api/v1/disputes/propose-resolution", json={
@@ -278,14 +272,14 @@ async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_m
     from unittest.mock import patch
     # First resolve the market
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     with patch("app.api.markets.resolve_market.delay"):
         await client.post(f"/api/v1/markets/{test_market.slug}/resolve", json={
             "winning_outcome_id": str(outcome.id),
         })
 
     # Then file dispute
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/disputes", json={
         "market_id": str(test_market.id),
         "evidence": "The resolution was incorrect",
@@ -297,10 +291,10 @@ async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_m
 
 @pytest.mark.asyncio
 async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_user, test_market):
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     # Endpoint requires admin — use admin token
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -311,7 +305,7 @@ async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_use
 @pytest.mark.asyncio
 async def test_create_reply_to_comment(client: AsyncClient, admin_user, test_market):
     """User can reply to a top-level comment (depth=1)."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     # First create a top-level comment
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
@@ -334,7 +328,7 @@ async def test_create_reply_to_comment(client: AsyncClient, admin_user, test_mar
 @pytest.mark.asyncio
 async def test_create_nested_reply_depth_2(client: AsyncClient, admin_user, test_market):
     """Replies can be nested up to MAX_DEPTH=3."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     # Create chain: comment -> reply (depth 1) -> reply (depth 2)
     c1 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L0"})).json()["data"]
     c2 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L1", "parent_id": c1["id"]})).json()["data"]
@@ -345,7 +339,7 @@ async def test_create_nested_reply_depth_2(client: AsyncClient, admin_user, test
 @pytest.mark.asyncio
 async def test_create_reply_depth_limit_exceeded(client: AsyncClient, admin_user, test_market):
     """Replies beyond MAX_DEPTH=3 are rejected."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     c1 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L0"})).json()["data"]
     c2 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L1", "parent_id": c1["id"]})).json()["data"]
     c3 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L2", "parent_id": c2["id"]})).json()["data"]
@@ -360,7 +354,7 @@ async def test_create_reply_depth_limit_exceeded(client: AsyncClient, admin_user
 @pytest.mark.asyncio
 async def test_get_replies(client: AsyncClient, admin_user, test_market):
     """get_replies endpoint returns paginated replies to a comment."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     c1 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L0"})).json()["data"]
     await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "R1", "parent_id": c1["id"]})
     await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "R2", "parent_id": c1["id"]})
@@ -384,8 +378,16 @@ async def test_get_replies_not_found(client: AsyncClient, test_market):
 # ── Treasury ───────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_treasury(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+async def test_get_treasury_admin_only(client: AsyncClient, admin_user, test_user):
+    """Treasury balances are operational data: admins only, 403 for users."""
+    # Regular user → forbidden
+    client.cookies.set("access_token", token_for(test_user.id))
+    resp = await client.get("/api/v1/treasury")
+    assert resp.status_code == 403
+    assert resp.json()["success"] is False
+
+    # Admin → readable
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get("/api/v1/treasury")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -399,8 +401,14 @@ async def test_get_treasury_requires_auth(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_treasury_logs(client: AsyncClient, test_user):
-    client.cookies.set("access_token", _token(test_user.id))
+async def test_get_treasury_logs_admin_only(client: AsyncClient, admin_user, test_user):
+    """The fee/audit log is admin-only like the balance itself."""
+    client.cookies.set("access_token", token_for(test_user.id))
+    resp = await client.get("/api/v1/treasury/logs")
+    assert resp.status_code == 403
+    assert resp.json()["success"] is False
+
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get("/api/v1/treasury/logs")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -410,13 +418,13 @@ async def test_get_treasury_logs(client: AsyncClient, test_user):
 async def test_distribute_fees_admin_only(client: AsyncClient, admin_user, test_user):
     """Only admins can distribute fees."""
     # Non-admin should be forbidden
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/treasury/distribute?amount=10")
     assert resp.status_code == 403
     assert resp.json()["success"] is False
 
     # Admin should succeed (or fail on insufficient balance)
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.post("/api/v1/treasury/distribute?amount=10")
     # Success or validation error due to balance
     assert resp.status_code in (200, 422)
@@ -461,7 +469,7 @@ async def test_create_comment_parent_on_different_market(client: AsyncClient, ad
     await db_session.refresh(other_comment)
 
     # Try to reply to it from test_market
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Reply to other market's comment", "parent_id": str(other_comment.id)},
@@ -473,7 +481,7 @@ async def test_create_comment_parent_on_different_market(client: AsyncClient, ad
 @pytest.mark.asyncio
 async def test_create_comment_empty_content(client: AsyncClient, test_user, test_market):
     """Empty content is rejected by schema validation."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": ""},
@@ -484,7 +492,7 @@ async def test_create_comment_empty_content(client: AsyncClient, test_user, test
 @pytest.mark.asyncio
 async def test_create_comment_content_too_long(client: AsyncClient, test_user, test_market):
     """Content exceeding max length is rejected."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "x" * 10000},
@@ -497,7 +505,7 @@ async def test_edit_comment_by_non_owner(client: AsyncClient, test_user, admin_u
     """Editing someone else's comment returns 403."""
 
     # admin creates a comment
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Original"},
@@ -505,7 +513,7 @@ async def test_edit_comment_by_non_owner(client: AsyncClient, test_user, admin_u
     comment_id = c_resp.json()["data"]["id"]
 
     # test_user tries to edit it
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.patch(
         f"/api/v1/markets/{test_market.slug}/comments/{comment_id}",
         json={"content": "Hacked!"},
@@ -516,7 +524,7 @@ async def test_edit_comment_by_non_owner(client: AsyncClient, test_user, admin_u
 @pytest.mark.asyncio
 async def test_edit_comment_already_deleted(client: AsyncClient, test_user, test_market):
     """Editing a soft-deleted comment is rejected."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "To be deleted"},
@@ -541,7 +549,7 @@ async def test_delete_comment_soft_delete_flag(client: AsyncClient, test_user, t
 
     from app.models.comment import Comment
 
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Will be soft-deleted"},
@@ -567,14 +575,14 @@ async def test_delete_comment_soft_delete_flag(client: AsyncClient, test_user, t
 @pytest.mark.asyncio
 async def test_delete_comment_by_non_owner(client: AsyncClient, test_user, admin_user, test_market):
     """Deleting someone else's comment returns 403."""
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Admin comment"},
     )
     comment_id = c_resp.json()["data"]["id"]
 
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.delete(f"/api/v1/markets/{test_market.slug}/comments/{comment_id}")
     assert resp.status_code == 403
 
@@ -582,7 +590,7 @@ async def test_delete_comment_by_non_owner(client: AsyncClient, test_user, admin
 @pytest.mark.asyncio
 async def test_delete_comment_already_deleted(client: AsyncClient, test_user, test_market):
     """Deleting an already-deleted comment handles gracefully."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     c_resp = await client.post(
         f"/api/v1/markets/{test_market.slug}/comments",
         json={"content": "Delete me twice"},
@@ -606,7 +614,7 @@ async def test_get_market_flags_admin(client: AsyncClient, admin_user, test_user
     db_session.add(flag)
     await db_session.commit()
 
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get(f"/api/v1/flags/market/{test_market.id}")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -616,7 +624,7 @@ async def test_get_market_flags_admin(client: AsyncClient, admin_user, test_user
 @pytest.mark.asyncio
 async def test_get_market_flags_non_admin_forbidden(client: AsyncClient, test_user, test_market):
     """Non-admin cannot view flags."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get(f"/api/v1/flags/market/{test_market.id}")
     assert resp.status_code == 403
 
@@ -631,7 +639,7 @@ async def test_resolve_flag_admin(client: AsyncClient, admin_user, test_user, te
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(admin_user.id))
+    client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.patch(
         f"/api/v1/flags/{flag.id}/resolve",
         json={"status": "dismissed"},
@@ -650,7 +658,7 @@ async def test_resolve_flag_non_admin_forbidden(client: AsyncClient, test_user, 
     await db_session.commit()
     await db_session.refresh(flag)
 
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.patch(
         f"/api/v1/flags/{flag.id}/resolve",
         json={"status": "dismissed"},
@@ -674,7 +682,7 @@ async def test_adjudicate_dispute_admin_only(client: AsyncClient, test_user, tes
     await db_session.commit()
     await db_session.refresh(dispute)
 
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         f"/api/v1/disputes/{dispute.id}/adjudicate",
         json={"ruling": "dismissed"},
@@ -687,7 +695,7 @@ async def test_adjudicate_dispute_admin_only(client: AsyncClient, test_user, tes
 @pytest.mark.asyncio
 async def test_mark_all_notifications_read(client: AsyncClient, test_user):
     """POST /notifications/read-all marks all notifications as read."""
-    client.cookies.set("access_token", _token(test_user.id))
+    client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post("/api/v1/notifications/read-all")
     assert resp.status_code == 200
     assert resp.json()["success"] is True

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.exceptions import ValidationError
+from app.api.exceptions import UnauthorizedError, ValidationError
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db
@@ -19,27 +19,54 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 STRIPE_TOLERANCE = 300  # 5 minutes
 
 
-async def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) -> stripe.Event:
-    """Verify Stripe webhook signature using stripe.Webhook.construct_event.
+async def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) -> dict:
+    """Verify a Stripe delivery and parse it into an event dict.
 
-    Returns the parsed Event object on success, raises ValidationError on failure.
+    Contract:
+      * returns the parsed event as a **plain dict** (stripe's typed objects
+        are not mappings — ``event.get(...)`` would raise — so we flatten at
+        this boundary and the rest of the handler works with plain JSON);
+      * raises :class:`UnauthorizedError` (401) when the delivery cannot be
+        authenticated — signature missing/malformed/mismatched, timestamp
+        outside the tolerance window, or no secret configured (fail closed:
+        an unverifiable delivery must never be trusted);
+      * raises :class:`ValidationError` (422) only once the signature has been
+        verified, when the authenticated body isn't a usable Stripe event.
+
+    ``stripe.Webhook.construct_event`` verifies the signature *before* it
+    parses JSON, so a parse failure can only happen for an authentically
+    signed body — that ordering is what lets us distinguish 401 from 422.
     """
     if not secret:
-        raise ValueError("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
+        # Misconfiguration must not become "accept everything".
+        logger.error("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
+        raise UnauthorizedError("Webhook signing secret is not configured")
+
+    try:
+        body = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        # Cannot even feed it to the verifier — treat as unauthenticated.
+        raise UnauthorizedError("Invalid Stripe signature")
+
     try:
         event = stripe.Webhook.construct_event(
-            payload,
-            sig_header,
-            secret,
-            tolerance=STRIPE_TOLERANCE,
+            body, sig_header, secret, tolerance=STRIPE_TOLERANCE
         )
-        return event
+        return event.to_dict()  # nested StripeObjects → plain dicts
     except stripe.SignatureVerificationError as e:
         logger.warning(f"Stripe signature verification failed: {e}")
-        raise ValidationError("Invalid Stripe signature")
-    except Exception as e:
-        logger.error(f"Stripe webhook parsing error: {e}")
-        raise ValidationError("Invalid webhook payload")
+        raise UnauthorizedError("Invalid Stripe signature")
+    except (ValueError, TypeError, KeyError, AttributeError) as e:
+        # Signature was verified above (verification runs before parsing), so
+        # anything else here means: authentic but not a usable Stripe event →
+        # 422, not 401. Shape errors surface as ValueError (bad JSON) or as
+        # KeyError/AttributeError from Event construction (e.g. a signed body
+        # that isn't an event object at all).
+        logger.error(f"Stripe webhook payload could not be parsed: {e}")
+        raise ValidationError(
+            "Webhook body is not a valid Stripe event",
+            error_code="INVALID_WEBHOOK_PAYLOAD",
+        )
 
 
 @router.post("/stripe", summary="Stripe webhook", description="Handle Stripe webhook events. Currently processes payment_intent.succeeded to credit user wallets idempotently.")
@@ -50,29 +77,14 @@ async def stripe_webhook(
 ):
     payload = await request.body()
 
-    try:
-        event = await verify_stripe_signature(
-            payload, stripe_signature or "", settings.stripe_webhook_secret
-        )
-    except ValidationError:
-        raise HTTPException(status_code=401, detail="Invalid Stripe signature")
+    # Raises UnauthorizedError (401) / ValidationError (422) — handled globally.
+    event = await verify_stripe_signature(
+        payload, stripe_signature or "", settings.stripe_webhook_secret
+    )
 
     # stripe.Event is a dict-like object
     event_type = event.get("type", "")
-    event_id = event.get("id", "")
     data = event.get("data", {}).get("object", {})
-
-    # Event-level dedup: if same Stripe event.id delivered twice
-    if event_id:
-        existing_event = await db.execute(
-            select(Transaction).where(
-                Transaction.reference_id == event_id,
-                Transaction.reference_type == "stripe_event",
-            )
-        )
-        if existing_event.scalar_one_or_none():
-            logger.info(f"Stripe event already processed: {event_id}")
-            return success_response({"status": "already_processed"})
 
     if event_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id", "")
@@ -87,6 +99,19 @@ async def stripe_webhook(
         if not user_id:
             logger.warning(f"Stripe webhook: no user_id in metadata for PI {payment_intent_id}")
             return success_response({"status": "ignored"})
+
+        # Idempotency: deposits carry a partial unique index on reference_id, so a
+        # redelivered payment intent can never double-credit. Check before taking
+        # the wallet lock so redeliveries don't even try to insert.
+        already = await db.execute(
+            select(Transaction).where(
+                Transaction.reference_id == payment_intent_id,
+                Transaction.type == "deposit",
+            )
+        )
+        if already.scalar_one_or_none():
+            logger.info(f"Stripe deposit already processed: {payment_intent_id}")
+            return success_response({"status": "already_processed"})
 
         # Credit wallet — lock row to prevent concurrent webhook double-credit
         wallet_result = await db.execute(

@@ -1,7 +1,7 @@
 export const metadata = {
   title: "Documentation",
   description:
-    "PredictX developer documentation and API reference. Integrate with our trading API and building on top of the platform.",
+    "Polymarket developer documentation and API reference. Integrate with our trading API and building on top of the platform.",
 }
 
 const resources = [
@@ -9,14 +9,14 @@ const resources = [
     href: "https://docs.predictx.io",
     label: "API Reference",
     description:
-      "Full API reference for the PredictX trading engine. Endpoints, authentication, rate limits, and request/response schemas.",
+      "Full API reference for the Polymarket trading engine. Endpoints, authentication, rate limits, and request/response schemas.",
     external: true,
   },
   {
     href: "/faq",
     label: "Frequently Asked Questions",
     description:
-      "Common questions about PredictX — trading, market resolution, fees, account management, and more.",
+      "Common questions about Polymarket — trading, market resolution, fees, account management, and more.",
   },
   {
     href: "/support",
@@ -32,7 +32,7 @@ export default function DocsPage() {
       <div className="mb-12">
         <h1 className="text-2xl font-bold tracking-tight">Documentation</h1>
         <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
-          Integrate with the PredictX API and build on top of the platform.
+          Integrate with the Polymarket API and build on top of the platform.
         </p>
       </div>
 

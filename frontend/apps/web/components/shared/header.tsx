@@ -97,7 +97,7 @@ export default function Header() {
         <div className="flex items-center gap-4 flex-1 min-w-0">
           <Link href="/" className="flex items-center gap-2 font-bold tracking-wide shrink-0">
             <PolygonIcon />
-            <span>PredictX</span>
+            <span>Polymarket</span>
           </Link>
           <div className="relative w-full max-w-xs">
             <SearchInput />

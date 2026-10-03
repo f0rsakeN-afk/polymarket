@@ -176,39 +176,61 @@ idx_markets_slug           ON markets(slug) UNIQUE
 
 ---
 
-## AMM Engine
+## AMM Engine (`app/amm/engine.py`)
 
-### Constant Product Formula
+### Price model — share-ratio, not x·y = k
+
 ```
-x × y = k  (x = YES shares, y = NO shares)
-
-price(YES) = y / (x + y) = 1 - price(NO)
-```
-
-### Trade Execution
-
-**Buy YES shares:**
-```
-User pays collateral → YES pool increases → NO pool decreases proportionally
-fee = collateral × fee_rate (2%)
-shares_out = NO_pool - (k / (YES_pool + collateral_after_fee))
+price(YES) = yes_shares / (yes_shares + no_shares)
+price(NO)  = no_shares  / (yes_shares + no_shares)   # the two always sum to 1
 ```
 
-**Sell YES shares:**
+Prices are a **ratio of the pool's two share reserves**, so `p(YES) + p(NO) = 1` by
+construction — which is exactly what the split/merge primitives need, since 1 USDC mints one
+YES + one NO pair. There is deliberately **no `x*y = k` invariant**: a buy only ever grows one
+side, so for `k` to be preserved the other side would have to shrink, which the operation never
+does. `yes_shares * no_shares` rises on a buy and falls on a sell. The invariant the engine
+actually defends is the **no-arbitrage** one (below). See `docs/trading-engine.md` for the full
+derivation.
+
+### Trade execution
+
+**Buy `C` USDC of an outcome** (reserve `R`, total `T = R + other side`, fee `f`):
 ```
-User sells shares → YES pool decreases → NO pool increases
-fee = collateral_out × fee_rate
-collateral_out = NO_pool - (k / (YES_pool - shares_in))
+fee            = C * f
+C_net          = C - fee
+shares_out     = (C_net - R + sqrt((R - C_net)^2 + 4 * C_net * T)) / 2     # positive root
+R             += shares_out
+```
+Shares are solved so the buyer pays the **post-trade price on every share** — i.e. price impact
+is charged, not ignored. Charge the pre-trade spot price instead (the old behaviour) and a
+buy→sell loop returns *more* than it cost: anyone could drain the pool.
+
+**Sell `S` shares** (credited at the **pre-trade** price, `f` = fee rate):
+```
+collateral_out = S * (R / T) * (1 - f)
+fee            = collateral_out * f / (1 - f)
+R             -= S
 ```
 
-### LP Mechanics
-- LP deposits equal value of YES and NO shares
-- LP tokens = proportional share of total pool
-- LP earns 2% fee on all trades (distributed proportionally)
-- Impermanent loss: documented, minimized by binary market structure
+**Invariant:** because buys are charged at the post-trade price and sells are credited at the
+pre-trade price (both the adverse side for the trader), any round trip returns exactly
+`(1 - f)^2` of the input. At the default 2% fee that is 96.04% — the fee is the only thing a
+round trip can cost, and profit from it is impossible. Enforced by
+`tests/test_amm.py::test_round_trip_returns_only_fees`.
 
-### Atomic Execution
-AMM state updates run via Redis Lua script for atomicity under concurrent load.
+### LP mechanics
+- LP deposits USDC; the pool mints `amount * 2` LP tokens on first deposit, pro-rata after
+  (`liquidity_service.py`), and an equal split of shares is added to both reserves.
+- LP tokens are a claim on the **winning side's share reserve** at settlement
+  (`tasks.py:893`), i.e. LPs bear outcome risk, not just fee income.
+- Fees accrue to `pool.protocol_fees` and are swept to the treasury at settlement.
+
+### Atomic execution
+AMM state updates are **not** Redis-Lua — they are ordinary `Decimal` mutations performed inside
+the same database transaction as the rest of the order, under the market → pool → wallet →
+position lock order (`order_service.py`). Concurrency safety comes from those row locks plus
+`SKIP LOCKED` on the book, not from Redis.
 
 ---
 
@@ -216,23 +238,33 @@ AMM state updates run via Redis Lua script for atomicity under concurrent load.
 
 | Type | Description |
 |------|-------------|
-| **market** | Hits AMM immediately at current price |
-| **limit** | Posts to order book, waits for counterparty |
-| **fill_or_kill** | Must fill immediately or cancel |
+| **market** | Match against the book first, then take whatever is left from the AMM immediately |
+| **limit** | Match if the book/AMM price is at or better than the limit; otherwise **rest** in the book |
+| **fill_or_kill** | Must fill the entire amount in one shot or nothing is created (raises `ORDER_NOT_FILLABLE`) |
 
-### Market Order Flow
-1. Validate wallet balance
-2. Lock collateral in wallet (DB row lock)
-3. Execute AMM trade atomically
-4. Create/update Position record
-5. Record Transaction
-6. Broadcast fill via WebSocket
+Related flags: `post_only` (reject rather than cross the spread) and `max_slippage` (reject the
+AMM leg if the effective price is worse than expected by more than the tolerance, 0–10%).
 
-### Limit Order Flow
-1. Validate wallet balance for potential fills
-2. Check if AMM price crosses limit → fill against AMM if better
-3. Else add to order book
-4. Return order with status (filled/pending/partial)
+**Units** (this is the single most misread part of the code): `amount` is a **USDC budget for a
+BUY** and a **share count for a SELL**. `Order.remaining_amount` follows the same convention —
+USDC left for buys, shares left for sells. Every comparison in the engine converts accordingly.
+
+### Market order flow (`order_service.execute_order`)
+1. Lock **market → pool → wallet** in that fixed order (deadlock-free serialization point).
+2. `client_order_id` idempotency check inside the lock (plus a UNIQUE index as backstop).
+3. Balance/holding guard: buys need `amount` free USDC, sells need `amount` shares held.
+4. `MatchingEngine.match_order_against_book()` — price-time priority, `SKIP LOCKED`, maker price.
+5. Compute the remainder and take it from the AMM at the current pool price (impact-aware).
+6. Slippage / `post_only` / FOK checks, then persist order + positions + **trades** (book legs
+   and the AMM leg both write `Trade` rows) + wallet + market volume in **one transaction**.
+7. Publish `trade` / `price_update` over Redis pub/sub → every server instance → its sockets.
+
+### Limit order flow
+1. Same locking + book match (only if the book price already crosses the limit).
+2. If the AMM price is at or better than the limit, fill the remainder there.
+3. Otherwise the order **rests** with `status = pending` and `remaining_amount` = full budget;
+   `check-limit-order-execution` (Celery beat, 30 s) re-tests resting orders against the current
+   AMM price, and `expire-stale-orders` frees the locked balance when a market closes.
 
 ---
 

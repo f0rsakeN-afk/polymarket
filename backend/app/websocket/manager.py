@@ -19,6 +19,11 @@ import logging
 import time
 from collections import defaultdict
 
+import redis.asyncio as redis
+from fastapi import WebSocket
+
+from app.redis import get_redis, redis_cb
+
 # Bound concurrent broadcast tasks to avoid OOM at 5k msg/s (H9 fix)
 _broadcast_sem = asyncio.Semaphore(200)
 
@@ -27,11 +32,6 @@ async def _bounded_broadcast(coro):
     async with _broadcast_sem:
         return await coro
 
-
-import redis.asyncio as redis
-from fastapi import WebSocket
-
-from app.redis import get_redis, redis_cb
 
 logger = logging.getLogger("polymarket")
 

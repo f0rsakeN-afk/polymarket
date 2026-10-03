@@ -64,8 +64,6 @@ async def create_deposit(
 
     stripe.api_key = settings.stripe_secret_key
 
-    stripe.api_key = settings.stripe_secret_key
-
     # Decimal-safe cents conversion — quantize to 2dp with HALF_UP, then to int
     cents = int(
         (data.amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100).to_integral_value(

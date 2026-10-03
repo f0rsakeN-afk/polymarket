@@ -3,9 +3,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, Request, Response
 from jose import JWTError, jwt
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import ForbiddenError, UnauthorizedError
@@ -55,14 +54,55 @@ async def cache_invalidate_pattern(pattern: str):
             break
 
 
+def _bcrypt_input(password: str) -> bytes:
+    """Normalise a password to ≤72 bytes for bcrypt.
+
+    bcrypt only reads the first 72 bytes of input: longer input used to raise
+    (`ValueError: password cannot be longer than 72 bytes`) — which made
+    registration with a long password a 500, and made *first-ever settlement*
+    crash, because the system treasury account derives its password hash from
+    `jwt_secret + 32 random bytes` (well over 72 bytes). Pre-hashing keeps the
+    full entropy of long secrets while staying inside the limit; silently
+    truncating instead would make every long password sharing its first 72
+    bytes collide. Passwords ≤72 bytes are untouched, so every existing hash
+    still verifies.
+    """
+    raw = password.encode()
+    if len(raw) <= 72:
+        return raw
+    import hashlib
+
+    return hashlib.sha256(raw).hexdigest().encode()
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     if not hashed:
         return False
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+
+
+_DUMMY_PASSWORD_HASH: str | None = None
+
+
+def dummy_password_hash() -> str:
+    """Cached bcrypt hash of a throwaway secret, generated on first use.
+
+    Used when an email is not registered so that an unknown-user login costs
+    the same ~100 ms of bcrypt work as a known-user login. Without it, a
+    fast response means "no such account" — a reliable user-enumeration
+    oracle. Generated lazily (never at import) and cached: the value is
+    meaningless, it only exists to be slow.
+    """
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        import secrets as _secrets
+
+        _DUMMY_PASSWORD_HASH = hash_password(_secrets.token_urlsafe(32))
+    return _DUMMY_PASSWORD_HASH
 
 
 def create_access_token(
@@ -129,6 +169,66 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         raise
 
 
+async def _validate_session(db: AsyncSession, payload: dict, user: User) -> None:
+    """Reject the token unless its session is alive.
+
+    An access token is only valid for the session it was minted for: the `sid`
+    claim names that row. This is what makes revocation exact — `logout` and
+    `DELETE /auth/sessions/{id}` kill that device's tokens immediately, and
+    `logout-all` kills every device's, instead of the token surviving as long
+    as some other session of the same user is still alive. Expiry is checked
+    against the session too, not just against the 15-minute JWT.
+    """
+    sid = payload.get("sid")
+    if not sid:
+        raise UnauthorizedError("Token is not bound to a session")
+
+    session = await db.get(Session, sid)
+    if session is None or session.user_id != user.id:
+        raise UnauthorizedError("Session not found")
+    if session.revoked:
+        raise UnauthorizedError("Session has been revoked")
+    if session.expires_at <= datetime.now(UTC):
+        raise UnauthorizedError("Session expired")
+
+
+async def _load_user(db: AsyncSession, payload: dict) -> User:
+    """Shared token → user resolution for both required and optional auth.
+
+    Raises UnauthorizedError / ForbiddenError; callers decide whether to
+    propagate (required auth) or treat as anonymous (optional auth).
+    """
+    sub = payload.get("sub")
+    if not sub:
+        raise UnauthorizedError("Invalid token")
+    if payload.get("type") != "access":
+        raise UnauthorizedError("Invalid token type")
+
+    jti = payload.get("jti")
+    if jti and await is_token_blacklisted(jti):
+        raise UnauthorizedError("Token has been revoked")
+
+    user = await db.get(User, sub)
+    if not user:
+        raise UnauthorizedError("User not found")
+    if not user.is_active:
+        raise ForbiddenError("Account is inactive")
+
+    await _validate_session(db, payload, user)
+    return user
+
+
+async def authenticate_token(db: AsyncSession, token: str) -> User:
+    """Decode + fully validate a raw token string.
+
+    Identical to the HTTP auth path: JWT decode, token type, jti blacklist,
+    user active, session binding. Websocket routes call this so that a
+    revoked/blacklisted/logged-out token is rejected on the upgrade handshake
+    too, instead of only at issue time.
+    """
+    return await _load_user(db, decode_token(token))
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -141,28 +241,7 @@ async def get_current_user(
     if not token:
         raise UnauthorizedError("No access token provided")
 
-    payload = decode_token(token)
-    if payload.get("type") != "access":
-        raise UnauthorizedError("Invalid token type")
-
-    jti = payload.get("jti")
-    if jti and await is_token_blacklisted(jti):
-        raise UnauthorizedError("Token has been revoked")
-
-    user = await db.get(User, payload["sub"])
-    if not user:
-        raise UnauthorizedError("User not found")
-    if not user.is_active:
-        raise ForbiddenError("Account is inactive")
-    # Also check if all of the user's sessions have been revoked.
-    # This ensures logout_all invalidates tokens from all sessions,
-    # not just the one whose cookie is present in the current request.
-    sessions = await db.execute(
-        select(Session).where(Session.user_id == user.id, Session.revoked.is_(False))
-    )
-    if not sessions.scalars().first():
-        raise UnauthorizedError("All sessions have been revoked")
-    return user
+    return await _load_user(db, decode_token(token))
 
 
 async def get_optional_user(
@@ -177,18 +256,10 @@ async def get_optional_user(
         return None
 
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            return None
-        jti = payload.get("jti")
-        if jti and await is_token_blacklisted(jti):
-            return None
-        user = await db.get(User, payload["sub"])
-        if user and user.is_active:
-            return user
-    except HTTPException:
-        pass
-    return None
+        return await _load_user(db, decode_token(token))
+    except (UnauthorizedError, ForbiddenError):
+        # Optional auth: a bad/expired/revoked token is anonymous, not an error.
+        return None
 
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str | None = None):

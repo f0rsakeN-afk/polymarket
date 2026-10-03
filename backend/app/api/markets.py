@@ -16,10 +16,16 @@ from app.api.exceptions import (
 from app.api.responses import success_response
 from app.config import settings
 from app.database import get_db, get_db_replica
-from app.deps import get_current_user
+from app.deps import get_current_user, get_optional_user
 from app.models.faq import MarketFAQ
-from app.models.liquidity import LiquidityPool
-from app.models.market import Market, Outcome
+from app.models.liquidity import LiquidityPool, LPShare
+from app.models.market import (
+    STATUS_ACTIVE,
+    STATUS_PENDING_REVIEW,
+    UNPUBLISHED_STATUSES,
+    Market,
+    Outcome,
+)
 from app.models.position import Position
 from app.models.wallet import Transaction, Wallet
 from app.redis import get_redis
@@ -91,6 +97,15 @@ async def list_markets(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
+    # Visibility gate first — it must run before the shared cache is read, or a
+    # cached moderator view could be served to an anonymous caller.
+    if status and status in UNPUBLISHED_STATUSES:
+        raise ValidationError(
+            f"Status '{status}' is not available on the public catalogue; "
+            "use GET /api/v1/admin/markets",
+            error_code="STATUS_NOT_PUBLIC",
+        )
+
     # Cache key no longer includes page/page_size when cursor is used
     if cursor:
         cache_key = f"{q or ''}:{category or ''}:{status or ''}:{sort}"
@@ -119,6 +134,10 @@ async def list_markets(
             base = base.where(Market.question.ilike(f"%{safe_q}%", escape="\\"))
     if status:
         base = base.where(Market.status == status)
+    else:
+        # No filter → the public catalogue: hide markets awaiting review (and
+        # rejected ones) unless the caller explicitly asked for a status above.
+        base = base.where(Market.status.notin_(UNPUBLISHED_STATUSES))
     if category:
         base = base.where(Market.category == category)
 
@@ -231,11 +250,19 @@ async def list_categories(db: AsyncSession = Depends(get_db_replica)):
 
 
 @router.get("/{slug}")
-async def get_market(slug: str, db: AsyncSession = Depends(get_db_replica)):
+async def get_market(slug: str, request: Request, db: AsyncSession = Depends(get_db_replica)):
     result = await db.execute(select(Market).where(Market.slug == slug))
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
+
+    # Unpublished markets (pending review / rejected) are only readable by the
+    # user who submitted them and by admins — and 404 rather than 403 for
+    # everyone else, so the existence of unpublished submissions isn't leaked.
+    if market.status in UNPUBLISHED_STATUSES:
+        viewer = await get_optional_user(request, db)
+        if viewer is None or (not viewer.is_admin and viewer.id != market.created_by):
+            raise NotFoundError(f"Market '{slug}' not found")
 
     # Check cache using market_id
     cached = await cache_get_market(str(market.id))
@@ -291,8 +318,11 @@ async def create_market(
     data: CreateMarketRequest, request: Request, db: AsyncSession = Depends(get_db)
 ):
     user = await get_current_user(request, db)
+    # Anyone with a verified email may submit a market; it lands in
+    # pending_review and only becomes visible/tradable once an admin approves
+    # it. Admins bypass the review queue.
     if not user.is_admin and not user.is_email_verified:
-        raise ForbiddenError("Only admins or email-verified users can create markets")
+        raise ForbiddenError("Verify your email before creating markets")
 
     if data.closes_at <= datetime.now(UTC):
         raise ValidationError("closes_at must be in the future")
@@ -310,7 +340,7 @@ async def create_market(
         description=data.description,
         category=data.category,
         created_by=user.id,
-        status="active",
+        status=STATUS_ACTIVE if user.is_admin else STATUS_PENDING_REVIEW,
         closes_at=data.closes_at,
     )
     db.add(market)
@@ -353,21 +383,47 @@ async def create_market(
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
             if data.initial_probability is not None:
-                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
-                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                # price(YES) = yes_shares / (yes_shares + no_shares), so the
+                # YES side must be seeded with `initial_probability` of the
+                # collateral — the inverse (the old behaviour) made a market
+                # created at 0.70 open at 0.30.
+                p = Decimal(str(data.initial_probability))
+                yes_shares = amount_dec * p
+                no_shares = amount_dec * (Decimal(1) - p)
                 pool.yes_shares += yes_shares
                 pool.no_shares += no_shares
             else:
                 half = amount_dec / Decimal(2)
                 pool.yes_shares += half
                 pool.no_shares += half
-            pool.collateral += amount_dec
+            pool.credit_collateral(amount_dec)
             pool.lp_token_supply = amount_dec * Decimal(2)
+            # The seeding wallet is the pool's first LP. Mint its shares so
+            # `lp_token_supply == sum(lp_shares.lp_tokens)` holds for
+            # API-created markets too (it previously didn't — the supply was
+            # set with no holder, locking the seed away forever) and the
+            # creator earns/exits like any other LP.
+            db.add(
+                LPShare(
+                    pool_id=pool.id,
+                    user_id=user.id,
+                    lp_tokens=amount_dec * Decimal(2),
+                    collateral_deposited=amount_dec,
+                )
+            )
+            market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount_dec
 
     await db.commit()
-    logger.info(f"Market created: {data.slug} by admin={user.id}")
+    logger.info(f"Market created: {data.slug} by user={user.id} status={market.status}")
     await cache_invalidate_market_lists()
-    return success_response({"slug": data.slug, "id": str(market.id)}, message="Market created")
+    return success_response(
+        market_to_response(market).model_dump(),
+        message=(
+            "Market created"
+            if market.status == STATUS_ACTIVE
+            else "Market submitted — pending admin approval"
+        ),
+    )
 
 
 @router.get("/{slug}/faqs")
@@ -520,7 +576,14 @@ async def resolve_market_endpoint(
     if not user.is_admin:
         raise ForbiddenError("Only admins can resolve markets")
 
-    result = await db.execute(select(Market).where(Market.slug == slug))
+    # Lock the market row: the settlement worker takes the same lock, and this
+    # request enqueues that worker *before* it commits. Holding the row lock
+    # across enqueue→commit means the worker can only read this request's
+    # writes after they land — so it can never race ahead and have its
+    # `status = "resolved"` clobbered by this transaction's later write.
+    result = await db.execute(
+        select(Market).where(Market.slug == slug).with_for_update()
+    )
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
@@ -612,6 +675,14 @@ async def claim_winnings(
     if not market.winning_outcome_id:
         raise ValidationError("Market has no winning outcome set")
 
+    # Lock the pool escrow under the canonical order (Market → Pool →
+    # Position → Wallet) — settlement takes the same locks in this sequence,
+    # so a claim racing the Celery settle serialises instead of deadlocking.
+    pool_result = await db.execute(
+        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+    )
+    pool = pool_result.scalar_one_or_none()
+
     # Idempotency: check settled_at before any write. SETNX on the DB row is the
     # authoritative guard — if two requests race here, only one wins.
     pos_result = await db.execute(
@@ -639,6 +710,25 @@ async def claim_winnings(
     payout = Decimal(str(winning_pos.shares_held))
     if payout <= 0:
         raise ValidationError("No winnings to claim", error_code="NOTHING_TO_CLAIM")
+
+    # The claim is *funded* from the pool escrow, not minted (single-entry
+    # ledger). All-or-nothing: paying 10 of a 40-share claim would consume the
+    # position (settled_at, shares_held = 0) for less than it is worth, so a
+    # shortfall refuses instead — the position stays claimable and an ops top-up
+    # makes it succeed on retry.
+    escrow_paid = pool.debit_collateral(payout, allow_shortfall=True) if pool else payout
+    if escrow_paid < payout:
+        logger.error(
+            f"Claim escrow shortfall: market={slug} user={user.id} "
+            f"owed={payout} paid={escrow_paid} pool_collateral={pool.collateral if pool else 'n/a'}"
+        )
+        raise ValidationError(
+            "This claim cannot be paid in full right now — the market escrow is "
+            "underfunded. Your position is untouched; try again later or "
+            "contact support.",
+            error_code="ESCROW_INSUFFICIENT",
+        )
+    payout = escrow_paid
 
     # Mark as settled atomically — prevents double-claim on client retry
     winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))

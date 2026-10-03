@@ -7,7 +7,6 @@ import "sileo/styles.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Providers } from "@/components/providers"
 import { Toaster } from "@/components/toaster"
-import { Toaster as SonnerToaster } from "sonner"
 import { AppCommandMenu } from "@/components/shared/app-command-menu"
 import { cn } from "@workspace/ui/lib/utils"
 import { config } from "@/lib/config"
@@ -24,11 +23,11 @@ const baseUrl = config.siteUrl
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: "PredictX — Decentralized Prediction Markets",
-    template: "%s | PredictX",
+    default: "Polymarket — Decentralized Prediction Markets",
+    template: "%s | Polymarket",
   },
   description:
-    "Trade on real-world outcomes with PredictX — a decentralized prediction market platform. Create positions on politics, sports, crypto, finance, and more.",
+    "Trade on real-world outcomes with Polymarket — a decentralized prediction market platform. Create positions on politics, sports, crypto, finance, and more.",
   keywords: [
     "prediction market",
     "decentralized exchange",
@@ -38,9 +37,9 @@ export const metadata: Metadata = {
     "real world assets",
     "trading platform",
   ],
-  authors: [{ name: "PredictX" }],
-  creator: "PredictX",
-  publisher: "PredictX",
+  authors: [{ name: "Polymarket" }],
+  creator: "Polymarket",
+  publisher: "Polymarket",
   robots: {
     index: true,
     follow: true,
@@ -56,18 +55,18 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: baseUrl,
-    siteName: "PredictX",
-    title: "PredictX — Decentralized Prediction Markets",
+    siteName: "Polymarket",
+    title: "Polymarket — Decentralized Prediction Markets",
     description:
       "Trade on real-world outcomes. Create positions on politics, sports, crypto, finance, and more.",
-    images: [{ url: "/api/og", width: 1200, height: 630, alt: "PredictX" }],
+    images: [{ url: "/api/og", width: 1200, height: 630, alt: "Polymarket" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "PredictX — Decentralized Prediction Markets",
+    title: "Polymarket — Decentralized Prediction Markets",
     description: "Trade on real-world outcomes. Create positions on politics, sports, crypto, finance, and more.",
     images: ["/api/og"],
-    creator: "@PredictX",
+    creator: "@Polymarket",
   },
   alternates: {
     canonical: baseUrl,
@@ -94,7 +93,6 @@ export default function RootLayout({
         <ThemeProvider>
           <Providers>
             <Toaster />
-            <SonnerToaster position="top-right" richColors />
             <AppCommandMenu />
             <a
               href="#main-content"

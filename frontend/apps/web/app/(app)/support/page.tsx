@@ -3,7 +3,7 @@ import Link from "next/link"
 export const metadata = {
   title: "Support",
   description:
-    "Get help with your PredictX account, trading, and platform questions.",
+    "Get help with your Polymarket account, trading, and platform questions.",
 }
 
 export default function SupportPage() {
@@ -12,7 +12,7 @@ export default function SupportPage() {
       <div className="mb-12">
         <h1 className="text-2xl font-bold tracking-tight">Support</h1>
         <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
-          Get help with your PredictX account, trading, and platform questions.
+          Get help with your Polymarket account, trading, and platform questions.
         </p>
       </div>
 
@@ -69,7 +69,7 @@ export default function SupportPage() {
               FAQ
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Common questions about PredictX — trading, market resolution,
+              Common questions about Polymarket — trading, market resolution,
               fees, and more.
             </p>
           </div>

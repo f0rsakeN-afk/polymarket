@@ -1,5 +1,5 @@
 #!/bin/bash
-# ─── PredictX Backend Start Script ────────────────────────────────────────────
+# ─── Polymarket Backend Start Script ────────────────────────────────────────────
 # Starts all local services. Postgres/Redis are expected to be in Docker.
 # Usage: ./start.sh
 
@@ -76,7 +76,7 @@ start_beat() {
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
-log "PredictX backend starting..."
+log "Polymarket backend starting..."
 start_docker_services
 start_api
 sleep 3
@@ -88,8 +88,8 @@ log "All services started!"
 echo ""
 echo -e "  ${CYAN}API${RESET}    http://localhost:8000"
 echo -e "  ${CYAN}Docs${RESET}   http://localhost:8000/docs"
-echo -e "  ${CYAN}Redis${RESET}  Docker (port 6382)"
-echo -e "  ${CYAN}PG${RESET}     Docker (port 5432)"
+echo -e "  ${CYAN}Redis${RESET}  Docker (port 6380, per .env)"
+echo -e "  ${CYAN}PG${RESET}     Docker (port 5433, per .env)"
 echo -e "  ${CYAN}Logs${RESET}   $LOG_DIR/{api,worker,beat}.log"
 echo ""
 info "Press Ctrl+C to stop API + workers"

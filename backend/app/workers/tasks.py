@@ -293,6 +293,9 @@ def check_limit_order_execution(self):
                                          continue
                                      quote = amm.buy(outcome.name.lower(), remaining)
                                      wallet.balance -= remaining
+                                     # Escrow the spend: it funds the shares the
+                                     # AMM just minted (single-entry ledger).
+                                     pool.credit_collateral(remaining)
                                      amm_shares = quote.shares_out
                                      amm_price_val = quote.price
                                      amm_fee = quote.fee
@@ -356,6 +359,9 @@ def check_limit_order_execution(self):
                                      pos.shares_held -= remaining
                                      pos.realized_pnl += realized_pnl
                                      wallet.balance += sell_proceeds_amm
+                                     # Shares in, dollars out of the escrow.
+                                     # Strict: a shortfall rolls the fill back.
+                                     pool.debit_collateral(sell_proceeds_amm)
                                      amm_shares = remaining
                                      amm_price_val = quote.price
                                      amm_fee = quote.fee
@@ -472,6 +478,19 @@ def check_limit_order_execution(self):
                         except Exception:
                             pass
 
+                        # These fills moved the price again, so an order the
+                        # current sweep already passed over may now be
+                        # fillable. Re-arm the sweep instead of leaving that
+                        # cascade for the next 30s beat tick — throttled to
+                        # one enqueue per second, so it cannot loop hot.
+                        try:
+                            from app.services.order_service import (
+                                _enqueue_limit_sweep_now,
+                            )
+                            await _enqueue_limit_sweep_now()
+                        except Exception:
+                            pass
+
                 return f"Executed {executed}/{len(orders)} limit orders"
 
         result = celery_run(_run())
@@ -500,6 +519,7 @@ def sync_amm_prices(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             from app.models import LiquidityPool, Market
@@ -578,6 +598,7 @@ def snapshot_price_history(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             async with get_session() as db:
@@ -707,6 +728,264 @@ def check_markets_ready_to_resolve(self):
     return result
 
 
+async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = "") -> str:
+    """Settle one market: pay winners from escrow, sweep protocol fees, redeem LP shares.
+
+    Module-level coroutine rather than a nested `_run()` so it can be awaited
+    directly on the caller's event loop — Celery's `celery_run()` needs a
+    thread with no running loop, which never exists inside an async test.
+    """
+    async with get_session() as db:
+        from app.redis import get_redis
+        r = await get_redis()
+
+        # Finished-marker — written only after a successful settlement
+        # commit. Status can't be used as the "already settled" signal:
+        # both enqueueing callers set `resolving`/`resolved` *before*
+        # the worker starts, which is exactly why the old guard
+        # (`if status in ("resolving", "resolved"): return`) skipped
+        # every single settlement — winners were never credited, LP
+        # shares were never redeemed, protocol fees were never swept,
+        # and markets stayed in "resolving" where claim_winnings
+        # refuses to pay (it requires "resolved").
+        if await r.exists(f"resolve_done:{market_id}"):
+            return f"Market {market_id} already settled"
+
+        # Lock market row to prevent concurrent resolution
+        market_result = await db.execute(
+            select(Market).where(Market.id == market_id).with_for_update()
+        )
+        market = market_result.scalar_one_or_none()
+        if not market:
+            return f"Market {market_id} not found"
+
+        # Settle only against the outcome recorded on the market row.
+        # A stale delivery (market re-resolved through the dispute
+        # flow) must not settle against a superseded proposal.
+        if not market.winning_outcome_id:
+            return f"Market {market_id} has no winning outcome — refusing to settle"
+        if str(market.winning_outcome_id) != str(winning_outcome_id):
+            logger.warning(json.dumps({
+                "event": "settlement_outcome_mismatch",
+                "market_id": market_id,
+                "expected": str(winning_outcome_id),
+                "recorded": str(market.winning_outcome_id),
+            }))
+            return f"Market {market_id} outcome mismatch — stale settlement task dropped"
+
+        pool_result = await db.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+        )
+        pool = pool_result.scalar_one_or_none()
+
+        # Get or create system treasury user with row lock to prevent concurrent creation.
+        # System users use a cryptographically random password_hash derived from
+        # the application's JWT secret — they cannot be used for human authentication.
+        treasury_result = await db.execute(
+            select(User).where(User.is_system).with_for_update().limit(1)
+        )
+        treasury_user = treasury_result.scalar_one_or_none()
+        if not treasury_user:
+            system_secret = settings.jwt_secret + str(secrets.token_hex(32))
+            treasury_user = User(
+                email="treasury@system",
+                username="treasury",
+                password_hash=hash_password(system_secret),
+                is_system=True,
+                is_active=True,
+            )
+            db.add(treasury_user)
+            await db.flush()
+
+        # Get or create treasury wallet
+        treasury_wallet_result = await db.execute(
+            select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
+        )
+        treasury_wallet = treasury_wallet_result.scalar_one_or_none()
+        if not treasury_wallet:
+            treasury_wallet = Wallet(
+                user_id=treasury_user.id,
+                balance=Decimal(0),
+                locked_balance=Decimal(0),
+                currency="USDC",
+            )
+            db.add(treasury_wallet)
+            await db.flush()
+
+        # Settle positions — lock only unsettled rows to prevent double settlement with claim_winnings (C9 fix)
+        pos_result = await db.execute(
+            select(Position)
+            .where(Position.market_id == market.id, Position.settled_at.is_(None))
+            .with_for_update()
+        )
+        positions = pos_result.scalars().all()
+
+        # Batch-fetch all wallets upfront — O(1) query vs O(n) inside the loop
+        user_ids = list({str(p.user_id) for p in positions})
+        if user_ids:
+            wallets_result = await db.execute(
+                select(Wallet).where(Wallet.user_id.in_(user_ids)).with_for_update()
+            )
+            wallet_map = {str(w.user_id): w for w in wallets_result.scalars().all()}
+        else:
+            wallet_map = {}
+
+        winners_credited = 0
+        for pos in positions:
+            # Extra guard: skip if raced with claim_winnings (defense in depth)
+            if pos.settled_at is not None:
+                continue
+            wallet = wallet_map.get(str(pos.user_id))
+            if not wallet:
+                continue
+
+            is_winner = str(pos.outcome_id) == winning_outcome_id
+            # Use Decimal throughout to avoid float rounding — convert to float only at DB write
+            payout: Decimal = pos.shares_held if is_winner else Decimal(0)
+
+            # Winners are paid out of the pool escrow — funded, never
+            # minted (single-entry ledger). A shortfall is an invariant
+            # violation: pay what the escrow covers and shout, rather
+            # than driving collateral negative or failing the settle.
+            if payout > 0 and pool is not None:
+                escrow_paid = pool.debit_collateral(payout, allow_shortfall=True)
+                if escrow_paid < payout:
+                    logger.error(json.dumps({
+                        "event": "settlement_escrow_shortfall",
+                        "market_id": str(market.id),
+                        "owed": float(payout),
+                        "paid": float(escrow_paid),
+                        "remaining_collateral": float(pool.collateral),
+                    }))
+                payout = escrow_paid
+
+            # Mark as settled — prevents double-claim if claim_winnings is called after Celery settles
+            pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
+
+            if payout > 0:
+                wallet.balance += payout
+                pos.realized_pnl += payout
+                tx = Transaction(
+                    user_id=pos.user_id,
+                    wallet_id=wallet.id,
+                    type="settlement_win",
+                    amount=payout,
+                    balance_after=wallet.balance,
+                    reference_id=str(market.id),
+                    reference_type="market_settlement",
+                    status="completed",
+                )
+            else:
+                tx = Transaction(
+                    user_id=pos.user_id,
+                    wallet_id=wallet.id,
+                    type="settlement_loss",
+                    amount=0,
+                    balance_after=wallet.balance,
+                    reference_id=str(market.id),
+                    reference_type="market_settlement",
+                    status="completed",
+                )
+            db.add(tx)
+            if is_winner:
+                winners_credited += 1
+
+        # Extract protocol fees to treasury before LP redemption.
+        # The sweep is paid out of the escrow too — protocol_fees is a
+        # sub-ledger inside pool.collateral, so removing the claim and
+        # the backing dollars happen together.
+        if pool and pool.protocol_fees > 0:
+            owed_fees = pool.protocol_fees
+            treasury_amount = pool.debit_collateral(owed_fees, allow_shortfall=True)
+            if treasury_amount < owed_fees:
+                logger.error(json.dumps({
+                    "event": "protocol_fee_escrow_shortfall",
+                    "market_id": str(market.id),
+                    "owed": float(owed_fees),
+                    "paid": float(treasury_amount),
+                    "remaining_collateral": float(pool.collateral),
+                }))
+            pool.protocol_fees = Decimal(0)
+            if treasury_amount > 0:
+                treasury_wallet.balance += treasury_amount
+                treasury_tx = Transaction(
+                    user_id=treasury_user.id,
+                    wallet_id=treasury_wallet.id,
+                    type="protocol_fee",
+                    amount=treasury_amount,
+                    balance_after=treasury_wallet.balance,
+                    reference_id=str(market.id),
+                    reference_type="protocol_fee",
+                    status="completed",
+                )
+                db.add(treasury_tx)
+
+        # Settle LP shares — lock rows to prevent concurrent LP redemption
+        # NOTE: runs regardless of protocol_fees — LPs must be credited even on 0-fee markets (C1 fix)
+        if pool:
+            lp_result = await db.execute(
+                select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0).with_for_update()
+            )
+            lp_shares = lp_result.scalars().all()
+
+            # LP redemption: LPs split whatever the escrow still holds
+            # *after* winners and protocol fees — paid in USDC,
+            # pro-rata to their lp_tokens. The old formula handed them
+            # the winning side's reserve shares
+            # (winning_shares / lp_token_supply), which was uncorrelated
+            # with real collateral and could promise more dollars than
+            # the pool held. Because this runs after the debits above,
+            # the value computed here IS the residual. Decimal
+            # throughout.
+            lp_payout_per_token = (
+                pool.collateral / pool.lp_token_supply
+                if pool.lp_token_supply > 0
+                else Decimal(0)
+            )
+
+            for lp in lp_shares:
+                lp_payout = lp.lp_tokens * lp_payout_per_token
+                if lp_payout > 0:
+                    escrow_paid = pool.debit_collateral(lp_payout, allow_shortfall=True)
+                    if escrow_paid < lp_payout:
+                        logger.error(json.dumps({
+                            "event": "lp_escrow_shortfall",
+                            "market_id": str(market.id),
+                            "lp_user_id": str(lp.user_id),
+                            "owed": float(lp_payout),
+                            "paid": float(escrow_paid),
+                        }))
+                    lp_payout = escrow_paid
+                wallet_result = await db.execute(
+                    select(Wallet).where(Wallet.user_id == lp.user_id).with_for_update()
+                )
+                wallet = wallet_result.scalar_one_or_none()
+                if not wallet or lp_payout <= 0:
+                    continue
+                wallet.balance += lp_payout
+                lp.lp_tokens = 0
+                tx = Transaction(
+                    user_id=lp.user_id,
+                    wallet_id=wallet.id,
+                    type="liquidity_removal",
+                    amount=lp_payout,
+                    balance_after=wallet.balance,
+                    reference_id=str(pool.id),
+                    reference_type="lp_settlement",
+                    status="completed",
+                )
+                db.add(tx)
+
+        market.status = "resolved"
+        if market.resolved_at is None:
+            market.resolved_at = datetime.now(UTC)
+        await db.commit()
+        # Completion marker, written only after the settlement
+        # transaction is durable: a redelivered/duplicate task
+        # short-circuits above instead of re-walking the ledger.
+        await r.set(f"resolve_done:{market_id}", "1", ex=60 * 60 * 24 * 30)
+    return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
+
 @shared_task(
     bind=True,
     name="app.workers.tasks.resolve_market",
@@ -728,201 +1007,42 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
         "winning_outcome_id": winning_outcome_id,
     }))
     start = time.perf_counter()
+    lock_acquired = False
+    result = None
     try:
-        async def _run():
-            async with get_session() as db:
-                # Distributed lock: prevent this task from running concurrently with itself
-                # (e.g., broker retry while previous run committed but didn't ack).
-                from app.redis import get_redis
-                r = await get_redis()
-                # NOTE: distinct from the API enqueue dedup key (resolve_enqueue:{id}).
-                # The worker owns this lock; the endpoint must not pre-set it.
-                lock_key = f"resolve_lock:{market_id}"
-                acquired = await r.set(lock_key, self.request.id, nx=True, ex=7200)
-                if not acquired:
-                    return f"Market {market_id} resolution task already running"
+        # ── Exclusive settlement lock ──────────────────────────────────────
+        # One settlement per market at a time. Released in the `finally`
+        # below on success AND on failure: the old code never released it, so
+        # a crash left the lock held for its 2h TTL and every Celery retry hit
+        # "already running", acked, and the market silently never settled.
+        # The real correctness guarantee is DB-side — the market row lock plus
+        # idempotent data (positions carry settled_at, LP shares are zeroed,
+        # protocol fees are swept) — this lock only collapses duplicate work.
+        # NOTE: distinct from the API enqueue dedup key (resolve_enqueue:{id}).
+        from app.redis import get_redis_sync
 
-                # Lock market row to prevent concurrent resolution
-                market_result = await db.execute(
-                    select(Market).where(Market.id == market_id).with_for_update()
-                )
-                market = market_result.scalar_one_or_none()
-                if not market:
-                    return f"Market {market_id} not found"
-                if market.status in ("resolving", "resolved"):
-                    # Already being processed or already settled — skip to prevent double-settlement
-                    return f"Market {market_id} already resolving/resolved (status={market.status})"
+        lock_key = f"resolve_lock:{market_id}"
+        lock_acquired = bool(
+            get_redis_sync().set(lock_key, str(self.request.id or task_id), nx=True, ex=7200)
+        )
+        if not lock_acquired:
+            return f"Market {market_id} resolution task already running"
 
-                # Idempotency gate: mark as resolving BEFORE any writes.
-                # If task crashes mid-settlement and retries, this blocks re-execution.
-                market.status = "resolving"
-                await db.flush()  # Persist immediately so retry sees the guard
 
-                pool_result = await db.execute(
-                    select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-                )
-                pool = pool_result.scalar_one_or_none()
-
-                # Get or create system treasury user with row lock to prevent concurrent creation.
-                # System users use a cryptographically random password_hash derived from
-                # the application's JWT secret — they cannot be used for human authentication.
-                treasury_result = await db.execute(
-                    select(User).where(User.is_system).with_for_update().limit(1)
-                )
-                treasury_user = treasury_result.scalar_one_or_none()
-                if not treasury_user:
-                    system_secret = settings.jwt_secret + str(secrets.token_hex(32))
-                    treasury_user = User(
-                        email="treasury@system",
-                        username="treasury",
-                        password_hash=hash_password(system_secret),
-                        is_system=True,
-                        is_active=True,
-                    )
-                    db.add(treasury_user)
-                    await db.flush()
-
-                # Get or create treasury wallet
-                treasury_wallet_result = await db.execute(
-                    select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()
-                )
-                treasury_wallet = treasury_wallet_result.scalar_one_or_none()
-                if not treasury_wallet:
-                    treasury_wallet = Wallet(
-                        user_id=treasury_user.id,
-                        balance=Decimal(0),
-                        locked_balance=Decimal(0),
-                        currency="USDC",
-                    )
-                    db.add(treasury_wallet)
-                    await db.flush()
-
-                # Get YES outcome for LP redemption
-                yes_outcome_result = await db.execute(
-                    select(Outcome).where(Outcome.market_id == market.id, Outcome.outcome_index == 0)
-                )
-                yes_outcome = yes_outcome_result.scalar_one_or_none()
-
-                # Settle positions — lock only unsettled rows to prevent double settlement with claim_winnings (C9 fix)
-                pos_result = await db.execute(
-                    select(Position)
-                    .where(Position.market_id == market.id, Position.settled_at.is_(None))
-                    .with_for_update()
-                )
-                positions = pos_result.scalars().all()
-
-                # Batch-fetch all wallets upfront — O(1) query vs O(n) inside the loop
-                user_ids = list({str(p.user_id) for p in positions})
-                if user_ids:
-                    wallets_result = await db.execute(
-                        select(Wallet).where(Wallet.user_id.in_(user_ids)).with_for_update()
-                    )
-                    wallet_map = {str(w.user_id): w for w in wallets_result.scalars().all()}
-                else:
-                    wallet_map = {}
-
-                winners_credited = 0
-                for pos in positions:
-                    # Extra guard: skip if raced with claim_winnings (defense in depth)
-                    if pos.settled_at is not None:
-                        continue
-                    wallet = wallet_map.get(str(pos.user_id))
-                    if not wallet:
-                        continue
-
-                    is_winner = str(pos.outcome_id) == winning_outcome_id
-                    # Use Decimal throughout to avoid float rounding — convert to float only at DB write
-                    payout: Decimal = pos.shares_held if is_winner else Decimal(0)
-
-                    # Mark as settled — prevents double-claim if claim_winnings is called after Celery settles
-                    pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
-
-                    if payout > 0:
-                        wallet.balance += payout
-                        pos.realized_pnl += payout
-                        tx = Transaction(
-                            user_id=pos.user_id,
-                            wallet_id=wallet.id,
-                            type="settlement_win",
-                            amount=payout,
-                            balance_after=wallet.balance,
-                            reference_id=str(market.id),
-                            reference_type="market_settlement",
-                            status="completed",
-                        )
-                    else:
-                        tx = Transaction(
-                            user_id=pos.user_id,
-                            wallet_id=wallet.id,
-                            type="settlement_loss",
-                            amount=0,
-                            balance_after=wallet.balance,
-                            reference_id=str(market.id),
-                            reference_type="market_settlement",
-                            status="completed",
-                        )
-                    db.add(tx)
-                    if is_winner:
-                        winners_credited += 1
-
-                # Extract protocol fees to treasury before LP redemption
-                if pool and pool.protocol_fees > 0:
-                    treasury_amount = pool.protocol_fees
-                    treasury_wallet.balance += treasury_amount
-                    pool.protocol_fees = Decimal(0)
-                    treasury_tx = Transaction(
-                        user_id=treasury_user.id,
-                        wallet_id=treasury_wallet.id,
-                        type="protocol_fee",
-                        amount=treasury_amount,
-                        balance_after=treasury_wallet.balance,
-                        reference_id=str(market.id),
-                        reference_type="protocol_fee",
-                        status="completed",
-                    )
-                    db.add(treasury_tx)
-
-                # Settle LP shares — lock rows to prevent concurrent LP redemption
-                # NOTE: runs regardless of protocol_fees — LPs must be credited even on 0-fee markets (C1 fix)
-                if pool:
-                    lp_result = await db.execute(
-                        select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0).with_for_update()
-                    )
-                    lp_shares = lp_result.scalars().all()
-
-                    # LP redemption: use winning outcome's pool side — Decimal throughout
-                    is_yes_winner = yes_outcome and str(yes_outcome.id) == winning_outcome_id
-                    winning_shares = pool.yes_shares if is_yes_winner else pool.no_shares
-                    lp_payout_per_token = winning_shares / pool.lp_token_supply if pool.lp_token_supply > 0 else Decimal(0)
-
-                    for lp in lp_shares:
-                        lp_payout = lp.lp_tokens * lp_payout_per_token
-                        wallet_result = await db.execute(
-                            select(Wallet).where(Wallet.user_id == lp.user_id).with_for_update()
-                        )
-                        wallet = wallet_result.scalar_one_or_none()
-                        if not wallet or lp_payout <= 0:
-                            continue
-                        wallet.balance += lp_payout
-                        lp.lp_tokens = 0
-                        tx = Transaction(
-                            user_id=lp.user_id,
-                            wallet_id=wallet.id,
-                            type="liquidity_removal",
-                            amount=lp_payout,
-                            balance_after=wallet.balance,
-                            reference_id=str(pool.id),
-                            reference_type="lp_settlement",
-                            status="completed",
-                        )
-                        db.add(tx)
-
-                market.status = "resolved"
-                await db.commit()
-            return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
-
-        result = celery_run(_run())
+        result = celery_run(settle_market(market_id, winning_outcome_id, task_id))
     finally:
+        if lock_acquired:
+            # Release on every exit path (success, exception, early return) so
+            # a Celery retry of a crashed run can actually acquire the lock and
+            # settle instead of being told "already running" until the TTL
+            # expires. Settlement is idempotent, so a duplicate run that slips
+            # through pays nothing twice.
+            try:
+                from app.redis import get_redis_sync
+
+                get_redis_sync().delete(lock_key)
+            except Exception:
+                logger.exception(f"Failed to release settlement lock for {market_id}")
         duration_ms = (time.perf_counter() - start) * 1000
         logger.info(json.dumps({
             "event": "task_complete",
@@ -947,6 +1067,7 @@ def check_price_alerts(self, market_id: str, yes_price: float, no_price: float):
         "no_price": no_price,
     }))
     start = time.perf_counter()
+    result = None
     try:
         async def _run():
             from app.services.alert_engine import (
@@ -1141,6 +1262,15 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
                 f"This code expires in 10 minutes. "
                 f"If you didn't request this, your account is safe."
             )
+        elif purpose == "exists":
+            subject = "You already have a Polymarket account"
+            body = (
+                "Someone tried to register with this email address, but an "
+                "account already exists.\n\n"
+                "If it was you: sign in as usual, or reset your password if "
+                "you have forgotten it. If it wasn't you, no action is needed "
+                "- your account and password are unchanged."
+            )
         else:
             subject = "Your Polymarket code"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
@@ -1194,12 +1324,15 @@ def enqueue_otp(self, email: str, purpose: str):
         secret = _get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        # Store in Redis synchronously inside the task
+        # Store in Redis synchronously inside the task.
+        # Hash-only: the plaintext code goes into the email body below and
+        # nowhere else — see OTPService.verify_code, which re-hashes the
+        # submitted code instead of reading a stored plaintext one.
         async def _store():
             from app.redis import get_redis, redis_cb
             r = await get_redis()
             await redis_cb.call(
-                lambda: r.setex(key, 600, f"{code}:{_hash_code(code, secret)}")
+                lambda: r.setex(key, 600, _hash_code(code, secret))
             )
         celery_run(_store())
 
@@ -1274,6 +1407,7 @@ def cleanup_expired_sessions(self):
         "task_name": self.name,
     }))
     start = time.perf_counter()
+    result = None
     try:
         from datetime import UTC, datetime, timedelta
 

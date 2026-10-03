@@ -49,14 +49,19 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     jwt_access_expire: int = 900
     jwt_refresh_expire: int = 2592000  # 30 days — standard refresh token TTL
+    # Absolute lifetime of a whole login CHAIN (login → N rotations). Each
+    # rotation mints a token with its own fresh expiry, so jwt_refresh_expire
+    # bounds one token while renewing could otherwise go on forever; this is
+    # the deadline no rotation can move (see app/api/auth.py).
+    refresh_chain_max_seconds: int = 2592000  # 30 days from last login
 
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     # Maximum single deposit amount in USDC (0 = no limit)
-    max_deposit: Decimal = Decimal("100000")
+    max_deposit: Decimal = Decimal(100000)
     # Maximum single withdrawal amount in USDC (0 = no limit)
-    max_withdrawal: Decimal = Decimal("10000")
+    max_withdrawal: Decimal = Decimal(10000)
 
     # Celery
     celery_broker_url: str = "redis://localhost:6382/1"
@@ -67,6 +72,14 @@ class Settings(BaseSettings):
     rate_limit_per_email_ip: int = 5     # auth decisions per email+IP per minute
     rate_limit_auth_max_attempts: int = 5  # failed attempts before progressive friction
     rate_limit_auth_lockout_seconds: int = 900  # 15 min
+
+    # WebSocket auth. The access_token cookie is the supported way to
+    # authenticate the handshake — cookies are host-scoped, not port-scoped,
+    # so the browser sends them to ws://localhost:8000 even when the app is
+    # on localhost:3000, and to api.example.com from app.example.com.
+    # `?token=<jwt>` is a legacy fallback for non-browser clients only:
+    # URLs are copied into proxy logs, browser history and Referer headers.
+    ws_allow_query_token: bool = False
 
     # Resend (email notifications)
     resend_api_key: str = ""
