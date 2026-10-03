@@ -334,6 +334,12 @@ class LiquidityService:
                 currency="USDC",
             )
             db.add(treasury_wallet)
+            # FLUSH: without it `treasury_wallet.id` is still None, so the
+            # Transaction below hits the NOT NULL constraint on wallet_id and
+            # the entire sweep dies. Reachable on any deploy where fees accrue
+            # before the first settlement has created the treasury account —
+            # i.e. the 3:30am sweep failing on day one.
+            await db.flush()
         else:
             treasury_wallet_result = await db.execute(
                 select(Wallet).where(Wallet.user_id == treasury_user.id).with_for_update()

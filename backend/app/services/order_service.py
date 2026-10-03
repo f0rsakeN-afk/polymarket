@@ -390,6 +390,24 @@ class OrderService:
                         client_order_id=data.client_order_id,
                     )
                     db.add(order)
+                    await db.flush()   # assign order.id so it can be referenced
+
+                    # The locked budget is a real movement of the user's
+                    # available balance, so it gets a ledger row like every
+                    # other one. Without it the reservation is invisible in the
+                    # transaction history — the user sees "10 USDC locked"
+                    # with no corresponding entry explaining it.
+                    db.add(Transaction(
+                        user_id=user.id,
+                        wallet_id=wallet.id,
+                        type="limit_order_lock",
+                        # Negative = funds moved out of *available* into locked.
+                        amount=-remaining_usdc if data.side == "buy" else Decimal(0),
+                        balance_after=wallet.balance,
+                        reference_id=str(order.id),
+                        reference_type="order",
+                        status="completed",
+                    ))
 
                     logger.info(
                         f"Limit order{' partially' if matched_shares > 0 else ''} pending: "
@@ -399,17 +417,36 @@ class OrderService:
                         f"matched={float(matched_shares)}"
                     )
 
+                    # COMMIT HERE. This branch used to `return` from inside
+                    # execute_order, above the single commit at the end of the
+                    # fill path — so `get_db` closed the session and rolled the
+                    # order and the locked funds straight back out. Resting
+                    # limit orders were never persisted: the client got a 200
+                    # saying "pending" for an order that did not exist, with an
+                    # empty id it could not cancel, and the sweeper had nothing
+                    # to ever service. `price_after`/yes/no were also reported
+                    # as 0 here, which is a fiction: no leg executed, so the
+                    # prices are exactly what they were.
+                    after_total = amm.yes_shares + amm.no_shares
+                    await db.commit()
+
                     return OrderResult(
-                        order_id="",
+                        order_id=str(order.id),
                         status="pending" if matched_shares == 0 else "partial",
                         side=data.side,
                         outcome=data.outcome,
                         shares=matched_shares,
                         price=limit_price or Decimal(0),
                         price_before=price_before,
+                        # No AMM leg ran, so the price is unchanged — report
+                        # that rather than zeros.
                         price_after=price_before,
-                        yes_price_after=Decimal(0),
-                        no_price_after=Decimal(0),
+                        yes_price_after=(
+                            amm.yes_shares / after_total if after_total > 0 else Decimal(0)
+                        ),
+                        no_price_after=(
+                            amm.no_shares / after_total if after_total > 0 else Decimal(0)
+                        ),
                         slippage=Decimal(0),
                         fee=Decimal(0),
                         wallet_balance=wallet.balance,

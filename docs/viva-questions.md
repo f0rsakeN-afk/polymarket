@@ -1576,7 +1576,11 @@ delivered in realtime over Redis fan-out."
   → Because it's a limit priced away from the market and no resting order crosses it. It gets
   re-tested whenever a fill moves that market's price (the fill re-arms the sweep immediately, at
   most once a second), with the 30-second background check as the backstop, and expiry frees the
-  funds when the market closes.
+  funds when the market closes. Honest thing to volunteer if asked about this area: the resting
+  branch used to return before the commit, so the order and its locked funds were rolled back —
+  resting orders did not actually exist until it was fixed, and it survived because the API
+  session could read its own uncommitted writes. A test using a *rollback* as the discriminator
+  caught it; using the request session never would have.
 
 * **"How do you know two concurrent buys don't corrupt balances?"**
   → `test_concurrency.py` fires parallel orders and asserts the invariants, plus the balance check
