@@ -7,6 +7,21 @@ from sqlalchemy.orm import relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
+class EscrowShortfallError(RuntimeError):
+    """The pool escrow cannot fund a payout it is obligated to make.
+
+    This is an *invariant violation*, never a normal condition: every inflow
+    credits the escrow and every outflow debits it, so an obligation larger
+    than the balance means money was created or destroyed somewhere upstream.
+
+    Raised rather than absorbed on purpose. A caller that catches it and pays
+    a partial amount has silently converted "owed $100" into "paid $60, owed
+    nothing" — the remainder is unreachable, because nothing records it as
+    still owed and nothing retries it. Failing the transaction keeps the
+    obligation intact and leaves it claimable.
+    """
+
+
 def _decimal(value) -> Decimal:
     """Coerce to Decimal without float binary noise (Decimal(str(x)) for floats)."""
     if isinstance(value, Decimal):
@@ -55,29 +70,36 @@ class LiquidityPool(Base, UUIDMixin, TimestampMixin):
         self.collateral = _decimal(self.collateral or 0) + amount
         return amount
 
-    def debit_collateral(self, amount, *, allow_shortfall: bool = False) -> Decimal:
+    def debit_collateral(self, amount) -> Decimal:
         """Move USDC *out* of the escrow (AMM sell, merge, LP exit, fee sweep,
         settlement payouts). Returns the amount actually removed.
 
-        `collateral` is never driven below zero: the escrow is a hard bound on
-        what the pool can pay. Trading paths use the default strict mode — a
-        shortfall raises (and therefore rolls the trade back) because it means
-        the ledger is broken. Settlers pass allow_shortfall=True so a shortfall
-        degrades to a partial payment plus a loud log instead of leaving a
-        market un-settleable or minting money.
+        There is deliberately no "pay what you can" mode. A caller that debits
+        less than it is about to record as paid destroys the difference: nothing
+        marks it unpaid and nothing retries it. An obligation smaller than the
+        balance is the only case worth supporting, and it is expressed by the
+        caller computing `min(owed, available)` *before* calling this — so the
+        unpaid remainder stays visible in whatever ledger the caller owns.
+
+        `collateral` is never driven below zero. Too little money raises
+        `EscrowShortfallError`, and because callers do this inside their own
+        transaction the whole operation rolls back with nothing marked done.
         """
         amount = _decimal(amount)
         if amount <= 0:
             return Decimal(0)
         available = _decimal(self.collateral or 0)
         if amount > available:
-            if not allow_shortfall:
-                raise ValueError(
-                    f"pool {self.id}: collateral shortfall — owe {amount}, hold {available}"
-                )
-            amount = available
+            raise EscrowShortfallError(
+                f"pool {self.id}: collateral shortfall — owe {amount}, hold {available}"
+            )
         self.collateral = available - amount
         return amount
+
+    def can_cover(self, amount) -> bool:
+        """True if the escrow can fund `amount` in full. A read-only probe —
+        callers that need to branch on it must not debit in the same breath."""
+        return _decimal(amount) <= _decimal(self.collateral or 0)
 
 
 class LPShare(Base, UUIDMixin, TimestampMixin):
