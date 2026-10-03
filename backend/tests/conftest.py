@@ -35,9 +35,21 @@ os.environ["DATABASE_URL"] = (
     f"postgresql+asyncpg://{_pg_user}:{_pg_pass}@localhost:{_pg_port}/{_pg_db}"
 )
 os.environ["REDIS_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
+# Celery broker for the test run. `POST /markets/{id}/resolve` answers 503 if
+# it cannot enqueue, so the suite needs *a* live broker — but a fresh checkout
+# has no `backend/.env`, and the config default points at a port (6382) that
+# only a local dev stack opens. That is exactly what made CI's first run fail
+# six tests that passed locally. Keep whatever is already configured (a real
+# env var or `.env`); otherwise fall back to the Redis this suite provisions.
+if "CELERY_BROKER_URL" not in os.environ:
+    os.environ["CELERY_BROKER_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
 # Rate limiting is an infrastructure concern, not under test here — and the
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# The `?token=` WebSocket fallback is OFF by default (it puts a JWT in URLs).
+# The websocket suite authenticates with it on purpose, so turn it on here and
+# let test_ws_query_token_is_off_by_default flip it back for the negative case.
+os.environ["WS_ALLOW_QUERY_TOKEN"] = "true"
 # Stripe webhook tests sign real deliveries, so a secret must exist even when
 # .env leaves STRIPE_WEBHOOK_SECRET blank (the endpoint fails closed otherwise).
 if not os.environ.get("STRIPE_WEBHOOK_SECRET"):

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ─── PredictX Backend Start Script ────────────────────────────────────────────
+# ─── Polymarket Backend Start Script ────────────────────────────────────────────
 # Starts all local services. Postgres/Redis are expected to be in Docker.
 # Usage: ./start.sh
 
@@ -76,7 +76,7 @@ start_beat() {
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
-log "PredictX backend starting..."
+log "Polymarket backend starting..."
 start_docker_services
 start_api
 sleep 3

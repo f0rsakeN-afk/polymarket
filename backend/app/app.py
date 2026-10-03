@@ -125,9 +125,21 @@ async def lifespan(app: FastAPI):
     import os
     if settings.app_env == "production" and not os.environ.get("TRUSTED_PROXY_IPS", "").strip():
         logger.warning(
-            "TRUSTED_PROXY_IPS is not set. X-Forwarded-For will be ignored for IP identification. "
-            "Set TRUSTED_PROXY_IPS if running behind a reverse proxy (e.g. nginx, caddy, cloudflare). "
-            "Example: TRUSTED_PROXY_IPS=10.0.0.0/8,172.16.0.0/12"
+            "TRUSTED_PROXY_IPS is not set. X-Forwarded-For will be ignored for IP identification, "
+            "so every request that arrives from the proxy shares ONE rate-limit bucket (the proxy's "
+            "IP): one client can exhaust it for everyone, and per-IP limits cannot be enforced per "
+            "user. Set TRUSTED_PROXY_IPS to the proxy address (e.g. 10.0.0.0/8,172.16.0.0/12)."
+        )
+
+    # The logout token blacklist lives in Redis. Outside production it fails
+    # OPEN (a dev stack without Redis should still accept logins); in
+    # production a Redis outage fails CLOSED and rejects every token. Make
+    # that choice loud so nobody discovers it during an incident.
+    if settings.app_env != "production":
+        logger.warning(
+            f"app_env={settings.app_env}: token blacklist checks FAIL OPEN if Redis is "
+            "unreachable — a logged-out token stays usable until it expires (≤15 min). "
+            "Set APP_ENV=production to fail closed."
         )
 
     # Wait for Postgres + Redis before accepting traffic.

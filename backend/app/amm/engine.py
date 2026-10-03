@@ -16,22 +16,48 @@ class AMMQuote:
 
 class BinaryAMM:
     """
-    Constant-product AMM for binary outcome prediction markets.
+    Share-pool AMM for binary outcome prediction markets.
 
     price(YES) = yes_shares / (yes_shares + no_shares)
     price(NO)  = no_shares  / (yes_shares + no_shares)
+    (prices always sum to 1 — which is exactly what the split/merge
+    primitives require, since 1 USDC mints one YES + one NO pair.)
 
-    Invariant after each trade: yes_shares * no_shares = k
+    NOTE ON THE INVARIANT: this is NOT an x*y = k constant-product pool, and
+    no such invariant can hold here. price is a *ratio of reserves*, and a
+    buy only ever grows one side — for x*y = k to survive, buying YES would
+    have to shrink the NO reserve, which the operation does not do. The
+    quantity yes_shares * no_shares therefore *rises* on a buy and falls on a
+    sell. The real invariant this class defends is the no-arbitrage one
+    described below.
 
-    Buying YES:
-      - Deposits collateral C → receives YES shares S = C * (1-fee) / price(YES)
-      - Pool: yes += S, no unchanged → k preserved
-      - YES price RISES (more YES collateral → higher probability)
+    Buying outcome with reserve R (R = yes_shares for YES, no_shares for NO):
+      - Deposits collateral C, pays fee = C * fee_rate, nets C_net = C - fee
+      - Receives S shares solved so that the buyer pays the POST-trade price
+        on every share:
 
-    Selling YES:
-      - Deposits S YES shares → receives collateral C = S * price(YES) * (1-fee)
-      - Pool: yes -= S, no unchanged → k preserved
-      - YES price FALLS (less YES collateral → lower probability)
+            C_net = S * (R + S) / (T + S)          (T = R + other side)
+
+        closed form:  S = (C_net - R + sqrt((R - C_net)^2 + 4 * C_net * T)) / 2
+
+      - Reserve R grows by S → the outcome's price RISES.
+
+    Selling S shares of the outcome:
+      - Receives C = S * (R / T) * (1 - fee_rate) — the PRE-trade price
+      - Reserve R shrinks by S → the outcome's price FALLS.
+
+    Why buy charges at the POST-trade price while sell credits the PRE-trade
+    price: both are the *adverse* price for the trader, so a round trip
+    through the pool can never be profitable. Specifically, for any size:
+
+        buy then sell the same shares  →  you get back (1 - fee_rate)^2
+        sell then buy the same shares  →  you get back (1 - fee_rate)^2
+
+    i.e. the only thing a round trip can ever cost is the fees. Charging the
+    pre-trade spot price on a buy (the old behaviour) charged ZERO price
+    impact, so buying pushed the price up and selling immediately handed the
+    buyer the higher price — a buy→sell loop returned MORE than it cost and
+    drained the pool. That is the bug this formula fixes.
     """
 
     def __init__(
@@ -61,7 +87,13 @@ class BinaryAMM:
         collateral: Decimal,
         min_shares_out: Decimal | None = None,
     ) -> AMMQuote:
-        """Core buy logic — mutates pool state and returns quote."""
+        """Core buy logic — mutates pool state and returns quote.
+
+        Shares are sized from the post-trade price, so price impact is paid
+        by the buyer on the whole order (see the class docstring for the
+        derivation). Falls back to spot pricing only when the pool is empty,
+        which is impossible here (total == 0 already raised).
+        """
         if collateral <= 0:
             raise ValueError("Collateral must be positive")
         total = self.yes_shares + self.no_shares
@@ -72,22 +104,25 @@ class BinaryAMM:
         if collateral_net <= 0:
             raise ValueError(f"Fee rate {float(self.fee_rate)*100}% consumes entire collateral")
 
-        if outcome == "yes":
-            if self.yes_shares == 0:
-                raise ValueError("Cannot buy YES: no YES liquidity in pool")
-            shares_out = collateral_net * total / self.yes_shares
-            new_yes = self.yes_shares + shares_out
-            new_no = self.no_shares
-        else:
-            if self.no_shares == 0:
-                raise ValueError("Cannot buy NO: no NO liquidity in pool")
-            shares_out = collateral_net * total / self.no_shares
-            new_yes = self.yes_shares
-            new_no = self.no_shares + shares_out
+        reserve = self.yes_shares if outcome == "yes" else self.no_shares
+        if reserve == 0:
+            raise ValueError(
+                f"Cannot buy {outcome.upper()}: no {outcome.upper()} liquidity in pool"
+            )
 
+        # S^2 + S*(R - C_net) - C_net*T = 0  →  positive root.
+        discriminant = (reserve - collateral_net) ** 2 + Decimal(4) * collateral_net * total
+        shares_out = (collateral_net - reserve + discriminant.sqrt()) / Decimal(2)
         shares_out = max(Decimal(0), shares_out)
         if min_shares_out is not None and shares_out < min_shares_out:
             raise ValueError(f"Slippage exceeded: output {shares_out} < minimum {min_shares_out}")
+
+        if outcome == "yes":
+            new_yes = self.yes_shares + shares_out
+            new_no = self.no_shares
+        else:
+            new_yes = self.yes_shares
+            new_no = self.no_shares + shares_out
 
         current_price = self.price(outcome)
 

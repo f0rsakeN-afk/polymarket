@@ -570,3 +570,92 @@ async def test_resting_buy_fills_against_book(db_session, test_user, admin_user,
         )
     )
     assert seller_pos.scalar_one().shares_held == Decimal(50)
+
+
+@pytest.mark.asyncio
+async def test_book_match_protocol_fee_is_credited(
+    db_session, test_user, admin_user, test_market
+):
+    """The 1% book-match protocol fee must land in the pool's fee ledger.
+
+    Regression: `execute_match` deducted the fee from the seller's proceeds but
+    credited it nowhere, so the money silently left circulation.
+    """
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.models.liquidity import LiquidityPool
+    from app.models.order import Order
+    from app.models.position import Position
+    from app.models.wallet import Wallet
+    from app.services.matching_engine import MatchingEngine
+
+    yes_outcome = next(o for o in test_market.outcomes if o.name.lower() == "yes")
+
+    db_session.add(Position(
+        user_id=admin_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        shares_held=Decimal(100),
+        average_price=Decimal("0.5"),
+        realized_pnl=Decimal(0),
+    ))
+    sell = Order(
+        user_id=admin_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        side="sell",
+        order_type="limit",
+        amount=Decimal(50),
+        price=Decimal("0.60"),
+        remaining_amount=Decimal(50),
+        status="pending",
+    )
+    buy = Order(
+        user_id=test_user.id,
+        market_id=test_market.id,
+        outcome_id=yes_outcome.id,
+        side="buy",
+        order_type="limit",
+        amount=Decimal(100),
+        price=Decimal("0.60"),
+        remaining_amount=Decimal(100),
+        status="pending",
+    )
+    db_session.add_all([sell, buy])
+    await db_session.commit()
+
+    pool_before = (
+        await db_session.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == test_market.id)
+        )
+    ).scalar_one()
+    fees_before = pool_before.protocol_fees
+
+    seller_wallet_before = (
+        await db_session.execute(select(Wallet).where(Wallet.user_id == admin_user.id))
+    ).scalar_one()
+    balance_before = seller_wallet_before.balance
+
+    remaining, _ = await MatchingEngine.match_pending_order(
+        db_session, buy, test_market, yes_outcome
+    )
+    await db_session.commit()
+
+    usdc_value = Decimal(50) * Decimal("0.60")  # 30 USDC matched
+    expected_fee = usdc_value * settings.protocol_fee_rate  # 0.30
+
+    pool_after = (
+        await db_session.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == test_market.id)
+        )
+    ).scalar_one()
+    assert pool_after.protocol_fees == fees_before + expected_fee
+
+    seller_wallet_after = (
+        await db_session.execute(select(Wallet).where(Wallet.user_id == admin_user.id))
+    ).scalar_one()
+    # Seller is credited the match minus the fee — the two sides sum to the
+    # buyer's debit, so the ledger balances.
+    assert seller_wallet_after.balance == balance_before + usdc_value - expected_fee
+    assert remaining == Decimal(70)

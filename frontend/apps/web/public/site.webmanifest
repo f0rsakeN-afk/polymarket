@@ -1,6 +1,6 @@
 {
-  "name": "PredictX",
-  "short_name": "PredictX",
+  "name": "Polymarket",
+  "short_name": "Polymarket",
   "description": "Decentralized prediction markets — trade on real-world outcomes",
   "start_url": "/",
   "display": "standalone",

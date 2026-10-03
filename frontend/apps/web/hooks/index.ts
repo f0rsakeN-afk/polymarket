@@ -16,7 +16,8 @@
 // use-auth exports: useCurrentUser, useLogin, useLogout, useLogoutAll, useSessions, useRevokeSession, useRegister, useVerifyEmail, useResendVerification, useSendMagicLink, useVerifyMagicCode, useRequestMagicUrl, useVerifyMagicUrl, useForgotPassword, useResetPassword, useSetPassword, useChangePassword, useTwoFactorStatus, useTwoFactorSetup, useTwoFactorEnable, useTwoFactorDisable
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
-export { useCurrentUser, useLogin, useLogout, useLogoutAll, useSessions, useRevokeSession, useRegister, useVerifyEmail, useResendVerification, useSendMagicLink, useVerifyMagicCode, useRequestMagicUrl, useVerifyMagicUrl, useForgotPassword, useResetPassword, useSetPassword, useChangePassword, useTwoFactorStatus, useTwoFactorSetup, useTwoFactorEnable, useTwoFactorDisable } from "./api/use-auth"
+export { useCurrentUser } from "./use-auth"
+export { useLogin, useLogout, useLogoutAll, useSessions, useRevokeSession, useRegister, useVerifyEmail, useResendVerification, useSendMagicLink, useVerifyMagicCode, useRequestMagicUrl, useVerifyMagicUrl, useForgotPassword, useResetPassword, useSetPassword, useChangePassword, useTwoFactorStatus, useTwoFactorSetup, useTwoFactorEnable, useTwoFactorDisable } from "./api/use-auth"
 
 // ─── Markets (infinite queries) ───────────────────────────────────────────────
 export { useMarkets, useMarket, useMarketActivity, useFAQs, useRelatedMarkets, useCreateMarket, useResolveMarket, usePriceHistory, useMarketCategories, useClaimWinnings, useOrderBook } from "./api/use-markets"

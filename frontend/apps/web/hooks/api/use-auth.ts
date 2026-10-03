@@ -15,12 +15,11 @@ import { apiErrorMessage } from "@/lib/api/client"
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-export function useCurrentUser() {
-  return useQuery({
-    queryKey: queryKeys.me(),
-    queryFn: () => authApi.me().then((r) => r.data),
-  })
-}
+// NOTE: `useCurrentUser` deliberately lives in `@/hooks/use-auth` (the root
+// file), where it is defined with `retry: false` and `staleTime: 0`. It used
+// to be redefined here with looser options: two hooks, two behaviours, same
+// cache key — whoever imported which one got a different refetch policy. One
+// definition, re-exported from `hooks/index.ts`.
 
 export function useLogin() {
   return useMutation({

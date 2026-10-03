@@ -83,9 +83,21 @@ async def split(
     amount_after_fee = amount_dec - fee
     wallet.balance -= amount_dec
     # Route the fee to the pool's protocol ledger (swept to treasury at
-    # settlement) instead of burning it.
+    # settlement) instead of burning it. The whole deposit is escrowed:
+    # protocol_fees is a sub-ledger *inside* pool.collateral, so the fee
+    # portion stays recorded as owed while backing the shares just minted.
     if pool is not None:
+        pool.credit_collateral(amount_dec)
         pool.protocol_fees += fee
+        # A split mints `amount_after_fee` shares of EACH side — real new
+        # supply the AMM now has to be able to hand back out. The trade legs
+        # already keep pool reserves in step with minted/burned shares, so
+        # these two lines match them; without them the shares created here
+        # cannot be sold into the AMM (amm.sell refuses to pay out more than
+        # the reserve holds) even though the user legitimately owns them.
+        # Both sides grow equally, so the price ratio is unchanged.
+        pool.yes_shares += amount_after_fee
+        pool.no_shares += amount_after_fee
 
     async def update_position(outcome_obj, avg_price):
         pos_result = await db.execute(
@@ -194,18 +206,21 @@ async def merge(
         raise ValidationError("Market is not active")
 
     # Lock order market -> pool -> wallet -> position matches the trading
-    # path and standardizes lock ordering to prevent deadlocks.
+    # path and standardizes lock ordering to prevent deadlocks. (The pool
+    # lock used to be taken *after* the wallet — a split holds pool-then-
+    # wallet while merge held wallet-then-pool, i.e. a genuine ABBA deadlock
+    # waiting to happen under concurrent split/merge on the same market.)
+    pool_result = await db.execute(
+        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+    )
+    pool = pool_result.scalar_one_or_none()
+
     wallet_result = await db.execute(
         select(Wallet).where(Wallet.user_id == user.id).with_for_update()
     )
     wallet = wallet_result.scalar_one_or_none()
     if not wallet:
         raise NotFoundError("Wallet not found")
-
-    pool_result = await db.execute(
-        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-    )
-    pool = pool_result.scalar_one_or_none()
 
     outcomes_result = await db.execute(
         select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
@@ -260,6 +275,25 @@ async def merge(
     yes_pos.shares_held -= amount_dec
     no_pos.shares_held -= amount_dec
     wallet.balance += amount_after_fee
+    # The destroyed pairs release exactly `amount_after_fee` of escrow; the
+    # fee stays behind in the pool (it was recorded above). Strict debit —
+    # if the escrow can't cover the merge the ledger is broken, roll back.
+    if pool is not None:
+        pool.debit_collateral(amount_after_fee)
+        # Mirror of the split above: a merge destroys `amount` shares of each
+        # side, so the AMM reserves shrink by the same amount (both equally,
+        # so the price ratio is unchanged). Clamped at zero because pools
+        # created before this sync can carry reserves below the real supply —
+        # a clamp is logged so the drift is visible instead of silent.
+        before_yes, before_no = pool.yes_shares, pool.no_shares
+        pool.yes_shares = max(Decimal(0), pool.yes_shares - amount_dec)
+        pool.no_shares = max(Decimal(0), pool.no_shares - amount_dec)
+        if before_yes < amount_dec or before_no < amount_dec:
+            logger.warning(
+                f"Merge clamped pool reserves on market {market_id}: "
+                f"yes {before_yes}→{pool.yes_shares}, no {before_no}→{pool.no_shares} "
+                f"for amount={amount_dec} (reserves were below the burned supply)"
+            )
 
     tx = Transaction(
         user_id=user.id,

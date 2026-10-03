@@ -2,9 +2,7 @@ import logging
 import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from jose import JWTError, jwt
 
-from app.config import settings
 from app.services.rate_limit_service import RateLimitService
 from app.websocket.manager import manager, redis_pubsub, user_manager
 
@@ -31,30 +29,55 @@ def _get_real_client_ip(websocket: WebSocket) -> str:
 
 
 async def verify_ws_token(token: str | None) -> str | None:
-    """Verify WS token and return user_id. Authentication is required —
-    returns None only when no token is provided at all (which means
-    the connection must be rejected)."""
+    """Resolve an access token to a user id, applying the SAME rules as HTTP.
+
+    The handshake now runs the full validation chain (JWT decode, token
+    type, jti blacklist, user active, session bound/revoked/expired) through
+    `authenticate_token`, so a token that was logged out or blacklist-revoked
+    after it was minted is rejected here too — previously the websocket only
+    checked the signature and would happily accept a revoked session.
+
+    Returns None (→ reject the connection) on any failure, including a
+    database error, so auth fails closed rather than open.
+    """
     if not token:
         return None
+    from app.database import async_session
+    from app.deps import authenticate_token
+
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        if payload.get("type") != "access":
-            return None
-        return payload.get("sub")
-    except JWTError:
+        async with async_session() as db:
+            user = await authenticate_token(db, token)
+        return str(user.id)
+    except Exception:
+        # Covers JWTError, UnauthorizedError, ForbiddenError and DB failures.
+        # A logger.debug (not exception) keeps forged-token probes out of the
+        # traceback noise while still leaving a trace.
+        logger.debug("WS token rejected")
         return None
 
 
 def _get_token_from_request(websocket: WebSocket) -> str | None:
     """
     Extract auth token from cookie first (secure), then query param (fallback).
-    Cookies are sent with WebSocket handshake in modern browsers.
+
+    Cookies are sent with the WebSocket handshake by every modern browser and
+    are scoped to the host rather than the port, so the cookie path works for
+    the web app on any origin pair the API already serves. The `?token=`
+    fallback is disabled by default (`WS_ALLOW_QUERY_TOKEN=false`): a JWT in a
+    URL lands in proxy access logs, browser history and Referer headers.
     """
     # HttpOnly cookie set by set_auth_cookies
     cookie_token = websocket.cookies.get("access_token")
     if cookie_token:
         return cookie_token
-    # Fallback: query param (for convenience / legacy compatibility)
+    from app.config import settings
+
+    if not settings.ws_allow_query_token:
+        # Not a warning: this is the default for every browser client, and a
+        # probe with ?token= should leave only a debug trace.
+        logger.debug("WS query-param token rejected (WS_ALLOW_QUERY_TOKEN is false)")
+        return None
     return websocket.query_params.get("token")
 
 

@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user, get_optional_user
 from app.models.faq import MarketFAQ
-from app.models.liquidity import LiquidityPool
+from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import (
     STATUS_ACTIVE,
     STATUS_PENDING_REVIEW,
@@ -383,16 +383,35 @@ async def create_market(
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
             if data.initial_probability is not None:
-                yes_shares = amount_dec * Decimal(str(1 - data.initial_probability))
-                no_shares = amount_dec * Decimal(str(data.initial_probability))
+                # price(YES) = yes_shares / (yes_shares + no_shares), so the
+                # YES side must be seeded with `initial_probability` of the
+                # collateral — the inverse (the old behaviour) made a market
+                # created at 0.70 open at 0.30.
+                p = Decimal(str(data.initial_probability))
+                yes_shares = amount_dec * p
+                no_shares = amount_dec * (Decimal(1) - p)
                 pool.yes_shares += yes_shares
                 pool.no_shares += no_shares
             else:
                 half = amount_dec / Decimal(2)
                 pool.yes_shares += half
                 pool.no_shares += half
-            pool.collateral += amount_dec
+            pool.credit_collateral(amount_dec)
             pool.lp_token_supply = amount_dec * Decimal(2)
+            # The seeding wallet is the pool's first LP. Mint its shares so
+            # `lp_token_supply == sum(lp_shares.lp_tokens)` holds for
+            # API-created markets too (it previously didn't — the supply was
+            # set with no holder, locking the seed away forever) and the
+            # creator earns/exits like any other LP.
+            db.add(
+                LPShare(
+                    pool_id=pool.id,
+                    user_id=user.id,
+                    lp_tokens=amount_dec * Decimal(2),
+                    collateral_deposited=amount_dec,
+                )
+            )
+            market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount_dec
 
     await db.commit()
     logger.info(f"Market created: {data.slug} by user={user.id} status={market.status}")
@@ -557,7 +576,14 @@ async def resolve_market_endpoint(
     if not user.is_admin:
         raise ForbiddenError("Only admins can resolve markets")
 
-    result = await db.execute(select(Market).where(Market.slug == slug))
+    # Lock the market row: the settlement worker takes the same lock, and this
+    # request enqueues that worker *before* it commits. Holding the row lock
+    # across enqueue→commit means the worker can only read this request's
+    # writes after they land — so it can never race ahead and have its
+    # `status = "resolved"` clobbered by this transaction's later write.
+    result = await db.execute(
+        select(Market).where(Market.slug == slug).with_for_update()
+    )
     market = result.scalar_one_or_none()
     if not market:
         raise NotFoundError(f"Market '{slug}' not found")
@@ -649,6 +675,14 @@ async def claim_winnings(
     if not market.winning_outcome_id:
         raise ValidationError("Market has no winning outcome set")
 
+    # Lock the pool escrow under the canonical order (Market → Pool →
+    # Position → Wallet) — settlement takes the same locks in this sequence,
+    # so a claim racing the Celery settle serialises instead of deadlocking.
+    pool_result = await db.execute(
+        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+    )
+    pool = pool_result.scalar_one_or_none()
+
     # Idempotency: check settled_at before any write. SETNX on the DB row is the
     # authoritative guard — if two requests race here, only one wins.
     pos_result = await db.execute(
@@ -676,6 +710,25 @@ async def claim_winnings(
     payout = Decimal(str(winning_pos.shares_held))
     if payout <= 0:
         raise ValidationError("No winnings to claim", error_code="NOTHING_TO_CLAIM")
+
+    # The claim is *funded* from the pool escrow, not minted (single-entry
+    # ledger). All-or-nothing: paying 10 of a 40-share claim would consume the
+    # position (settled_at, shares_held = 0) for less than it is worth, so a
+    # shortfall refuses instead — the position stays claimable and an ops top-up
+    # makes it succeed on retry.
+    escrow_paid = pool.debit_collateral(payout, allow_shortfall=True) if pool else payout
+    if escrow_paid < payout:
+        logger.error(
+            f"Claim escrow shortfall: market={slug} user={user.id} "
+            f"owed={payout} paid={escrow_paid} pool_collateral={pool.collateral if pool else 'n/a'}"
+        )
+        raise ValidationError(
+            "This claim cannot be paid in full right now — the market escrow is "
+            "underfunded. Your position is untouched; try again later or "
+            "contact support.",
+            error_code="ESCROW_INSUFFICIENT",
+        )
+    payout = escrow_paid
 
     # Mark as settled atomically — prevents double-claim on client retry
     winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))

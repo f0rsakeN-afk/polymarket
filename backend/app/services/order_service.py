@@ -40,6 +40,28 @@ from app.websocket.manager import redis_pubsub
 logger = logging.getLogger("polymarket")
 
 
+async def _enqueue_limit_sweep_now() -> None:
+    """Wake the limit-order sweeper as soon as a fill moves a price.
+
+    `celery beat` runs `check_limit_order_execution` every 30s and only scans
+    markets that were marked dirty by the trade that moved them (see
+    `websocket.manager.publish_price_update`). Without this call a resting
+    limit order whose price just got crossed still waits up to half a minute
+    — invisible in a demo, real money when the market runs away.
+
+    The NX key collapses any burst of fills into at most one queued sweep per
+    second, so volatility cannot flood the broker with one message per trade.
+    Everything is best-effort: if Redis or the broker is unavailable the beat
+    run is the fallback and nothing is lost.
+    """
+    from app.workers.tasks import check_limit_order_execution
+
+    r = await get_redis()
+    fresh = await redis_cb.call(lambda: r.set("limit_check:enqueued", "1", ex=1, nx=True))
+    if fresh:
+        check_limit_order_execution.delay()
+
+
 @dataclass
 class OrderResult:
     order_id: str
@@ -403,6 +425,9 @@ class OrderService:
                 # remaining_shares = number of shares to buy, remaining_usdc = USDC to pay
                 quote = amm.buy(data.outcome, remaining_usdc)
                 wallet.balance -= remaining_usdc
+                # The spend enters the pool's escrow — it funds the shares the
+                # AMM just minted to the buyer (and the LPs who backed them).
+                pool.credit_collateral(remaining_usdc)
                 amm_shares = quote.shares_out
                 amm_price_val = quote.price
                 amm_fee = quote.fee
@@ -430,6 +455,10 @@ class OrderService:
                 tmp_pos.shares_held -= remaining_shares
                 tmp_pos.realized_pnl += realized_pnl
                 wallet.balance += sell_proceeds_amm
+                # Sell proceeds come *out* of the escrow: shares go in,
+                # dollars come out. Strict debit — a shortfall means the
+                # ledger is broken and the trade must roll back, not mint.
+                pool.debit_collateral(sell_proceeds_amm)
                 amm_shares = remaining_shares
                 amm_price_val = quote.price
                 amm_fee = quote.fee
@@ -445,13 +474,19 @@ class OrderService:
         total_shares = matched_shares + amm_shares
         total_usdc_spent = matched_usdc + (remaining_usdc if data.side == "buy" else Decimal(0))
 
-        # FOK atomicity: if FOK couldn't fill the full amount, raise instead of creating pending order
-        if data.order_type == "fill_or_kill" and total_shares < amount:
-            raise ValidationError(
-                f"Fill-or-kill could not be fully filled. "
-                f"Total filled: {float(total_shares)}/{float(amount)} shares",
-                error_code="ORDER_NOT_FILLABLE",
-            )
+        # FOK atomicity: if FOK couldn't fill the full amount, raise instead of
+        # creating a pending order. Compare in the order's own units — `amount`
+        # is a USDC budget for BUY and a share count for SELL, so comparing
+        # shares against a USDC budget (the old check) would misfire.
+        if data.order_type == "fill_or_kill":
+            fok_filled = total_usdc_spent if data.side == "buy" else total_shares
+            if fok_filled < amount:
+                unit = "USDC" if data.side == "buy" else "shares"
+                raise ValidationError(
+                    f"Fill-or-kill could not be fully filled. "
+                    f"Total filled: {float(fok_filled)}/{float(amount)} {unit}",
+                    error_code="ORDER_NOT_FILLABLE",
+                )
         total_usdc_received = matched_usdc + sell_proceeds_amm
 
         # ── Step 6: Slippage validation ──
@@ -537,7 +572,11 @@ class OrderService:
                     }
                 )
 
-        market.total_volume += amount
+        # Volume is denominated in USDC for both sides: a buy spends
+        # `total_usdc_spent`, a sell receives `total_usdc_received`. Adding
+        # the raw `amount` would mix USDC (buy) with share counts (sell) in
+        # one column and corrupt every volume-based sort/analytic.
+        market.total_volume += total_usdc_spent if data.side == "buy" else total_usdc_received
         market.num_trades += 1
 
         for md in match_details:
@@ -552,7 +591,11 @@ class OrderService:
             )
             db.add(t)
 
-        if remaining_shares > 0:
+        # AMM (non-book) fill leg. Must key off `amm_shares`, not
+        # `remaining_shares` — that variable is pinned to 0 for BUY orders
+        # (their budget remainder is tracked by `remaining_usdc`), so keying
+        # off it silently dropped the trade row for every market BUY.
+        if amm_shares > 0:
             t = Trade(
                 user_id=user.id,
                 market_id=market.id,
@@ -650,6 +693,14 @@ class OrderService:
         try:
             from app.workers.tasks import check_price_alerts
             check_price_alerts.delay(str(market.id), yes_price, no_price)
+        except Exception:
+            pass
+
+        # The fill above moved this market's price, so resting limit orders
+        # waiting on it may now be fillable — don't make them wait for the
+        # 30s beat sweep (see _enqueue_limit_sweep_now for the throttling).
+        try:
+            await _enqueue_limit_sweep_now()
         except Exception:
             pass
 

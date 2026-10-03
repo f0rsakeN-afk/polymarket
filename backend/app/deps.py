@@ -54,14 +54,55 @@ async def cache_invalidate_pattern(pattern: str):
             break
 
 
+def _bcrypt_input(password: str) -> bytes:
+    """Normalise a password to ≤72 bytes for bcrypt.
+
+    bcrypt only reads the first 72 bytes of input: longer input used to raise
+    (`ValueError: password cannot be longer than 72 bytes`) — which made
+    registration with a long password a 500, and made *first-ever settlement*
+    crash, because the system treasury account derives its password hash from
+    `jwt_secret + 32 random bytes` (well over 72 bytes). Pre-hashing keeps the
+    full entropy of long secrets while staying inside the limit; silently
+    truncating instead would make every long password sharing its first 72
+    bytes collide. Passwords ≤72 bytes are untouched, so every existing hash
+    still verifies.
+    """
+    raw = password.encode()
+    if len(raw) <= 72:
+        return raw
+    import hashlib
+
+    return hashlib.sha256(raw).hexdigest().encode()
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     if not hashed:
         return False
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+
+
+_DUMMY_PASSWORD_HASH: str | None = None
+
+
+def dummy_password_hash() -> str:
+    """Cached bcrypt hash of a throwaway secret, generated on first use.
+
+    Used when an email is not registered so that an unknown-user login costs
+    the same ~100 ms of bcrypt work as a known-user login. Without it, a
+    fast response means "no such account" — a reliable user-enumeration
+    oracle. Generated lazily (never at import) and cached: the value is
+    meaningless, it only exists to be slow.
+    """
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        import secrets as _secrets
+
+        _DUMMY_PASSWORD_HASH = hash_password(_secrets.token_urlsafe(32))
+    return _DUMMY_PASSWORD_HASH
 
 
 def create_access_token(
@@ -175,6 +216,17 @@ async def _load_user(db: AsyncSession, payload: dict) -> User:
 
     await _validate_session(db, payload, user)
     return user
+
+
+async def authenticate_token(db: AsyncSession, token: str) -> User:
+    """Decode + fully validate a raw token string.
+
+    Identical to the HTTP auth path: JWT decode, token type, jti blacklist,
+    user active, session binding. Websocket routes call this so that a
+    revoked/blacklisted/logged-out token is rejected on the upgrade handshake
+    too, instead of only at issue time.
+    """
+    return await _load_user(db, decode_token(token))
 
 
 async def get_current_user(
