@@ -1491,3 +1491,64 @@ def cleanup_expired_sessions(self):
             "result": str(result)[:200],
         }))
     return result
+
+
+@shared_task(
+    bind=True,
+    name="app.workers.tasks.audit_escrow_invariants",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=2,
+)
+def audit_escrow_invariants(self):
+    """Nightly check that every pool's escrow still covers what it owes.
+
+    Settlement pre-flights the same arithmetic and refuses to run when the
+    escrow is short — correct, but it only tells you at resolution. This runs
+    the identical check on a schedule so a broken ledger surfaces overnight,
+    naming the market, while it can still be funded or unwound.
+
+    Reports only. It never repairs a ledger, because a repair written by
+    something that doesn't fully understand the drift is how a rounding bug
+    turns into a loss. Exit status is informational; violations are logged as
+    structured ERRORs for alerting.
+    """
+    task_id = uuid.uuid4().hex
+    logger.info(json.dumps({
+        "event": "task_start",
+        "task_id": task_id,
+        "task_name": self.name,
+    }))
+    start = time.perf_counter()
+    result = None
+    try:
+        async def _run():
+            from app.services.escrow_audit import audit_and_report
+
+            async with get_session() as db:
+                violations = await audit_and_report(db)
+                return {
+                    "violations": len(violations),
+                    "by_kind": {
+                        kind: sum(1 for v in violations if v.kind == kind)
+                        for kind in {v.kind for v in violations}
+                    },
+                }
+
+        result = celery_run(_run())
+        if result and result.get("violations"):
+            logger.error(json.dumps({
+                "event": "escrow_audit_failed",
+                "task_id": task_id,
+                **result,
+            }))
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info(json.dumps({
+            "event": "task_complete",
+            "task_id": task_id,
+            "task_name": self.name,
+            "duration_ms": round(duration_ms, 2),
+            "result": str(result)[:200],
+        }))
+    return result

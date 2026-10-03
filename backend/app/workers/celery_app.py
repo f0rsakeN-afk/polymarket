@@ -73,4 +73,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.distribute_protocol_fees",
         "schedule": crontab(hour=3, minute=30),  # 3:30am daily
     },
+    # 4am, after the fee sweep: every pool's escrow is re-checked against what
+    # it still owes, so a ledger imbalance is caught the night before it can
+    # strand a settlement. See app/services/escrow_audit.py.
+    "audit-escrow-invariants": {
+        "task": "app.workers.tasks.audit_escrow_invariants",
+        "schedule": crontab(hour=4, minute=0),
+    },
 }
