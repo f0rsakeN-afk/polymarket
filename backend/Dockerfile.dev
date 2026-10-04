@@ -16,7 +16,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen
 
-COPY . .
+# Non-root user, same uid/gid as the prod Dockerfile. Without this the dev
+# celery worker logs "running with superuser privileges: uid=0".
+# shadow's groupadd/useradd rather than Debian's addgroup/adduser wrapper:
+# the wrapper emits "useradd warning: appuser's uid 1001 is greater than
+# SYS_UID_MAX 999", and dropping --system to silence it triggers an
+# interactive password prompt and adds the user to the users group.
+# -M = no home dir, nologin shell = no login.
+RUN groupadd -g 1001 appuser \
+    && useradd -u 1001 -g 1001 -M -s /usr/sbin/nologin appuser
+
+COPY --chown=appuser:appuser . .
+
+USER appuser
 
 EXPOSE 8000
 

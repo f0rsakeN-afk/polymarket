@@ -124,7 +124,6 @@ services:
     volumes:
       - ./app:/app/app
       - ./migrations:/app/migrations
-      - beatdata:/var/beatdata
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
@@ -135,7 +134,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
-    command: celery -A app.workers.celery_app beat --loglevel=info -s /var/beatdata/celerybeat-schedule
+    # Schedule lives on the 1777 tmpfs, not the named volume: named volumes are
+    # created root:root and the container now runs as uid 1001. Losing the
+    # schedule file on restart is harmless in dev.
+    command: celery -A app.workers.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
     depends_on:
       postgres:
         condition: service_healthy
@@ -159,5 +161,3 @@ volumes:
     name: polymarket-dev-pgdata
   redisdata:
     name: polymarket-dev-redisdata
-  beatdata:
-    name: polymarket-dev-beatdata

@@ -90,11 +90,34 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'none'",  # Prevent XSS and data injection
 }
 
+# The CSP above is right for JSON API responses but breaks the interactive docs:
+# they are HTML pages that pull Swagger UI's CSS/JS from jsdelivr and fetch
+# /openapi.json at runtime. Under `default-src 'none'` the browser blocks all
+# three, `SwaggerUIBundle` never gets defined, and /docs renders as a blank
+# page (HTML still returns 200, so it looks like a server problem).
+# These routes get a CSP naming exactly what Swagger UI needs and nothing more.
+# Unreachable in production anyway — app.py sets docs_url/redoc_url to None there.
+_DOCS_CSP = (
+    "default-src 'none'; "
+    "script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'none'"
+)
+
+_DOCS_PATHS = ("/docs", "/redoc", "/docs/oauth2-redirect")
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
+        headers = SECURITY_HEADERS
+        if request.url.path.startswith(_DOCS_PATHS):
+            headers = {**SECURITY_HEADERS, "Content-Security-Policy": _DOCS_CSP}
+        for header, value in headers.items():
             response.headers[header] = value
         # HSTS only when running as production
         if settings.app_env == "production":
