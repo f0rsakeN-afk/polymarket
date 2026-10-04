@@ -74,6 +74,19 @@ class ConnectionManager:
     7. Async dead-socket cleanup — doesn't block active broadcasts
     """
 
+    # These caps are PER PROCESS, not global — with N API nodes the real limit
+    # is N × the number below. That is deliberate, not an oversight: each node
+    # caps the sockets and memory it is actually holding, which is what
+    # protects it, and it costs nothing on the connect path. A global cap
+    # would need a Redis round-trip per connect *and* per disconnect, and a
+    # counter that leaks when a node dies would take the user's quota with it
+    # — trading a small precision gain for a new way to lock people out.
+    #
+    # What *is* per-process-only and worth knowing: message fan-out. It is NOT
+    # affected by this, because publishers write to Redis pub/sub and every node
+    # runs its own `RedisPubSub.listen()` loop that fans messages out to its own
+    # local sockets. Cross-node delivery is proven end-to-end in
+    # `tests/test_websocket_multinode.py`.
     MAX_CONNECTIONS_PER_IP = 50  # raised from 10 — NAT users share IPs
     MAX_CONNECTIONS_PER_USER = 5
     MAX_SUBSCRIPTIONS_PER_SOCKET = 50  # cap per connection to prevent abuse
@@ -207,13 +220,29 @@ class ConnectionManager:
         else:
             market_ids = list(self._ws_subscriptions.pop(websocket, set()))
 
-        # Decrement connection counters so new connections aren't incorrectly rejected
+        # Decrement connection counters so new connections aren't incorrectly
+        # rejected, and *delete* the entry at zero rather than leaving it there.
+        # Zeroed-but-retained keys meant two things, both bad:
+        #   - the dict grew by one entry per distinct client IP the node ever
+        #     saw, for the life of the process — an unbounded leak;
+        #   - a socket that died without a clean disconnect (killed worker,
+        #     dropped TCP, abrupt close) left its count permanently elevated,
+        #     so that user slowly locked themselves out of websockets at 5 with
+        #     no way back.
         client_ip = self._ws_ip.pop(websocket, None)
         user_id = self._ws_user.pop(websocket, None)
         if client_ip:
-            self._ip_connections[client_ip] = max(0, self._ip_connections.get(client_ip, 1) - 1)
+            remaining = self._ip_connections.get(client_ip, 1) - 1
+            if remaining > 0:
+                self._ip_connections[client_ip] = remaining
+            else:
+                self._ip_connections.pop(client_ip, None)
         if user_id:
-            self._user_connections[user_id] = max(0, self._user_connections.get(user_id, 1) - 1)
+            remaining = self._user_connections.get(user_id, 1) - 1
+            if remaining > 0:
+                self._user_connections[user_id] = remaining
+            else:
+                self._user_connections.pop(user_id, None)
 
         # Clean up each market's subscriber set
         for market_id in market_ids:
