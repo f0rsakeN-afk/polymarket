@@ -49,7 +49,10 @@ Behaviour described here is pinned by `backend/tests/`: `test_amm.py` (pricing +
 (order units, book matching, protocol-fee crediting), `test_ledger.py` (escrow in/out, settlement
 payout table, claim shortfalls, and the refusal to settle an underfunded market rather than pay a
 winner partially), `test_safety_limits.py` (LP-exit escrow floor, split/merge reserve sync,
-immediate limit-order sweep), `test_escrow_audit.py` (every pool invariant, plus the beat task
+immediate limit-order sweep), `test_resting_orders.py` (a resting limit order must be
+committed, locked, cancellable — the branch that rolled it back), `test_task_integration.py`
+(the Celery tasks driven directly, no broker), `test_websocket_multinode.py` (cross-node
+fan-out), `test_escrow_audit.py` (every pool invariant, plus the beat task
 itself so the 4am job can't silently stop working), `test_auth.py` (including the refresh-chain cap and the
 non-enumerable register form).
 
