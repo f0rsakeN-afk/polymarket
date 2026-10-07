@@ -214,3 +214,92 @@ def test_user_notifications_websocket_missingtoken_for(ws_client, test_user):
         with pytest.raises(Exception):
             with ws_client.websocket_connect(f"/ws/notifications/{test_user.id}"):
                 pass
+
+
+# ── Heartbeat sweep ────────────────────────────────────────────────────────────
+#
+# These exist because `_cleanup_dead` shipped as dead code: the docstring said
+# "kept for periodic sweeps only" and nothing ever scheduled a sweep. A
+# half-open socket (closed laptop, NAT timeout, killed container) therefore was
+# never reaped — it kept its file descriptor and its per-IP counter slot, and
+# broadcast-failure detection never saw it because a quiet market never
+# broadcasts. The regression to guard is "the sweep is wired up and called".
+
+def test_heartbeat_reaps_a_socket_whose_send_hangs():
+    """A socket that can't accept a ping within SEND_TIMEOUT_S is disconnected."""
+    import asyncio
+
+    from app.websocket.manager import ConnectionManager
+
+    mgr = ConnectionManager()
+    reaped = []
+
+    class WedgedSocket:
+        """Stands in for a half-open socket: send_json never completes."""
+
+        async def send_json(self, _event):
+            await asyncio.sleep(60)  # never resolves within the timeout
+
+    sock = WedgedSocket()  # type: ignore[arg-type]
+    mgr._ws_subscriptions[sock] = {  # type: ignore[index]
+        "00000000-0000-0000-0000-000000000001"
+    }
+    mgr._ws_ip[sock] = "10.0.0.1"  # type: ignore[index]
+    mgr._market_subs["00000000-0000-0000-0000-000000000001"].add(sock)  # type: ignore[arg-type]
+
+    # Record the disconnect instead of running the real one, so this asserts the
+    # decision rather than the counter bookkeeping.
+    async def fake_disconnect(ws, redis_pubsub_ref=None, cause="client"):
+        reaped.append((ws, cause))
+
+    mgr.disconnect = fake_disconnect  # type: ignore[method-assign]
+
+    # Keep the sweep fast; the production interval is 30s.
+    mgr.SEND_TIMEOUT_S = 0.05
+    count = asyncio.run(mgr.heartbeat_once())
+
+    assert count == 1, "the wedged socket should have been reaped"
+    assert len(reaped) == 1
+    assert reaped[0][1] == "heartbeat", "cause must be labelled so the metric is useful"
+
+
+def test_heartbeat_leaves_a_healthy_socket_alone():
+    """A socket that answers a ping is NOT disconnected — no false positives."""
+    import asyncio
+
+    from app.websocket.manager import ConnectionManager
+
+    mgr = ConnectionManager()
+    reaped = []
+
+    class HealthySocket:
+        async def send_json(self, _event):
+            return None
+
+    sock = HealthySocket()  # type: ignore[arg-type]
+    mgr._ws_subscriptions[sock] = {  # type: ignore[index]
+        "00000000-0000-0000-0000-000000000002"
+    }
+    mgr._market_subs["00000000-0000-0000-0000-000000000002"].add(sock)  # type: ignore[arg-type]
+
+    async def fake_disconnect(ws, redis_pubsub_ref=None, cause="client"):
+        reaped.append(ws)
+
+    mgr.disconnect = fake_disconnect  # type: ignore[method-assign]
+
+    count = asyncio.run(mgr.heartbeat_once())
+
+    assert count == 0, "a responsive socket must survive the sweep"
+    assert reaped == [], "no socket should be disconnected"
+
+
+def test_heartbeat_loop_is_started_by_the_app_lifespan():
+    """The sweep must be *scheduled*. This is the exact regression: the method
+    existed and worked, and was still never called."""
+    import inspect
+
+    from app import app as app_module
+
+    src = inspect.getsource(app_module)
+    assert "heartbeat_loop()" in src, "app lifespan must start the heartbeat sweep"
+    assert "heartbeat_task.cancel()" in src, "the sweep must be cancelled on shutdown"

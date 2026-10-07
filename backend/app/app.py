@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -45,7 +46,7 @@ from app.config import settings
 from app.database import _get_engine, _get_replica_engine
 from app.middleware.metrics import MetricsMiddleware, clean_multiproc_dir
 from app.middleware.request_id import RequestIDMiddleware
-from app.websocket.manager import redis_pubsub
+from app.websocket.manager import manager, redis_pubsub
 from app.websocket.routes import router as ws_router
 
 # Read APP_ENV early — logging is configured in lifespan() after settings loads,
@@ -146,7 +147,6 @@ async def lifespan(app: FastAPI):
     # Compose gates initial startup with depends_on:service_healthy, but that only
     # applies at `up` time — if either dependency restarts later, or when running
     # outside Compose, the app must block here instead of failing the first request.
-    import asyncio
 
     async def _wait_for_postgres(timeout_s: float = 60.0) -> None:
         from sqlalchemy import text
@@ -201,9 +201,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis pub/sub not available: {e}")
 
+    # Start the WebSocket heartbeat sweep. Without it a half-open socket (closed
+    # laptop, NAT timeout, killed container) is never reaped: no FIN arrives, it
+    # keeps its file descriptor and its per-IP counter slot, and `send_json`
+    # keeps succeeding until the kernel buffer overflows. Broadcast-failure
+    # detection only covers markets that actually trade, so a socket on a quiet
+    # market would leak indefinitely. `_cleanup_dead` existed for this but
+    # nothing ever called it.
+    heartbeat_task = asyncio.create_task(manager.heartbeat_loop())
+    logger.info("WebSocket heartbeat sweep started (30s)")
+
     yield
 
     logger.info("Shutting down...")
+    heartbeat_task.cancel()
+    try:
+        await heartbeat_task
+    except (asyncio.CancelledError, Exception):
+        pass
     await redis_pubsub.close()
     await _get_engine().dispose()
     await _get_replica_engine().dispose()

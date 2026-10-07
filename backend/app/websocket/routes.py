@@ -171,11 +171,11 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                     )
 
     except WebSocketDisconnect:
-        await manager.disconnect(websocket, redis_pubsub)
+        await manager.disconnect(websocket, redis_pubsub, cause="client")
         logger.info(f"WS disconnected: market={market_id}")
     except Exception:
         logger.exception(f"WS error: market={market_id}")
-        await manager.disconnect(websocket, redis_pubsub)
+        await manager.disconnect(websocket, redis_pubsub, cause="error")
 
 
 @router.websocket("/ws/trades")
@@ -211,11 +211,11 @@ async def global_trades_websocket(websocket: WebSocket):
             if data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        await manager.disconnect(websocket, redis_pubsub)
+        await manager.disconnect(websocket, redis_pubsub, cause="client")
         logger.info("Global trades WS disconnected")
     except Exception:
         logger.exception("Global trades WS error")
-        await manager.disconnect(websocket, redis_pubsub)
+        await manager.disconnect(websocket, redis_pubsub, cause="error")
 
 
 @router.websocket("/ws/notifications/{user_id}")
@@ -244,8 +244,8 @@ async def user_notifications_websocket(websocket: WebSocket, user_id: str):
             if data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        await user_manager.disconnect(websocket, user_id)
+        await user_manager.disconnect(websocket, user_id, cause="client")
         logger.info(f"User WS disconnected: user={user_id}")
     except Exception:
         logger.exception(f"User WS error: user={user_id}")
-        await user_manager.disconnect(websocket, user_id)
+        await user_manager.disconnect(websocket, user_id, cause="error")
