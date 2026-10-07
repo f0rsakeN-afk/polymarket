@@ -25,8 +25,9 @@ interface SharedConnection {
   status: WSStatus
   /** Per-market subscription metadata */
   subs: Map<string, MarketSub>
-  /** Per-market mutex — prevents double-subscribe on rapid add/remove */
-  subLocks: Map<string, boolean>
+  /** Per-market mutex — serialises the subscribe frame for one market.
+   *  A promise chain, not a boolean: `Map<string, Promise<void>>`. */
+  subLocks: Map<string, Promise<void>>
   retries: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
   /** All markets this WS is subscribed to on the server (re-subscribed on reconnect) */
@@ -91,24 +92,51 @@ function sendWs(conn: SharedConnection, data: unknown) {
   }
 }
 
-/** Atomically subscribe to a market on the wire — mutex prevents double-send. */
-async function wsSubscribe(conn: SharedConnection, marketId: string): Promise<void> {
-  // Aquire per-market mutex
-  let locked = conn.subLocks.get(marketId)
-  while (locked) {
-    await new Promise((r) => setTimeout(r, 5))
-    locked = conn.subLocks.get(marketId)
-  }
-  conn.subLocks.set(marketId, true)
-  try {
+/** Serialise work per market via a promise chain.
+ *
+ * The previous version was a spin-wait:
+ *
+ *   while (locked) { await new Promise(r => setTimeout(r, 5)); locked = ... }
+ *
+ * which burns a 5 ms timer per contended market and busy-waits the event loop
+ * for the whole duration. Chaining onto the previous promise instead costs one
+ * microtask turn, never a timer, and cannot starve anything else.
+ *
+ * Failures must not poison the chain — hence `.catch()` on both the tail and the
+ * stored promise, so one throwing caller doesn't deadlock every later one.
+ */
+function withMarketLock<T>(conn: SharedConnection, marketId: string, fn: () => T): Promise<T> {
+  const prev = conn.subLocks.get(marketId) ?? Promise.resolve()
+  const run = prev.then(fn, fn) // run regardless of how the previous link settled
+  const tail = run.then(
+    () => undefined,
+    () => undefined
+  )
+  conn.subLocks.set(marketId, tail)
+  // Drop the entry once this is the tail, so the Map doesn't grow unbounded.
+  void tail.then(() => {
+    if (conn.subLocks.get(marketId) === tail) conn.subLocks.delete(marketId)
+  })
+  return run
+}
+
+/** Subscribe to a market on the wire. Idempotent: `wsSubscribed` short-circuits,
+ *  so the flag is the real guard and the lock only prevents two callers in the
+ *  same tick from both passing that check.
+ *
+ *  Note there is deliberately NO `readyState === OPEN` check here. If a second
+ *  market is subscribed while the socket is still CONNECTING, `sendWs` no-ops —
+ *  but we must still record it in `serverSubs`, because `onopen` replays that
+ *  set. Returning early here instead would drop that market permanently: the
+ *  URL only ever names the *first* market. */
+function wsSubscribe(conn: SharedConnection, marketId: string): Promise<void> {
+  return withMarketLock(conn, marketId, () => {
     const sub = conn.subs.get(marketId)
-    if (!sub || sub.wsSubscribed) return  // already sent
+    if (!sub || sub.wsSubscribed) return // already sent, or nobody left to send for
     sendWs(conn, { type: "subscribe", market_id: marketId })
     sub.wsSubscribed = true
     conn.serverSubs.add(marketId)
-  } finally {
-    conn.subLocks.set(marketId, false)
-  }
+  })
 }
 
 /** Unsubscribe from a market on the wire. */
@@ -407,4 +435,50 @@ export function useMarketSocket({
   }, [enabled, marketId, ctx])
 
   return { status }
+}
+
+// ─── Teardown: HMR + page unload ───────────────────────────────────────────────
+//
+// `_conn` is module scope, which is what makes the socket per-tab rather than
+// per-component — but it also means nothing tears it down when the module is
+// replaced or the page goes away:
+//
+//  - **HMR (dev):** reloading this module creates a *new* `_conn = null` while
+//    the old socket is still open and still referenced by the old module's
+//    closures. The browser keeps the TCP connection and the server keeps the
+//    file descriptor and the per-IP counter slot. A handful of edits and you've
+//    leaked several sockets the app can no longer reference — and the server
+//    will eventually refuse new connections for that IP.
+//  - **Unload:** bfcache navigation away and back restores the page, but a
+//    socket closed by the server while hidden is never noticed until the first
+//    send fails, so the UI sits there "connected" and silently dead.
+//
+// Both handlers close explicitly instead of trusting TCP teardown.
+
+function teardownSocket(reason: "hmr" | "unload"): void {
+  const c = _conn
+  if (!c) return
+  _conn = null // drop the singleton first: nothing new can attach to a dying socket
+  if (c.closeTimer) clearTimeout(c.closeTimer)
+  if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
+  const ws = c.ws
+  if (!ws) return
+  c.intentionalCloseSocket = ws // our own close must not queue a reconnect
+  c.ws = null
+  try {
+    ws.close(1000, reason)
+  } catch {
+    /* already closing */
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => teardownSocket("unload"))
+}
+
+// Vite/Turbopack HMR dispose hook. Guarded: this file is also read by tooling
+// that has no `import.meta.hot`, and referencing it would throw at module load.
+const hot = (import.meta as { hot?: { dispose: (cb: () => void) => void } }).hot
+if (hot?.dispose) {
+  hot.dispose(() => teardownSocket("hmr"))
 }
