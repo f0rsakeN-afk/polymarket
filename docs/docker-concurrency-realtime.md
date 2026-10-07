@@ -589,9 +589,41 @@ From the module docstring (`manager.py:1`):
 
 1. **`use-market-socket.tsx`** — a **module-level singleton**: exactly **one WebSocket per browser
    tab**, shared by `MarketSocketProvider` and every `useMarketSocket` consumer. Extra markets are
-   multiplexed with `subscribe`/`unsubscribe` frames (opening a socket per card would be
-   catastrophic — `trending-carousel-item.tsx` opens a subscription per carousel card, all over the
-   one socket).
+   multiplexed with `subscribe`/`unsubscribe` frames.
+
+   **Why one socket instead of one per market — the arithmetic that decides it.** A socket per
+   subscription looks reasonable until you count what the homepage actually renders:
+
+   | On `/` | Count | Source |
+   |---|---|---|
+   | "Trending" carousel cards, each subscribing | 8 | `home-page-content.tsx:43,58` |
+   | "Closing soon" carousel cards, each subscribing | 8 | `home-page-content.tsx:71` |
+   | Live trade ticker | 1 | `live-trade-ticker.tsx` |
+   | **Socket-per-market total** | **17** | |
+
+   Three of those consequences are hard failures, not inefficiencies:
+
+   1. **The per-IP cap is 50** (`MAX_CONNECTIONS_PER_IP`, `manager.py:90`). 17 sockets per tab
+      means **three users sharing one IP exhausts the cap**, and the fourth is refused with
+      `1008 Connection limit exceeded`. An office, a university, or a mobile carrier's CGNAT puts
+      dozens of real users on one address — this design would break for them specifically. Multiplexed,
+      each user holds **one** socket and 50 users fit comfortably.
+   2. **Browsers cap concurrent connections per origin.** HTTP/1.1 allows ~6; the app is HTTP/2, but
+      each WebSocket still consumes a connection, and every market card also fetches REST through
+      the same origin. Per-card sockets would compete with those requests and queue them.
+   3. **Cost per connection.** A socket is a kernel file descriptor, a buffer, a keepalive timer,
+      and a TLS handshake on connect. 17 handshakes to show a list page is pure waste.
+
+   The server side is *designed* for multiplexing, which is the tell that it was the intended
+   shape: `MAX_SUBSCRIPTIONS_PER_SOCKET = 50` (one socket comfortably carries the homepage's 16
+   market subscriptions), the registry is keyed market→sockets for O(subscribers-to-this-market)
+   fan-out, and the URL is market-scoped (`/ws/markets/{id}`) so the *handshake* picks a default
+   market while `subscribe` frames add the rest.
+
+   **The mental model to say out loud:** *one socket per browser tab, many markets multiplexed
+   over it.* The server is a broadcast bus per market; the socket is the client's single
+   subscription to that bus. Subscription is a reference-counted entry in a `Map`, so the last
+   subscriber to leave is what tears the connection down.
    - Reconnect: exponential `min(1000 * 2^retries, 30_000)`, retries reset on open.
    - **No auth gate.** The feed is public (see D5), so a logged-out visitor gets live prices just
      like they get them over REST. The `access_token` cookie rides along automatically when there

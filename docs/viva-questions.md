@@ -701,6 +701,36 @@ because every payload carries the complete new value ("price is now 0.62"), so a
 missing intermediate message can't corrupt state once the client resyncs.
 → `docs/docker-concurrency-realtime.md` §D.
 
+**★ F19. Why one WebSocket per tab instead of one per market?**
+**Answer:** Because the socket is a *subscription to the bus*, not to a market. One socket per market
+sounds fine until you count the homepage: two carousels of eight cards each, and every card
+subscribes — that's 16 markets, plus the trade ticker. A socket per market means 17 connections to
+render one list page. And that's not just wasteful, it **breaks**: the server caps connections at 50
+per IP, so three people sharing an office or a university NAT would exhaust the cap and the fourth
+would be refused. It also burns a file descriptor, a keepalive timer and a TLS handshake per card,
+and competes with REST requests for the browser's per-origin connection budget.
+
+So the client holds a **module-level singleton** — one socket per browser tab — and multiplexes
+markets over it with `subscribe`/`unsubscribe` frames. A component asks for a market and gets back
+an unsubscribe function; the socket is shared. The server side confirms this was the intended
+shape: it's built to multiplex, with 50 subscriptions allowed per socket and its fan-out registry
+keyed market→sockets so delivering to a market only touches that market's subscribers.
+
+The last subscriber to leave is what closes the connection — and that close is deferred by one tick,
+because React's Strict Mode remounts components in development and a registry that briefly empties
+would otherwise close and immediately reopen the socket on every page.
+→ `docs/docker-concurrency-realtime.md` §D7.
+
+**F20. How do you add a *new* market to a live socket?**
+**Answer:** Send `{"type":"subscribe","market_id":"..."}`. The server adds it to the socket's
+subscription set under that socket's lock, and the market's reverse index under that market's lock —
+deliberately not both under one lock, because holding two socket locks at once is how you deadlock.
+Then the server subscribes to the Redis channel for that market so this process can be woken when it
+moves. The unsubscribe path is the mirror, and it deletes the market's index entry entirely when the
+set empties, rather than leaving a zero-length one behind — that leak once locked users out
+permanently at 5 connections after an unclean socket death.
+→ `docs/docker-concurrency-realtime.md` §D3, §D4.
+
 ---
 
 ## G. Docker, CI/CD, operations
@@ -2027,11 +2057,31 @@ during an outage.
 
 **★ Q4. How does the WebSocket client work?**
 **Answer:** One socket per browser tab, held in a module-level singleton rather than React state, with
-many components subscribing to it. That's deliberate: if each component opened its own socket, a market
-page with a chart, an orderbook, a trade feed and comments would hold four connections, and the server
-caps connections per IP at fifty. Subscriptions are per market, the URL is market-scoped, and reconnects
-go to whatever market the user is currently looking at rather than the first one they subscribed to.
+many components subscribing to it. Subscriptions are per market, the URL is market-scoped, and
+reconnects go to whatever market the user is currently looking at rather than the first one they
+subscribed to.
 → `docs/frontend.md` §5.
+
+**★ Q4b. Why one socket for the whole tab rather than one per market?**
+**Answer:** Because a socket is a subscription to the *bus*, not to a market — and the count is what
+proves it. The homepage renders two carousels of eight cards each, and every card subscribes: that's
+16 markets plus the trade ticker, so 17 connections to draw one list page. That's not merely
+inefficient, it **fails** — the server allows 50 connections per IP, so three people behind one
+office or campus NAT exhaust the cap and the fourth is refused with a policy-violation close. Each
+extra socket also costs a file descriptor, a keepalive timer, a TLS handshake, and a slot from the
+browser's per-origin connection budget that REST requests need.
+
+So a component calls `useMarketSocket({marketId})`, gets back an unsubscribe function, and the socket
+is shared behind a module-level singleton. Adding a market sends a `subscribe` frame; the server
+records it in two places — the socket's subscription set and the market's reverse index — and
+subscribes this process to that market's Redis channel. The reverse index keyed market→sockets is
+what makes fan-out O(subscribers to that market) rather than O(all sockets).
+
+The detail I'd add unprompted: the teardown is deferred by one tick. React's Strict Mode remounts
+every component in development, so a subscription set that briefly empties would close the socket and
+immediately reopen it on every page render. Anything that re-subscribes on the next tick keeps it
+alive.
+→ `docs/docker-concurrency-realtime.md` §D7.
 
 **Q5. Why can the WebSocket be anonymous?**
 **Answer:** Because the data on it is public. Market prices are readable over REST without an account,
