@@ -336,7 +336,7 @@ interface SharedConnection {
   ws: WebSocket | null
   status: WSStatus
   subs: Map<string, MarketSub>        // per-market: {seq, handlers:Set, wsSubscribed}
-  subLocks: Map<string, boolean>      // per-market mutex
+  subLocks: Map<string, Promise<void>> // per-market mutex (promise chain)
   retries: number
   serverSubs: Set<string>
   statusHandlers: Set<MessageHandler>
@@ -415,6 +415,41 @@ The file documents both fixes in place, which is exactly what a panel wants to h
   (`intentionalCloseSocket: WebSocket | null`) instead of a boolean (`:40-41, 150-153, 217-220`).
 
 Both are the same lesson: *identity, not a flag, when lifecycle events can arrive out of order.*
+
+### Two more fixed here — a busy-wait mutex and a socket that leaked on hot reload
+
+**The per-market mutex was a spin-wait:**
+```ts
+while (locked) { await new Promise(r => setTimeout(r, 5)); locked = conn.subLocks.get(marketId) }
+```
+That burns a 5 ms timer *per contended market* and occupies the event loop for the whole wait — a
+cost paid for something that should be free. It is now a promise chain:
+```ts
+function withMarketLock<T>(conn, marketId, fn) {
+  const prev = conn.subLocks.get(marketId) ?? Promise.resolve()
+  const run = prev.then(fn, fn)   // run regardless of how the previous link settled
+  ...
+}
+```
+`fn` is passed as *both* handlers so one throwing caller can't poison the chain and deadlock every
+later caller, and the map entry is dropped once it's the tail so it doesn't grow unbounded. One
+microtask turn instead of a timer.
+
+**Nothing tore the socket down on HMR or unload.** `_conn` is module scope — that is *what makes it
+per-tab* — but it also means a hot reload creates a new `_conn = null` while the old socket is still
+open and still referenced by the old module's closures. The browser keeps the TCP connection; the
+server keeps the file descriptor and the slot in that IP's counter. A handful of edits and you have
+leaked sockets the app can no longer reference. Fixed with a `hot.dispose` hook and a `pagehide`
+listener, both of which close explicitly (`teardownSocket`) rather than trusting TCP teardown, and
+both nulling `_conn` first so nothing new can attach to a dying socket.
+
+> **A regression caught while making this change, worth remembering:** the obvious "improvement" of
+> adding a `readyState === OPEN` guard to `wsSubscribe` would have been a **new bug**. If a second
+> market is subscribed while the socket is still `CONNECTING`, `sendWs` no-ops — but the market must
+> still be recorded in `serverSubs`, because `onopen` replays that set. Returning early would drop
+> that market permanently, since the socket URL only ever names the *first* market. The lesson:
+> the "socket isn't ready, skip it" intuition is wrong when a later `onopen` is responsible for
+> replaying the intent.
 
 ### 5.6 Events handled client-side
 
@@ -696,12 +731,18 @@ than being caught out.
 have caught. That is a good, honest framing: *"the comments are archaeology from bugs; the fix is to
 turn each comment into a test."*
 
-The backend, by contrast, has **22 test files / 381 test functions** — so the correct framing is
+The backend, by contrast, has **22 test files / 384 test functions** — so the correct framing is
 *"coverage is deep on the money and concurrency paths, and absent on the client"*, not "we don't test".
 
 ---
 
 ## 11. Dead code, inconsistencies and content bugs
+
+> **Since the last review, three items here were fixed rather than merely listed:** the WebSocket
+> per-market mutex is a promise chain instead of a 5 ms busy-wait; the module-singleton socket now
+> closes on hot reload and on `pagehide` instead of leaking; and the server runs a real 30 s
+> heartbeat sweep (see `docker-concurrency-realtime.md` §D10). See §5 for the details and the
+> `readyState` regression caught on the way.
 
 Naming these **before** you're asked is the whole game.
 

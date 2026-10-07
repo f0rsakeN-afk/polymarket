@@ -1,7 +1,8 @@
 # Viva Question Bank — Polymarket Clone
 
-> **Sections A–N** cover the original 227 questions; **O–R** add 85 more covering the database,
-> background jobs, frontend and platform features.
+> **Sections A–N** are the core set (architecture, backend, DB, concurrency, idempotency, realtime,
+> ops, security, trading, product, frontend, testing, reflective, curveballs). **O–R** add the data
+> model, background jobs, frontend and platform-feature answers. Start with the starred (★) ones.
 > frontend and platform-feature answers. Start with the starred (★) ones.
 
 > **Every question below has a full, spoken-word answer.** You do not need to be a programmer to
@@ -720,6 +721,71 @@ The last subscriber to leave is what closes the connection — and that close is
 because React's Strict Mode remounts components in development and a registry that briefly empties
 would otherwise close and immediately reopen the socket on every page.
 → `docs/docker-concurrency-realtime.md` §D7.
+
+**★ F21. How do you stop a dead WebSocket from leaking?**
+**Answer:** A scheduled heartbeat sweep that pings every socket and disconnects whatever doesn't
+answer within the send timeout. The interesting part is *why that has to exist at all*, because the
+obvious detection — "a failed send means a dead socket" — is wrong twice over. A TCP connection can
+die without the server ever seeing a FIN: a closed laptop, a NAT timeout, a killed container. The
+socket still looks open. And sending to a half-open socket *succeeds*, because it only fails once
+the kernel buffer finally overflows — so a successful send is not evidence the client is alive.
+Which means broadcast-failure detection only ever reaps sockets on markets that actually trade, and
+a socket watching a quiet market leaks forever. Each leak holds a file descriptor and a slot in that
+IP's connection counter, which slowly locks real users out.
+
+So there's a 30-second sweep in the app lifespan, cancelled cleanly on shutdown. It re-raises the
+cancellation error rather than swallowing it — swallow that and the task becomes uncancellable and
+the process hangs on exit — and wraps the body in a broad `except` so one bad socket can't kill the
+loop whose whole job is cleaning up bad sockets. Three tests pin it: a hanging send gets reaped, a
+responsive socket is **not** reaped, and the lifespan actually schedules the loop. That last one is
+the real regression test, and I verified it by reverting the wiring and watching the test fail.
+
+**★ F22. Is 50 connections per IP actually the limit?**
+**Answer:** No, and I want to be precise about this because it's the easy thing to get wrong. The cap
+is enforced per *process*, on an in-memory counter. With eight gunicorn workers the effective ceiling
+is up to eight times fifty — 400 connections from one IP, not 50.
+
+That's deliberate. A global counter means a Redis round-trip on every connect *and* every disconnect,
+and worse, a counter that leaks when a node dies would lock a user out permanently — which is exactly
+the bug that once locked users out at five connections after an unclean socket death. So the per-process
+cap stays: it's fast, it has no dependency, and it cannot strand a user. And now that there's a
+`ws_connections` gauge, the true fleet-wide number is observable rather than something you have to
+derive by hand. If abuse ever became a real problem I'd move to a Redis-backed counter with a TTL so
+it self-heals — but I wouldn't do that on speculation.
+→ `docs/docker-concurrency-realtime.md` §D4, §D10.
+
+**★ F23. How do you know how many WebSocket connections you're holding?**
+**Answer:** Prometheus gauges, per worker: `ws_connections` and `ws_subscriptions` for the current
+number, plus counters for connects by outcome, disconnects by cause, sends by result, and fan-out by
+channel class. Before this there were exactly two collectors and both were HTTP, which made the
+headline capacity claim — the 50k-connection story — completely unmeasurable. You can't claim headroom
+you can't observe.
+
+The detail I'd volunteer is the send result split, because "timeout" and "failed" mean different
+things operationally: a timeout is a *wedged* client with a full TCP buffer that is still connected,
+while a failure is genuinely dead. And the subtle implementation trap is that the gauges must only
+decrement for sockets this worker actually counted — a socket can reach the disconnect path that was
+never registered, and decrementing for it drives the gauge negative, which is worse than no metric at
+all, because a negative gauge reads as "we have headroom" when the opposite is true. Registration is
+captured before the registry is popped for exactly that reason.
+→ `docs/docker-concurrency-realtime.md` §D10.
+
+**★ F24. What's a bug you'd call subtle, and how did you find it?**
+**Answer:** The one I'd pick is in the client mutex. The original per-market lock was a spin-wait —
+"while locked, sleep five milliseconds and check again". It worked, which is why it survived: it only
+costs a timer when two components race on the same market, which is rare in development. But it burns
+a timer per contended market and occupies the event loop while it waits, and under a burst of
+subscribe/unsubscribe that's exactly when you can least afford it. Replacing it with a promise chain
+was straightforward — chain onto the previous promise rather than polling.
+
+The subtle part wasn't the mutex, it was the "improvement" I nearly made alongside it. The obvious
+tidy-up is to guard the subscribe frame with "only send if the socket is actually open". That would
+have been a **new bug**: if a second market is subscribed while the socket is still connecting, the
+send correctly no-ops — but the market still has to be recorded, because the `onopen` handler replays
+that recorded set. Returning early drops that market permanently, and the socket URL only ever names
+the *first* market, so nothing would ever re-add it. The lesson is that "the socket isn't ready, skip
+it" is wrong whenever something later is responsible for replaying your intent. I caught it by
+reading what `onopen` actually replays before I trusted the guard.
 
 **F20. How do you add a *new* market to a live socket?**
 **Answer:** Send `{"type":"subscribe","market_id":"..."}`. The server adds it to the socket's
@@ -2113,7 +2179,7 @@ when lifecycle events can arrive out of order, compare identity rather than trus
 
 **★ Q8. Do you have frontend tests?**
 **Answer:** No, and that's the honest headline. Zero test files, no test runner in any package manifest,
-no test script, and no test task in the Turbo pipeline. The backend has 381 tests; the client has none.
+no test script, and no test task in the Turbo pipeline. The backend has 384 tests; the client has none.
 The two highest-risk files here are the API client, with its refresh state machine, and the WebSocket
 hook, with its reconnect and single-flight logic — and both are defended by dense comments explaining the
 exact bug each section prevents, which is a reasonable substitute for tests but genuinely isn't
@@ -2427,5 +2493,7 @@ pre-checking, which would itself race.
 | Frontend routing | 27 pages in 3 route groups; middleware renamed to `proxy.ts` in Next 16 |
 | WS client | 1 socket per tab, capped at 8 reconnect attempts, 30 s max backoff |
 | Frontend tests | **0** — the honest headline |
-| Test suite | **381** tests across 22 files; DB rebuilt from Alembic `head` every run |
+| Test suite | **384** tests across 22 files; DB rebuilt from Alembic `head` every run |
+| WS heartbeat | 30 s ping sweep, reaps on `SEND_TIMEOUT_S` (2 s); `cause="heartbeat"` |
+| WS metrics | `ws_connections`, `ws_subscriptions` (per-worker gauges) + 4 counters |
 | Test infra | `pm-postgres` on 5433, `pm-redis` on 6380 — `docker start pm-postgres pm-redis` |

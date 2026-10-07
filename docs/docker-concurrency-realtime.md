@@ -518,6 +518,17 @@ From the module docstring (`manager.py:1`):
 6. **Connection caps**: `MAX_CONNECTIONS_PER_IP = 50`, `MAX_CONNECTIONS_PER_USER = 5`,
    `MAX_SUBSCRIPTIONS_PER_SOCKET = 50` → prevents file-descriptor exhaustion and memory
    exhaustion from malicious clients. Close code `1008 "Connection limit exceeded"`.
+
+   > **These caps are per *process*, so the effective ceiling is per-IP × workers — with
+   > 8 gunicorn workers that is up to 400 connections from one IP, not 50.** State it that way;
+   > "50 per IP" on its own is wrong and a panel reading the config will catch it. The
+   > per-process choice is deliberate: a global counter needs a Redis round-trip on every
+   > connect *and* disconnect, and a counter that leaks when a node dies locks users out.
+   > `ws_connections` (a per-worker gauge) now makes the true fleet-wide number observable
+   > rather than something you have to derive — see §D10. Making the cap genuinely global
+   > would need a Redis-backed counter with a TTL so it self-heals; that's the change I'd
+   > make if abuse ever became real, and it is deliberately not done on speculation.
+
 7. **Server-side filtering** — each socket has a subscription registry; the server only sends
    what you actually subscribed to. A client can't receive another market's data.
 
@@ -741,3 +752,79 @@ tab** with exponential-backoff reconnect and automatic re-subscribe (Redis Pub/S
 stale-message `seq` guards, and handlers that either `setQueryData` straight into the React Query
 cache or invalidate queries — so delivery is at-most-once and the query cache is the durable
 source of truth.
+
+---
+
+## D10. Keeping sockets alive, and knowing how many you have
+
+Two things this section covers were **missing and are now fixed** — both were found by auditing
+the implementation rather than by reading the design.
+
+### The half-open socket leak
+
+`ConnectionManager._cleanup_dead` pings sockets and disconnects the unresponsive ones. It shipped
+as **dead code**: the docstring said *"kept for periodic sweeps only"* and nothing ever scheduled a
+sweep. Grep found only the definition and no caller.
+
+That matters more than dead code usually does, because the fallback detection is unreliable:
+
+- A TCP connection can die **without a FIN reaching us** — laptop lid closed, NAT timeout, killed
+  container. The socket then looks open forever.
+- `send_json` to a half-open socket **succeeds**, because it only fails once the kernel buffer
+  finally overflows. So "the send succeeded" is not evidence the client is alive.
+- Broadcast-failure detection therefore only reaps sockets on markets that **actually trade**. A
+  socket watching a quiet market leaks indefinitely — and each leak holds a file descriptor, memory,
+  and a slot in that IP's connection counter, which slowly locks real users out.
+
+The fix is a real scheduled sweep, not more callers of the old method:
+
+```python
+async def heartbeat_loop(self, interval_s: float = 30.0) -> None:
+    while True:
+        await asyncio.sleep(interval_s)
+        await self.heartbeat_once()      # ping every local socket, reap what doesn't answer
+```
+
+started in the app lifespan and cancelled on shutdown. Three details that matter:
+
+1. **`CancelledError` is re-raised, not swallowed.** Swallowing it would make the task immune to
+   cancellation and the process would hang on shutdown.
+2. **A blanket `except Exception` keeps the sweep alive.** A single unparseable socket must not kill
+   the loop that reaps sockets.
+3. **Pinging is a *send*, so it's bounded by `SEND_TIMEOUT_S` like everything else** — one wedged
+   socket costs 2 s of one sweep pass, not the loop.
+
+`heartbeat_once()` returns how many it reaped, so a spike is visible in the log rather than
+silent. `test_websocket.py` pins all three behaviours: a hanging send is reaped with cause
+`heartbeat`, a responsive socket is **not** reaped (no false positives), and — the regression that
+mattered — the lifespan actually *schedules* the loop. That last assertion was verified by
+temporarily reverting the wiring and confirming the test fails.
+
+### Metrics: the realtime layer was invisible
+
+There were exactly two Prometheus collectors, both HTTP. Nothing about WebSockets was measurable,
+which made "how close to 50k connections are we?" unanswerable — the headline capacity claim had no
+evidence behind it. Now:
+
+| Metric | Type | Labels | Answers |
+|---|---|---|---|
+| `ws_connections` | Gauge | — | How many sockets am I holding *right now*? |
+| `ws_subscriptions` | Gauge | — | Total market subscriptions held |
+| `ws_connects_total` | Counter | `outcome` (`accepted`/`rejected_ip`/`rejected_user`) | Are we rejecting people, and why? |
+| `ws_disconnects_total` | Counter | `cause` (`client`/`error`/`send_failed`/`heartbeat`) | Are clients or the server dropping them? |
+| `ws_sends_total` | Counter | `result` (`ok`/`timeout`/`failed`) | Timeout ≠ failed: timeout means a **wedged** client (full buffer), failed means dead |
+| `ws_messages_fanned_out_total` | Counter | `channel` (`market`/`user`/`global`) | Fan-out volume per channel class |
+
+Two implementation details that are easy to get wrong:
+
+- **The gauges are decremented only for sockets this worker actually counted.** A socket can reach
+  `disconnect()` that was never counted (rejected before `accept()`, already reaped). Registration
+  is captured *before* the registry is popped, because decrementing for an uncounted socket drives
+  the metric **negative** — which is worse than having no metric, since a negative gauge is read as
+  "we have capacity" when the opposite is true.
+- **Notification sockets are counted too.** They're tracked by a separate `UserConnectionManager`,
+  so wiring only the market manager would have made `ws_connections` silently under-report every
+  logged-in user's socket — precisely the load you'd most want to see.
+
+`ws_connections` is a **per-worker gauge**; fleet-wide totals are the sum across workers, which is
+exactly consistent with the per-process caps in §D4.

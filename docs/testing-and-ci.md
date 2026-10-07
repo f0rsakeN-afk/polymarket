@@ -6,7 +6,7 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 > Written from `backend/tests/`, `backend/pytest.ini`, `.github/workflows/ci.yml`,
 > `backend/scripts/{locustfile.py,audit_escrow.py,backup_db.sh}`.
 >
-> **Current state: 381 tests across 22 files. Zero frontend tests.** See `frontend.md` §10.
+> **Current state: 384 tests across 22 files. Zero frontend tests.** See `frontend.md` §10.
 
 ---
 
@@ -14,7 +14,7 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 
 | | Count | Worth quoting? |
 |---|---|---|
-| Backend tests | **381** across **22** files | Yes — with the *why*, see below |
+| Backend tests | **384** across **22** files | Yes — with the *why*, see below |
 | Test files | 22 | Yes, if asked what's covered |
 | Frontend tests | **0** | **Yes — volunteer it** |
 
@@ -24,7 +24,7 @@ invariant, `test_concurrency.py` fires parallel orders at one market, `test_escr
 every invariant *and* that a healthy pool reports zero violations, and `test_task_integration.py`
 drives the Celery tasks with no broker at all.
 
-That's a defence. "381 tests" is a number.
+That's a defence. "384 tests" is a number.
 
 ---
 
@@ -88,7 +88,7 @@ Two details that show the tests are written carefully:
 | `test_auth.py` | 25 | Registration guards, **duplicate email not enumerable**, login variants, 2FA setup/wrong code, `/me`, sessions, logout-all (+ token actually revoked), change-password, and the **two refresh-chain tests** |
 | `test_admin.py` | 21 | User listing, search, **banning an admin is forbidden**, audit-event listing, protocol-fee distribution admin-only + the empty case |
 | `test_disputes.py` | 12 | Full dispute lifecycle: resolved-market-only, active rejected, admin-only proposal/adjudication, upheld/dismissed, invalid ruling |
-| `test_websocket.py` | 14 | Connect/ping/pong, reconnect subscribes a different market, **market and trades feeds are public**, invalid token still rejected, notification socket rejects anonymous/wrong user/invalid token |
+| `test_websocket.py` | 17 | Connect/ping/pong, reconnect subscribes a different market, **market and trades feeds are public**, invalid token still rejected, notification socket rejects anonymous/wrong user/invalid token, **plus the heartbeat sweep: a hanging send is reaped with cause `heartbeat`, a responsive socket is not, and the lifespan actually schedules the loop** |
 | `test_webhooks.py` | 14 | **Stripe signature verification as the primary subject**: invalid signature, missing header, **stale timestamp**, tampered payload, **unconfigured secret fails closed**, invalid JSON; plus idempotent delivery |
 | `test_task_integration.py` | 14 | Runs Celery task bodies via `asyncio.to_thread(task.run)` — **no broker needed**. Sweeper fills a resting buy once the price crosses, leaves unreachable orders alone, expires and frees funds, no-ops when nothing moved, only touches marked markets, **falls back to a full scan when Redis is gone**. Also the fee sweep including the **shortfall carried forward** case. |
 | `test_security_fixes.py` | 12 | Regression suite for **nine named historical breaks** (the header lists all nine): revoked-session/blacklisted-token WS rejection, `?token=` gated off, XFF ignored without a trusted proxy, **OTP plaintext never in Redis**, origin allowlist outside production, refresh has its own bucket, cookies accepted by a standard jar, dummy bcrypt hash cached, AMM buy writes a Trade row |
@@ -127,7 +127,23 @@ payout leaving positions claimable.
 cd backend && .venv/bin/pytest tests/test_ledger.py -q
 ```
 
-### 5.3 `test_resting_orders.py` — "tell me about a bug you found"
+### 5.3 `test_websocket.py -k heartbeat` — the test that guards dead code
+
+Three tests that exist because `_cleanup_dead` shipped as dead code: the method worked, and nothing
+ever called it. The third test asserts the *wiring* rather than the behaviour —
+`inspect.getsource(app)` must contain `heartbeat_loop()` and `heartbeat_task.cancel()`.
+
+**That assertion was verified by sabotage**, not by assumption: I temporarily replaced the lifespan's
+`heartbeat_loop()` call with a no-op, confirmed the test failed, then restored the file and
+confirmed `diff` showed no residual change. A test that has never been observed failing is not
+evidence.
+
+The other two are behavioural and deliberately paired, because a heartbeat that reaps everything is
+worse than none: a hanging send must be reaped, and a responsive socket must **not** be. Both use a
+stand-in socket that either never resolves or returns immediately, and both fake `disconnect` so
+they assert the *decision* rather than the counter bookkeeping.
+
+### 5.4 `test_resting_orders.py` — "tell me about a bug you found"
 Resting limit orders used to **return before the commit**, so the order and its locked funds rolled
 back — resting orders did not actually exist.
 
@@ -278,6 +294,8 @@ Today it isn't; that's a gap.
    design-reasoned only (§8).
 3. **No alerting on the escrow audit.** Detection works and logs structured events; nothing watches.
    `audit_escrow.py` exists and exits non-zero, but nothing runs it on a schedule.
+   *(Same story now applies to `ws_connections`: the gauge exists and nothing alerts on a
+   saturation trend. A metric you never graph or alert on is inventory, not observability.)*
 4. **`security-scan` is advisory** — a CRITICAL finding doesn't block a merge.
 5. **CI doesn't gate `packages/ui` typecheck** — scoped out because of known chart-internal errors.
 6. **`@workspace/ui`'s 164 chart files are effectively untested and mostly unused** — CI lints them,
@@ -290,7 +308,7 @@ Today it isn't; that's a gap.
 
 ## 11. One-paragraph summary, for reading aloud
 
-> Correctness is demonstrated with 381 tests across 22 files, and the design decision behind them is
+> Correctness is demonstrated with 384 tests across 22 files, and the design decision behind them is
 > that the test database is dropped and rebuilt from the Alembic migrations before every run — so a
 > stale schema can never make a failing test pass, and the migrations are exercised on every run too.
 > The tests authenticate through the real refresh-token and session-binding path rather than a test

@@ -5,7 +5,7 @@ what to show, what to say while showing it, and what to do when something breaks
 
 > Companion docs: `docs/README.md` (index) · `concepts.md` (the story) · `data-model.md` ·
 > `trading-engine.md` · `platform-features.md` · `background-jobs.md` · `frontend.md` ·
-> `docker-concurrency-realtime.md` · `viva-questions.md` (312 questions).
+> `docker-concurrency-realtime.md` · `viva-questions.md` (319 questions).
 >
 > A demo is worth about as much as a viva. The rule that matters: **every thing you show must have a
 > sentence explaining why it matters.** A panel reads an unexplained screen as a screenshot.
@@ -23,7 +23,7 @@ Keep this visible during the demo. Everything else in this document is detail.
 | **3. It's real money** | Wallet balance changes; transaction row appears | "Every balance change is an append-only ledger row with the balance after it." |
 | **4. It's live** | Second tab on the same market; trade appears | "One WebSocket per tab, fed by Redis pub/sub, so any of the 8 workers can push." |
 | **5. It's safe** | Two accounts order simultaneously | "One serialisation point with a fixed lock order — that's the answer to the hard question." |
-| **6. It's correct** | `pytest -q` output | "381 tests, DB rebuilt from migrations every run." |
+| **6. It's correct** | `pytest -q` output | "384 tests, DB rebuilt from migrations every run." |
 | **7. It's honest** | The gap list | "Here's what I know is wrong, and here's what I'd fix first." |
 
 **Phases 5–7 are what separate you.** Anyone can show a market list.
@@ -179,7 +179,7 @@ cd backend && .venv/bin/pytest tests/test_concurrency.py -q
 cd backend && .venv/bin/pytest -q
 ```
 
-**Say:** *"381 tests across 22 files. The test database is dropped and rebuilt from the Alembic
+**Say:** *"384 tests across 22 files. The test database is dropped and rebuilt from the Alembic
 migrations on every single run, so a stale schema can never make a failing test pass."*
 
 ### Phase 7 — it's honest (2 min) ← do not skip
