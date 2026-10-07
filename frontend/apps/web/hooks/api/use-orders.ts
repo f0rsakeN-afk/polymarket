@@ -5,6 +5,7 @@ import { listOrders, placeOrder, cancelOrder } from "@/lib/api/orders"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { apiErrorCode, apiErrorMessage } from "@/lib/api/client"
 import { sileo } from "sileo"
+import { useAuthGate } from "./use-auth-gate"
 
 export function useOrders(filters?: {
   status?: string
@@ -12,6 +13,7 @@ export function useOrders(filters?: {
   order_type?: string
   market_id?: string
 }) {
+  const { enabled } = useAuthGate()
   return useInfiniteQuery({
     queryKey: queryKeys.orders(filters),
     // Backend is keyset-paginated: `cursor`, never `page`.
@@ -22,6 +24,7 @@ export function useOrders(filters?: {
       orders: data.pages.flatMap((p) => p.data.orders),
       hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
     }),
+    enabled,
   })
 }
 

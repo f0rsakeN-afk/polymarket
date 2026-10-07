@@ -35,7 +35,23 @@ interface SharedConnection {
   statusHandlers: Set<MessageHandler>
   /** Market used in WS URL — the most recently active market for reconnect path */
   lastConnectedMarket: string | null
+  /** Reconnect loop parked after too many consecutive failures */
+  gaveUp: boolean
+  /** The socket being closed on purpose — its `onclose` must not queue a reconnect */
+  intentionalCloseSocket: WebSocket | null
+  /** Deferred "registry is empty, close the socket" timer (see the unsubscribe path) */
+  closeTimer: ReturnType<typeof setTimeout> | null
 }
+
+/**
+ * Consecutive reconnect attempts before the loop parks itself.
+ *
+ * Backoff already stretches to 30s, so this is ~2 minutes of trying. Without a
+ * ceiling an endpoint that is down (or refusing us) is retried for the lifetime
+ * of the tab, which is what filled the API log with identical handshake
+ * rejections. The park clears on `online` / tab focus.
+ */
+const MAX_RECONNECT_ATTEMPTS = 8
 
 // Module-level singleton — one WebSocket per browser tab
 let _conn: SharedConnection | null = null
@@ -52,6 +68,9 @@ function getConnection(): SharedConnection {
       serverSubs: new Set(),
       statusHandlers: new Set(),
       lastConnectedMarket: null,
+      gaveUp: false,
+      intentionalCloseSocket: null,
+      closeTimer: null,
     }
   }
   return _conn
@@ -105,17 +124,33 @@ function wsUnsubscribe(conn: SharedConnection, marketId: string) {
 
 function connect(conn: SharedConnection, firstMarketId: string) {
   if (conn.ws) return  // already open or pending
+  if (conn.gaveUp) return  // reconnect loop parked — cleared by network recovery
 
+  // No auth gate here, deliberately. Market data is public over REST
+  // (`/markets/{slug}/orderbook`, `/markets/{slug}/trades`) and this socket pushes
+  // exactly that, so the server accepts an anonymous handshake. Gating the client
+  // on a session would deny live prices to logged-out visitors — who can already
+  // read the same numbers over HTTP. The `access_token` cookie rides along
+  // automatically when there is a session, which is all the server needs it for.
+  //
   // Clear any pending reconnect timer — prevents duplicate connections on rapid calls
   if (conn.reconnectTimer) {
     clearTimeout(conn.reconnectTimer)
     conn.reconnectTimer = null
   }
+  // A pending deferred close is now moot — something asked for a socket.
+  if (conn.closeTimer) {
+    clearTimeout(conn.closeTimer)
+    conn.closeTimer = null
+  }
 
-  // Auth: access_token cookie is sent automatically by the browser on WS handshake
   conn.lastConnectedMarket = firstMarketId
   const ws = new WebSocket(`${config.wsUrl}/ws/markets/${firstMarketId}`)
   conn.ws = ws
+  // Identity of the socket being closed on purpose. A bare boolean was wrong:
+  // it is shared across sockets, so a *late* close event from a socket we have
+  // already replaced would read the flag its successor reset.
+  conn.intentionalCloseSocket = null
   setStatus(conn, "connecting")
 
   ws.onopen = () => {
@@ -168,8 +203,28 @@ function connect(conn: SharedConnection, firstMarketId: string) {
   }
 
   ws.onclose = () => {
+    // A superseded socket must not touch shared state. `close()` is async, so a
+    // socket we already replaced fires `onclose` *after* its successor is live;
+    // nulling `conn.ws` unconditionally here made the live socket untracked, and
+    // the next subscribe opened a second one — two sockets, both receiving, and
+    // the flap repeated on every subscribe/unsubscribe cycle.
+    if (conn.ws !== ws) return
     conn.ws = null
     setStatus(conn, "disconnected")
+
+    // Closed on purpose (last subscriber left) — the reconnect loop must stay
+    // parked until something actually asks for a socket.
+    if (conn.intentionalCloseSocket === ws) {
+      conn.intentionalCloseSocket = null
+      return
+    }
+
+    if (conn.retries >= MAX_RECONNECT_ATTEMPTS) {
+      conn.gaveUp = true
+      setStatus(conn, "error")
+      return
+    }
+
     const delay = Math.min(1000 * Math.pow(2, conn.retries), 30_000)
     conn.retries++
     // Reconnect to the market the user is currently viewing — not the first subscribed
@@ -181,6 +236,7 @@ function connect(conn: SharedConnection, firstMarketId: string) {
   }
 
   ws.onerror = () => {
+    if (conn.ws !== ws) return
     setStatus(conn, "error")
     ws.close()
   }
@@ -238,13 +294,25 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
         c.subLocks.delete(marketId)  // ponytail: prevent subLocks Map leak
         wsUnsubscribe(c, marketId)
 
-        // If all markets desubscribed, close the WS
+        // If all markets desubscribed, close the WS — but not synchronously.
+        // React Strict Mode is on by default with the app router (Next 13.5.1+),
+        // so in dev every component unmounts and remounts, and a registry that
+        // briefly empties would close the socket and immediately reopen it.
+        // Anything that re-subscribes on the next tick keeps it; a genuinely
+        // empty registry still closes.
         if (c.subs.size === 0) {
-          if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
-          c.ws?.close()
-          c.ws = null
-          setStatus(c, "disconnected")
-          c.retries = 0
+          if (c.closeTimer) clearTimeout(c.closeTimer)
+          c.closeTimer = setTimeout(() => {
+            c.closeTimer = null
+            if (c.subs.size > 0) return
+            if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
+            const ws = c.ws
+            c.intentionalCloseSocket = ws
+            c.ws = null
+            ws?.close()
+            setStatus(c, "disconnected")
+            c.retries = 0
+          }, 0)
         }
       }
     }
@@ -260,6 +328,38 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
     const statusHandler: MessageHandler = () => tick((n) => n + 1)
     c.statusHandlers.add(statusHandler)
     return () => { c.statusHandlers.delete(statusHandler) }
+  }, [])
+
+  // Recover a parked or sleeping socket when the network comes back. A laptop
+  // resuming from sleep drops the socket silently — `online` and
+  // `visibilitychange` are the only signals the browser gives us, and without
+  // them a parked socket stays parked for the rest of the session.
+  useEffect(() => {
+    const c = conn.current
+
+    const recover = () => {
+      if (!c.subs.size) return
+      if (c.ws && !c.gaveUp) return  // still healthy
+      c.gaveUp = false
+      c.retries = 0
+      if (c.reconnectTimer) {
+        clearTimeout(c.reconnectTimer)
+        c.reconnectTimer = null
+      }
+      const market = c.lastConnectedMarket ?? c.subs.keys().next().value
+      if (market) connect(c, market)
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") recover()
+    }
+
+    window.addEventListener("online", recover)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.removeEventListener("online", recover)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
   }, [])
 
   return (

@@ -5,13 +5,16 @@ import { createAlert, listAlerts, deleteAlert } from "@/lib/api/alerts"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 import { apiErrorMessage } from "@/lib/api/client"
+import { useAuthGate } from "./use-auth-gate"
 
 export function useAlerts() {
+  const { enabled } = useAuthGate()
   return useQuery({
     queryKey: queryKeys.alerts(),
     queryFn: listAlerts,
     select: (res) => res.data,
     staleTime: 30_000,
+    enabled,
   })
 }
 

@@ -17,6 +17,7 @@ class LimitType(Enum):
     GENERAL = "general"           # per IP — 60/min
     AUTH_DECISION = "auth"       # per email+IP — 5/min (login, verify, reset)
     AUTH_FAST = "auth_fast"     # per email+IP — 3/min (resend/forgot)
+    AUTH_REFRESH = "auth_refresh"  # per IP — 30/min (silent token rotation)
     STRICT = "strict"           # per IP — 10/min (mutations)
 
 
@@ -118,6 +119,7 @@ class RateLimitService:
         LimitType.GENERAL:      (60,  60),   # 60/min per IP
         LimitType.AUTH_DECISION: (5,  60),   # 5/min per email+IP
         LimitType.AUTH_FAST:    (3,  60),   # 3/min per email+IP
+        LimitType.AUTH_REFRESH: (30, 60),   # 30/min per IP
         LimitType.STRICT:       (10, 60),   # 10/min per IP
     }
 

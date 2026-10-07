@@ -272,10 +272,18 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
     # Secure cookie only when actually in production (HTTPS). Localhost and dev
     # environments must use non-secure cookies even when DEBUG=false.
     is_prod = settings.app_env == "production"
-    # Domain=localhost allows the cookie to work across frontend (:3000) and
-    # backend (:8000) on different ports during local development.
-    cookie_domain = "localhost" if not is_prod else None
 
+    # Deliberately NO `Domain` attribute — these are host-only cookies.
+    #
+    # Dev used to set `Domain=localhost` so the cookie would "work across
+    # frontend (:3000) and backend (:8000)". It never needed to: cookie scope is
+    # host-based and ignores ports entirely, so a host-only cookie set by
+    # localhost:8000 is sent to localhost:8000 just the same. The attribute bought
+    # nothing and cost real breakage — a `Domain=localhost` cookie is rejected
+    # outright by RFC 6265 cookie stores (Python's `http.cookiejar`, and so every
+    # httpx/requests client, silently discards it), which made a successful login
+    # look like an anonymous one on the very next request. Host-only is also what
+    # production already used, so dev now matches it.
     response.set_cookie(
         key="access_token",
         value=access_token,
@@ -284,7 +292,6 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
         samesite="lax",
         max_age=settings.jwt_access_expire,
         path="/",
-        domain=cookie_domain,
     )
     if refresh_token:
         response.set_cookie(
@@ -295,12 +302,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
             samesite="lax",
             max_age=settings.jwt_refresh_expire,
             path="/",
-            domain=cookie_domain,
         )
 
 
 def clear_auth_cookies(response: Response):
     is_prod = settings.app_env == "production"
-    cookie_domain = "localhost" if not is_prod else None
-    response.delete_cookie("access_token", path="/", secure=is_prod, domain=cookie_domain)
-    response.delete_cookie("refresh_token", path="/", secure=is_prod, domain=cookie_domain)
+    # Must mirror set_auth_cookies exactly — a delete_cookie with a different
+    # Domain/Path than the one it set does not remove the stored cookie.
+    response.delete_cookie("access_token", path="/", secure=is_prod)
+    response.delete_cookie("refresh_token", path="/", secure=is_prod)

@@ -129,7 +129,14 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false)
   const qc = useQueryClient()
   const { data: user } = useCurrentUser()
-  const { data: notifData = [], isLoading } = useNotifications({ page_size: 20 })
+  // `enabled` matters here: this component is mounted by the shared Header on
+  // every page, including public ones. Without the gate an anonymous visitor
+  // fired an authenticated request on each page load, and the resulting 401
+  // triggered a pointless /auth/refresh (which the backend then rate-limited).
+  const { data: notifData = [], isLoading } = useNotifications(
+    { page_size: 20 },
+    { enabled: !!user?.id }
+  )
   const { mutate: markRead } = useMarkNotificationRead()
   const { mutate: markAllRead } = useMarkAllNotificationsRead()
 

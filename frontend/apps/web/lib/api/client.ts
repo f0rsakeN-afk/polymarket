@@ -204,38 +204,92 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
   return controller.signal
 }
 
-// ─── Token refresh ────────────────────────────────────────────────────────────
+// ─── Session tracking + token refresh ──────────────────────────────────────────
+//
+// Auth rides on two HttpOnly cookies, so JavaScript cannot read them and cannot
+// tell "no session at all" from "access token expired, refresh cookie still
+// good". Getting that wrong is what turned one anonymous page view into a burst
+// of `/auth/refresh` calls: every 401 asked for a refresh, an anonymous visitor
+// has no refresh cookie so each attempt 401'd, and the next 401 asked again —
+// until the endpoint's per-minute cap answered 429 and the tab was rate-limiting
+// itself. The `isRefreshing` flag only deduplicated *concurrent* attempts; it
+// was cleared the moment each one settled, so a burst spread over a few seconds
+// still produced one call per 401.
+//
+// `sessionState` records what we have learned, so the same dead end is walked
+// once per tab:
+//
+//   "unknown" — nothing observed yet. The first 401 gets one refresh attempt,
+//               because a 401 genuinely cannot distinguish the two cases above.
+//   "active"  — a session exists; a 401 means it needs rotating.
+//   "none"    — proven dead. Skip refresh entirely; only a successful sign-in
+//               (or a 200 from `/auth/me`) revives it.
+type SessionState = "unknown" | "active" | "none"
 
-let isRefreshing = false
-let refreshSubscribers: Array<(token: string | null) => void> = []
+let sessionState: SessionState = "unknown"
+let refreshPromise: Promise<boolean> | null = null
+let refreshBlockedUntil = 0
 
-function subscribeRefresh(cb: (token: string | null) => void) {
-  refreshSubscribers.push(cb)
+/** How long to stay quiet after an *inconclusive* refresh failure (429 / 5xx / offline). */
+const REFRESH_COOLDOWN_MS = 30_000
+
+/** A sign-in succeeded, or `/auth/me` came back 200 — a session definitely exists. */
+export function markSessionActive() {
+  sessionState = "active"
+  refreshBlockedUntil = 0
 }
 
-function onRefreshDone(token: string | null) {
-  refreshSubscribers.forEach((cb) => cb(token))
-  refreshSubscribers = []
+/** Signed out, or a refresh the server definitively refused. */
+export function markSessionEnded() {
+  sessionState = "none"
+  refreshBlockedUntil = 0
 }
 
-async function doRefresh(): Promise<string | null> {
+/** True when a refresh would repeat a known-bad attempt. */
+function refreshSuppressed(): boolean {
+  if (sessionState === "none") return true
+  return Date.now() < refreshBlockedUntil
+}
+
+async function doRefresh(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
       method: "POST",
       credentials: "include",
     })
-    if (!res.ok) {
-      onRefreshDone(null)
-      return null
+    if (res.ok) {
+      markSessionActive()
+      return true
     }
-    onRefreshDone("refreshed")
-    return "refreshed"
+    // 401/403 is a verdict: the refresh cookie is absent, expired or revoked, and
+    // it cannot come back on its own. Anything else (429, 5xx) proves nothing —
+    // keep the current state and just stop hammering for a cooldown.
+    if (res.status === 401 || res.status === 403) {
+      markSessionEnded()
+    } else {
+      refreshBlockedUntil = Date.now() + REFRESH_COOLDOWN_MS
+    }
+    return false
   } catch {
-    onRefreshDone(null)
-    return null
-  } finally {
-    isRefreshing = false
+    refreshBlockedUntil = Date.now() + REFRESH_COOLDOWN_MS
+    return false
   }
+}
+
+/** Single-flight — a burst of 401s shares one rotation instead of racing. */
+function refreshSession(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = doRefresh().finally(() => {
+      refreshPromise = null
+    })
+  }
+  return refreshPromise
+}
+
+function unauthenticatedMessage(): string {
+  return sessionState === "none"
+    ? "You need to sign in to view this."
+    : "Session expired. Please sign in again."
 }
 
 // Routes that are publicly accessible — 401 on these means "unauthenticated", not "session expired"
@@ -302,22 +356,18 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         body: reqBody,
       }, { retries, timeout, signal: externalSignal ?? undefined })
 
-      // 401 — attempt token refresh
+      // 401 — rotate the access token, then replay the original request once.
       if (res.status === 401 && !headers?.["Authorization"]) {
-        if (!isRefreshing) {
-          isRefreshing = true
-          doRefresh().then((token) => {
-            if (!token) redirectToLogin()
-          })
+        // No point asking if we already know the answer, or if a recent attempt
+        // was inconclusive: an anonymous visitor then costs zero refresh calls.
+        if (refreshSuppressed()) {
+          throw new ApiError(unauthenticatedMessage(), 401)
         }
 
-        const token = await new Promise<string | null>((resolve) => {
-          subscribeRefresh(resolve)
-          setTimeout(() => resolve(null), 10_000)
-        })
-
-        if (!token) {
-          throw new ApiError("Session expired. Please sign in again.", 401)
+        const refreshed = await refreshSession()
+        if (!refreshed) {
+          redirectToLogin()
+          throw new ApiError(unauthenticatedMessage(), 401)
         }
 
         // Retry with new session

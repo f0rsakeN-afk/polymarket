@@ -62,6 +62,16 @@ def _get_client_ip(request: Request) -> str:
 
 def _get_auth_limit_type(path: str) -> LimitType:
     """Map auth path to its limit type."""
+    # Silent token rotation is its own bucket, not AUTH_FAST. AUTH_FAST is 3/min
+    # because every endpoint in it sends an email or reveals whether an account
+    # exists — the tight cap is the point. `/auth/refresh` does neither: it is a
+    # cookie-to-cookie rotation that a signed-in client performs silently, and
+    # 3/min meant a burst of 401s (a flaky network, a laptop waking from sleep
+    # with an expired access token, several components refetching at once) got
+    # the client 429'd and locked out of recovering its own live session. It
+    # still gets its own generous-but-bounded budget, keyed per IP.
+    if path == "/api/v1/auth/refresh":
+        return LimitType.AUTH_REFRESH
     # High-cost decisions: verify code, login, reset password
     if path in (
         "/api/v1/auth/login",

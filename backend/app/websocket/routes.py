@@ -28,33 +28,45 @@ def _get_real_client_ip(websocket: WebSocket) -> str:
     return RateLimitService._normalize_ip(direct_ip or "unknown")
 
 
-async def verify_ws_token(token: str | None) -> str | None:
-    """Resolve an access token to a user id, applying the SAME rules as HTTP.
+async def authenticate_ws_token(token: str | None) -> tuple[str | None, bool]:
+    """Resolve an *optional* access token. Returns `(user_id, token_presented)`.
 
-    The handshake now runs the full validation chain (JWT decode, token
-    type, jti blacklist, user active, session bound/revoked/expired) through
-    `authenticate_token`, so a token that was logged out or blacklist-revoked
-    after it was minted is rejected here too — previously the websocket only
-    checked the signature and would happily accept a revoked session.
+    The market feeds are public — `GET /markets/{slug}/orderbook`, `GET /trades`
+    and `GET /markets/{slug}/trades` all serve the same data with no auth at all —
+    so requiring a token to watch prices gated public information behind a login.
+    Requiring one was collateral from hardening the *validation* of tokens that are
+    presented, not a considered product decision.
 
-    Returns None (→ reject the connection) on any failure, including a
-    database error, so auth fails closed rather than open.
+    Absent-token and invalid-token are therefore different answers, and callers
+    must treat them differently:
+
+    - `(None, False)` — no token. Anonymous; fine for a public feed.
+    - `(user_id, True)` — valid. Full chain checked, exactly as HTTP does.
+    - `(None, True)` — a token *was* presented and it failed. **Reject.** A logged-out
+      or revoked session must not quietly continue as an anonymous one, or revoking
+      a session would stop meaning anything on these sockets.
+
+    Validation is `deps.authenticate_token()`, the same chain HTTP uses: signature,
+    `type == "access"`, jti blacklist, `user.is_active`, `sid` session binding. Any
+    failure — including a database error — is reported as invalid, so auth fails
+    closed rather than open.
     """
     if not token:
-        return None
+        return None, False
+
     from app.database import async_session
     from app.deps import authenticate_token
 
     try:
         async with async_session() as db:
             user = await authenticate_token(db, token)
-        return str(user.id)
+        return str(user.id), True
     except Exception:
         # Covers JWTError, UnauthorizedError, ForbiddenError and DB failures.
         # A logger.debug (not exception) keeps forged-token probes out of the
         # traceback noise while still leaving a trace.
         logger.debug("WS token rejected")
-        return None
+        return None, True
 
 
 def _get_token_from_request(websocket: WebSocket) -> str | None:
@@ -86,22 +98,33 @@ async def market_websocket(websocket: WebSocket, market_id: str):
     """
     Single multiplexed WebSocket connection per client.
 
-    Auth: access_token cookie (preferred) or ?token= query param (fallback).
+    Auth: **optional**. A valid `access_token` cookie (or `?token=` when
+    `WS_ALLOW_QUERY_TOKEN=true`) is validated in full and used for the
+    per-user connection cap; without one the connection is anonymous.
+    This is deliberate — the REST equivalents of everything pushed here
+    (`/markets/{slug}/orderbook`, `/markets/{slug}/trades`) are public, and the
+    only frames on this channel are public market events. Private frames
+    (`notification`, `order:fill`) ride per-user Redis channels and are served
+    by `/ws/notifications/{user_id}` alone.
+
+    A token that *is* presented must still be valid — see
+    `authenticate_ws_token`.
+
     On connect the client is subscribed to `market_id`.
     The client may then send:
       - {type: "subscribe", market_id: "..."}  — add a market subscription
       - {type: "unsubscribe", market_id: "..."} — remove a market subscription
       - {type: "ping"}                         — server replies {type: "pong"}
 
-    The server enforces MAX_SUBSCRIPTIONS_PER_SOCKET (50) per connection.
-
-    Authentication is required — unauthenticated connections are rejected.
+    The server enforces MAX_SUBSCRIPTIONS_PER_SOCKET (50) per connection, and
+    MAX_CONNECTIONS_PER_IP (50) per IP whether or not the caller is signed in —
+    which is what bounds an anonymous socket.
     """
     client_ip = _get_real_client_ip(websocket)
     token = _get_token_from_request(websocket)
-    user_id = await verify_ws_token(token)
-    if not user_id:
-        await websocket.close(code=1008, reason="Authentication required")
+    user_id, token_presented = await authenticate_ws_token(token)
+    if token_presented and not user_id:
+        await websocket.close(code=1008, reason="Invalid or expired token")
         return
 
     accepted = await manager.connect(websocket, market_id, client_ip=client_ip, user_id=user_id)
@@ -159,13 +182,14 @@ async def market_websocket(websocket: WebSocket, market_id: str):
 async def global_trades_websocket(websocket: WebSocket):
     """Global trades feed — streams all new trades across the platform.
 
-    Authentication is required.
+    Public, like `GET /trades` whose docstring calls itself a *"Public global
+    feed"*. Auth is optional; a token that is presented must be valid.
     """
     client_ip = _get_real_client_ip(websocket)
     token = _get_token_from_request(websocket)
-    user_id = await verify_ws_token(token)
-    if not user_id:
-        await websocket.close(code=1008, reason="Authentication required")
+    user_id, token_presented = await authenticate_ws_token(token)
+    if token_presented and not user_id:
+        await websocket.close(code=1008, reason="Invalid or expired token")
         return
 
     accepted = await manager.connect(
@@ -196,9 +220,13 @@ async def global_trades_websocket(websocket: WebSocket):
 
 @router.websocket("/ws/notifications/{user_id}")
 async def user_notifications_websocket(websocket: WebSocket, user_id: str):
-    """User notification channel — requires valid access token matching user_id."""
+    """User notification channel — **auth required**, token's uid must match.
+
+    This is the only private surface: it serves `user:{uid}:notifications` and
+    `user:{uid}:fills`, so an anonymous or mismatched caller is refused outright.
+    """
     token = _get_token_from_request(websocket)
-    authenticated_user_id = await verify_ws_token(token)
+    authenticated_user_id, _presented = await authenticate_ws_token(token)
     if not authenticated_user_id or authenticated_user_id != user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return

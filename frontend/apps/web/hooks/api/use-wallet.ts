@@ -5,16 +5,21 @@ import { getWallet, deposit, withdraw, listTransactions } from "@/lib/api/wallet
 import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 import { apiErrorMessage } from "@/lib/api/client"
+import { useAuthGate, useLoadingWithGate } from "./use-auth-gate"
 
 export function useWallet() {
-  return useQuery({
+  const { enabled, isAuthLoading } = useAuthGate()
+  const query = useQuery({
     queryKey: queryKeys.wallet(),
     queryFn: () => getWallet().then((r) => r.data),
     staleTime: 10_000,
+    enabled,
   })
+  return { ...query, isLoading: useLoadingWithGate(query.isLoading, isAuthLoading, enabled) }
 }
 
 export function useTransactions() {
+  const { enabled } = useAuthGate()
   // GET /api/v1/wallet/transactions is offset-paginated only (no
   // `next_cursor`/`has_more`) — a full page is the only "more" signal.
   const PAGE_SIZE = 20
@@ -30,6 +35,7 @@ export function useTransactions() {
         (data.pages[data.pages.length - 1]?.data.transactions.length ?? 0) === PAGE_SIZE,
     }),
     staleTime: 10_000,
+    enabled,
   })
 }
 

@@ -6,12 +6,21 @@ import { queryKeys } from "@/lib/api/queryKeys"
 import { sileo } from "sileo"
 import { apiErrorMessage } from "@/lib/api/client"
 
-export function useNotifications(params?: { page?: number; page_size?: number; unread_only?: boolean }) {
+export function useNotifications(
+  params?: { page?: number; page_size?: number; unread_only?: boolean },
+  /**
+   * Gate the fetch on having a session. The endpoint requires auth, so letting
+   * it run for an anonymous visitor produces a 401 on every page load (the bell
+   * lives in the shared header) — and each 401 used to kick off a token refresh.
+   */
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: queryKeys.notifications(params),
     queryFn: () => notificationsApi.list(params),
     select: (res) => res.data,
     staleTime: 15_000,
+    enabled: options?.enabled,
   })
 }
 

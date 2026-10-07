@@ -75,16 +75,44 @@ def test_global_trades_websocket_connect_and_ping(ws_client, test_user):
             assert msg["type"] == "pong"
 
 
-def test_global_trades_websocket_rejects_anonymous(ws_client):
-    """Every WS surface requires auth — an anonymous handshake is closed 1008."""
+def test_global_trades_websocket_is_public(ws_client):
+    """The trades feed is public — like `GET /trades`, whose docstring says so.
+
+    Gating it behind a login meant a logged-out visitor could read recent trades
+    over HTTP but got a 403 on the live ones, and the client then re-opened the
+    refused socket on every backoff tick.
+    """
+    with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
+        mock_pubsub.subscribe_global_trades = AsyncMock()
+        with ws_client.websocket_connect("/ws/trades") as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json()["type"] == "pong"
+        mock_pubsub.subscribe_global_trades.assert_called_once()
+
+
+def test_market_websocket_is_public(ws_client, test_market):
+    """`/ws/markets/{id}` is public too — its REST twins need no auth either."""
+    with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
+        mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}") as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json()["type"] == "pong"
+        mock_pubsub.subscribe_market.assert_called_once_with(str(test_market.id))
+
+
+def test_market_websocket_still_rejects_an_invalid_token(ws_client, test_market):
+    """Public does not mean unauthenticated: a *presented* token must be valid.
+
+    Otherwise a revoked or logged-out session would silently continue as an
+    anonymous one and revoking it would stop meaning anything on these sockets.
+    """
     from starlette.websockets import WebSocketDisconnect
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with ws_client.websocket_connect("/ws/trades") as ws:
-            ws.send_json({"type": "ping"})
-            ws.receive_json()
+        with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token=not-a-jwt"):
+            pass
     assert exc_info.value.code == 1008
-    assert "Authentication required" in (exc_info.value.reason or "")
 
 
 # ── User Notifications WebSocket ───────────────────────────────────────────────
@@ -100,6 +128,22 @@ def test_user_notifications_websocket_validtoken_for(ws_client, test_user):
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
+
+
+def test_user_notifications_websocket_rejects_anonymous(ws_client, test_user):
+    """The personal feed stays private — no token at all means no delivery.
+
+    This is the one surface that must not be public: it serves
+    `user:{uid}:notifications` and `user:{uid}:fills`.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
+        mock_pubsub.subscribe_user = AsyncMock()
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with ws_client.websocket_connect(f"/ws/notifications/{test_user.id}"):
+                pass
+    assert exc_info.value.code == 4001
 
 
 def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
