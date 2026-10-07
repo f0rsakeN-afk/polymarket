@@ -7,66 +7,81 @@
 
 ## Project Structure
 
+The real tree — verified against the filesystem. (An earlier version of this section listed
+`app/main.py`, `app/api/users.py`, `app/models/outcome.py`, `app/models/transaction.py`,
+`app/services/{auth,trading,settlement}.py`, `app/amm/lp.py`, `app/orderbook/` and a legacy
+`config/` directory. **None of those exist**; the entry point is `app/app.py`, outcomes live in
+`app/models/market.py`, transactions in `app/models/wallet.py, and the order book is
+`app/services/matching_engine.py` — there is no `app/orderbook/` package.)
+
 ```
 backend/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI entry
-│   ├── config.py            # Pydantic settings (all env vars)
-│   ├── deps.py              # Shared dependencies (get_db, get_current_user)
-│   ├── api/                 # REST routers
-│   │   ├── __init__.py
-│   │   ├── auth.py          # /auth/*
-│   │   ├── users.py         # /users/*
-│   │   ├── markets.py       # /markets/*
-│   │   ├── orders.py        # /orders/*
-│   │   ├── wallet.py        # /wallet/*
-│   │   ├── admin.py         # /admin/*
-│   │   └── webhooks.py      # /webhooks/*
-│   ├── models/              # SQLAlchemy async models
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   ├── market.py
-│   │   ├── outcome.py
-│   │   ├── liquidity.py
-│   │   ├── order.py
-│   │   ├── position.py
-│   │   ├── wallet.py
-│   │   └── transaction.py
-│   ├── schemas/             # Pydantic request/response DTOs
-│   │   ├── __init__.py
-│   │   ├── auth.py
-│   │   ├── market.py
-│   │   ├── order.py
-│   │   └── wallet.py
-│   ├── services/            # Business logic
-│   │   ├── __init__.py
-│   │   ├── auth.py
-│   │   ├── market.py
-│   │   ├── trading.py
-│   │   ├── wallet.py
-│   │   └── settlement.py
-│   ├── amm/                 # AMM engine
-│   │   ├── __init__.py
-│   │   ├── engine.py        # BinaryAMM (constant product)
-│   │   └── lp.py            # Liquidity provider logic
-│   ├── orderbook/           # Limit order book (CLOB)
-│   │   ├── __init__.py
-│   │   └── book.py
-│   ├── workers/             # Celery tasks
-│   │   ├── __init__.py
-│   │   ├── celery_app.py
-│   │   └── tasks.py
-│   └── websocket/           # Real-time
-│       ├── __init__.py
-│       ├── manager.py
-│       └── routes.py
-├── config/                   # Legacy config aliases
-├── migrations/               # Alembic
-├── tests/
-├── pyproject.toml
-└── .env
+│   ├── app.py                 # FastAPI app factory, lifespan, middleware, router mounts
+│   ├── config.py              # Pydantic settings — every env var (see background-jobs.md)
+│   ├── database.py            # engines, pools, session factories, get_db / get_db_replica
+│   ├── deps.py                # auth dependency, session validation, cookie flags, role checks
+│   ├── redis.py               # async + sync clients, Sentinel, RedisCircuitBreaker
+│   ├── api/                   # REST routers  (all mounted under /api/v1 — see §API Endpoints)
+│   │   ├── app-agnostic: exceptions.py, handlers.py, responses.py, middleware.py
+│   │   ├── trading:  markets.py, orders.py, liquidity.py, split_merge.py, positions.py,
+│   │   │             trades.py, market_activity.py
+│   │   ├── identity: auth.py
+│   │   ├── money:    wallet.py, webhooks.py
+│   │   ├── platform: comments.py, alerts.py, notifications.py, referrals.py,
+│   │   │             flags.py, disputes.py, treasury.py, admin.py
+│   ├── models/                # 24 SQLAlchemy tables — full reference in data-model.md
+│   │   ├── base.py            # Base, TimestampMixin, UUIDMixin
+│   │   ├── user.py            # users, refresh_tokens, sessions
+│   │   ├── market.py          # markets, outcomes
+│   │   ├── liquidity.py       # liquidity_pools, lp_shares, EscrowShortfallError
+│   │   ├── order.py           # orders
+│   │   ├── position.py        # positions
+│   │   ├── wallet.py          # wallets, transactions
+│   │   ├── trade.py, price_history.py, comment.py, alert.py, audit.py,
+│   │   ├── notification.py, dispute.py, faq.py, flag.py, referral.py, treasury.py
+│   ├── schemas/               # Pydantic request/response DTOs
+│   ├── services/              # business logic
+│   │   ├── order_service.py       # the serialisation point (execute_order)
+│   │   ├── matching_engine.py     # the order book
+│   │   ├── liquidity_service.py   # LP add/remove, protocol-fee sweep
+│   │   ├── escrow_audit.py        # nightly invariant checks
+│   │   ├── cache_service.py       # cache-aside + tag sets
+│   │   ├── rate_limit_service.py  # sliding window + progressive friction
+│   │   ├── alert_engine.py        # exactly-once alert firing
+│   │   ├── notification_service.py, audit_service.py, email_service.py,
+│   │   └── otp_service.py, totp_service.py, password_strength_service.py,
+│   │       market_service.py, wallet_service.py
+│   ├── amm/
+│   │   └── engine.py          # BinaryAMM — share-ratio pricing, NOT x·y = k
+│   ├── middleware/
+│   │   ├── metrics.py         # Prometheus counters + histogram
+│   │   └── request_id.py      # validated X-Request-ID propagation
+│   ├── workers/
+│   │   ├── celery_app.py      # Celery config + the 8-entry beat schedule
+│   │   └── tasks.py           # every task (1554 lines)
+│   └── websocket/
+│       ├── manager.py         # ConnectionManager + Redis pub/sub fan-out
+│       └── routes.py          # /ws/markets/{id}, /ws/trades, /ws/notifications/{uid}
+├── migrations/versions/       # 5 Alembic revisions, linear chain
+├── tests/                     # 22 files, 381 test functions
+├── deploy/nginx/              # reverse proxy config
+├── scripts/                   # ops helpers (backup_db.sh, seed.py, …)
+├── tests, pytest.ini, pyproject.toml, .env
 ```
+
+**Where each subsystem is documented:**
+
+| Area | Doc |
+|---|---|
+| All 24 tables, constraints, indexes, migration drift | **`data-model.md`** |
+| Order routing, AMM maths, split/merge, settlement | **`trading-engine.md`** |
+| Comments, alerts, disputes, flags, referrals, treasury, errors | **`platform-features.md`** |
+| Celery, caching, rate limits, Redis, metrics, health | **`background-jobs.md`** |
+| The client | **`frontend.md`** |
+
+The §Database Models summary below lists only the **trading-core** tables. The full 24-table
+reference, including every index and constraint, is in **`data-model.md`**.
 
 ---
 
@@ -358,18 +373,31 @@ POST /webhooks/stripe               # idempotent deposit processing
 
 ## WebSocket
 
-### Endpoint
+### Endpoints
 ```
-WS /ws/markets/{market_id}
+WS /ws/markets/{market_id}   public   — prices, order book, trades, comments
+WS /ws/trades                public   — every trade across the platform
+WS /ws/notifications/{uid}   private  — that user's notifications and fills
 ```
+
+Market data is public because the REST equivalents (`GET /markets/{slug}/orderbook`,
+`GET /trades`) already serve it with no account. A session cookie is used when present
+(for the per-user connection cap) but is not required; a token that *is* supplied must
+still be valid, so a revoked session cannot quietly continue as an anonymous one.
+`/ws/notifications/{uid}` is the sole consumer of the per-user `user:{uid}:…` Redis
+channels and requires the token's uid to match the path.
 
 ### Events Pushed to Client
 ```json
 { "type": "market:price_update", "market_id": "...", "yes_price": 0.65, "no_price": 0.35 }
 { "type": "market:order_book",   "market_id": "...", "bids": [...], "asks": [...] }
-{ "type": "order:fill",          "order_id": "...",  "price": 0.62, "amount": 100 }
+{ "type": "trade:new",           "market_id": "...", "price": 0.62, "amount": 100 }
 { "type": "market:resolved",     "market_id": "...", "winning_outcome": "yes" }
 ```
+
+Private frames (`order:fill`, `notification`, `alert:triggered`) are **not** on the market
+channel — they are published to `user:{uid}:fills` / `user:{uid}:notifications` and reach
+the client only over `/ws/notifications/{uid}`.
 
 ### Multi-Server Sync
 ```
@@ -442,10 +470,24 @@ Server → Wallet.lock() immediately, confirm after Stripe webhook
 
 ---
 
-## Frontend Integration (Deferred)
+## Frontend Integration
 
-When frontend is built:
-- REST for CRUD and wallet operations
-- WebSocket for real-time prices and fills
-- React Query for REST caching
-- WS client for real-time subscriptions
+The frontend is **built** — a Next.js 16 / React 19 app in a Bun + Turborepo monorepo under
+[`frontend/`](frontend.md). The plan described here is what was actually implemented:
+
+- REST for CRUD, wallet operations and all reads
+- WebSocket for real-time prices, trades, orderbook updates, comments and fills
+- TanStack React Query for REST caching (`staleTime` tuned per query)
+- A module-singleton WS client per browser tab with per-market subscription multiplexing
+
+Full reference, including the routing model, the data layer, session handling and the chart
+system: **[`frontend.md`](frontend.md)**.
+
+**Cross-cutting contract worth knowing:**
+
+| Concern | Backend | Frontend |
+|---|---|---|
+| Auth | HttpOnly cookies `access_token` / `refresh_token`, `sid` session binding | never reads them; `credentials: "include"` on every request |
+| Envelope | `{success, data \| error, error_code?, details?}` | `extractMessage()` parses all four backend shapes |
+| Pagination | offset **or** keyset cursor, per endpoint | mirrors each endpoint's style |
+| Realtime | Redis pub/sub → per-worker fan-out | one socket per tab, market-scoped, anonymous allowed |

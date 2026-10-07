@@ -10,11 +10,17 @@ wallets, positions, settlement at $1 per correct share, and realtime prices over
 | I want to… | Read |
 |---|---|
 | Understand the product with no jargon | [`docs/concepts.md`](docs/concepts.md) |
-| Rehearse for a viva (227 questions + answers) | [`docs/viva-questions.md`](docs/viva-questions.md) |
-| See how the system is built | [`docs/architecture.md`](docs/architecture.md) |
+| Rehearse for a viva / defence | [`docs/viva-questions.md`](docs/viva-questions.md) (312 questions + answers) |
+| Run the live demo | [`docs/demo-script.md`](docs/demo-script.md) (7-phase script + troubleshooting) |
+| Understand testing & CI | [`docs/testing-and-ci.md`](docs/testing-and-ci.md) |
+| Know what the database actually stores and guarantees | [`docs/data-model.md`](docs/data-model.md) |
 | Understand matching, AMM maths, split/merge, "is this gambling?" | [`docs/trading-engine.md`](docs/trading-engine.md) |
+| Understand moderation, disputes, alerts, fees, errors | [`docs/platform-features.md`](docs/platform-features.md) |
 | Understand auth and security | [`docs/auth-and-security.md`](docs/auth-and-security.md) |
 | Understand Docker, concurrency and realtime | [`docs/docker-concurrency-realtime.md`](docs/docker-concurrency-realtime.md) |
+| Understand background jobs, caching, rate limits, monitoring | [`docs/background-jobs.md`](docs/background-jobs.md) |
+| Understand the frontend (Next 16 / React 19) | [`docs/frontend.md`](docs/frontend.md) |
+| See how the system is built | [`docs/architecture.md`](docs/architecture.md) |
 | Deploy to production | [`docs/deployment.md`](docs/deployment.md) |
 | Find the index / reading order | [`docs/README.md`](docs/README.md) |
 
@@ -51,7 +57,7 @@ bun run dev                   # http://localhost:3000
 
 ```bash
 docker start pm-postgres pm-redis     # test infra on ports 5433 / 6380
-cd backend && .venv/bin/pytest -q     # 308 tests, DB rebuilt from migrations each run
+cd backend && .venv/bin/pytest -q     # 381 tests, DB rebuilt from migrations each run
 .venv/bin/ruff check app/ tests/
 ```
 

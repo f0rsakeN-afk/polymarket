@@ -1,11 +1,17 @@
 # Viva Question Bank — Polymarket Clone
 
+> **Sections A–N** cover the original 227 questions; **O–R** add 85 more covering the database,
+> background jobs, frontend and platform features.
+> frontend and platform-feature answers. Start with the starred (★) ones.
+
 > **Every question below has a full, spoken-word answer.** You do not need to be a programmer to
 > deliver any of these: read the **Answer** paragraph out loud and you have said the right thing.
 > The `→` at the end points to the doc/file with the deep version, if the examiner pushes.
 >
-> Companion docs: `docs/concepts.md` (plain English, start here) · `docs/architecture.md` ·
-> `docs/trading-engine.md` · `docs/auth-and-security.md` · `docs/docker-concurrency-realtime.md`.
+> Companion docs: `docs/concepts.md` (plain English, start here) · `docs/data-model.md` ·
+> `docs/trading-engine.md` · `docs/platform-features.md` · `docs/auth-and-security.md` ·
+> `docs/docker-concurrency-realtime.md` · `docs/background-jobs.md` · `docs/frontend.md` ·
+> `docs/architecture.md`.
 
 ---
 
@@ -215,9 +221,12 @@ anyone, and read-heavy routes go to a replica.
 → `docs/docker-concurrency-realtime.md` §B.
 
 **B12. What is `redis_cb.call(...)`?**
-**Answer:** A thin wrapper around every Redis call that adds a timeout, error handling and metrics —
-so a hung Redis degrades one feature instead of hanging the whole request.
-→ `backend/app/services/redis_client.py`.
+**Answer:** Two layers. `backend/app/redis.py` owns the clients — an async one for the API and a sync
+one for Celery, plus Sentinel support and a `RedisCircuitBreaker` that opens after five consecutive
+failures and lets one probe through after thirty seconds. Then `redis_cb.call(...)` wraps every
+individual Redis call so a hung or down Redis degrades one feature — caching, fan-out, rate limiting —
+instead of the whole request. The trading path is unaffected because money lives in Postgres.
+→ `backend/app/redis.py`, `docs/background-jobs.md` §6.3.
 
 **B13. How does the API version?**
 **Answer:** Everything lives under `/api/v1/...`, with routers grouped by domain (markets, orders,
@@ -611,16 +620,31 @@ comment explaining the number it chose.
 → `backend/app/websocket/manager.py`.
 
 **F8. How is auth done on the upgrade?**
-**Answer:** The WebSocket handshake looks for the login cookie (it only accepts `?token=` if
-`WS_ALLOW_QUERY_TOKEN=true` is set, which is **off** by default — a token in a URL ends up in
-proxy logs, history and `Referer`), then runs the *same* check as the REST API: valid signature, correct token type, not blacklisted,
-user still active, and bound to a live session. It fails **closed** — no valid session, no socket.
+**Answer:** It depends on the socket, and the split is by data, not by convenience.
+**`/ws/markets/{id}` and `/ws/trades` are public** — the same numbers are already served
+anonymously by `GET /markets/{slug}/orderbook` and `GET /trades`, so requiring a login would gate
+public information. A cookie is used if present (it upgrades you to the per-user connection cap)
+but is not required; the abuse limits that matter — 50 connections per IP, 50 subscriptions per
+socket, 64 KB frames — are keyed on IP and work fine anonymously.
+**`/ws/notifications/{user_id}` is private**: it is the only surface serving the per-user
+`user:{uid}:notifications` and `user:{uid}:fills` channels, so it needs a valid token whose uid
+matches the path.
+The important subtlety is that "no token" and "bad token" are **different answers**. A token that
+*is* presented runs the same check as the REST API — valid signature, correct type, not
+blacklisted, user active, bound to a live session — and a failure closes the socket. Without that
+distinction, revoking a session would just downgrade it to anonymous instead of ending it.
+(`?token=` is only honoured when `WS_ALLOW_QUERY_TOKEN=true`, **off** by default — a token in a URL
+ends up in proxy logs, history and `Referer`. On a public socket an ignored query token simply
+means "anonymous"; on the private one it means "refused".)
 → `docs/auth-and-security.md` §10.
 
 **F9. Why does the front end reconnect with backoff?**
 **Answer:** Server restarts drop every socket at once. Reconnecting instantly would create a
-thundering herd, so the delay grows exponentially with random jitter, and React Query refetches REST
-state on reconnect so nothing on screen is stale.
+thundering herd, so the delay grows exponentially (capped at 30 s), and React Query refetches REST
+state on reconnect so nothing on screen is stale. It also **stops after 8 consecutive failures**
+(~2 min of trying) instead of retrying for the lifetime of the tab, and recovers on `online` or tab
+focus — a parked socket would otherwise spam the API log with identical handshake rejections, and
+`online` is the only signal the browser gives you when a laptop wakes from sleep.
 → `frontend/apps/web/hooks/use-market-socket.tsx`.
 
 **F10. What happens to a message published while a client is disconnected?**
@@ -878,10 +902,15 @@ requires both your password and the current code. The setup session expires in 1
 
 **H10. What are the rate limits?**
 **Answer:** 60 requests per minute per IP for general traffic; 5 per minute per email+IP for
-login/verify/reset; 3 per minute for resends and registration; 10 per minute for strict endpoints.
+login/verify/reset; 3 per minute for resends and registration; 30 per minute per IP for silent
+token refresh; 10 per minute for strict endpoints.
 They're sliding windows computed in Lua on Redis, so counts are exact. After 5 failed attempts
 there's progressive friction — 1s, 2s, 4s, 8s, 16s — then a 15-minute lockout that clears on a
 successful login.
+Refresh gets its own bucket on purpose: the 3/min cap is sized for endpoints that send an email or
+reveal whether an account exists, and a signed-in client rotating its token does neither. Sharing
+that cap meant a burst of 401s — a flaky network, a laptop waking from sleep, several components
+refetching at once — locked the user out of recovering their own live session.
 → `backend/app/api/middleware.py`.
 
 **H11. Why is the rate-limit key `email@ip` and not just IP?**
@@ -1143,7 +1172,7 @@ cross; and when the market closes, an expiry job releases the funds they had loc
 They earn a slice of the trading fees that accumulate in the pool — but at settlement they're paid
 out of the side that *won*, so they genuinely carry outcome risk, not just fee income. That's an
 unusual design and worth admitting as a weakness.
-→ `docs/trading-engine.md` §6.2.
+→ `docs/trading-engine.md` §6 ("Known limitations").
 
 **I16. Why is `average_price` a weighted average?**
 **Answer:** Because you may buy the same share at three different prices; the average must reflect
@@ -1583,7 +1612,7 @@ delivered in realtime over Redis fan-out."
   caught it; using the request session never would have.
 
 * **"How do you know two concurrent buys don't corrupt balances?"**
-  → `test_concurrency.py` fires parallel orders and asserts the invariants, plus the balance check
+  → `backend/tests/test_concurrency.py` fires parallel orders and asserts the invariants, plus the balance check
   `balance − locked ≥ required` runs while both wallets are locked.
 
 * **"What's the hardest bug you fixed?"**
@@ -1598,6 +1627,717 @@ delivered in realtime over Redis fan-out."
   register email enumeration, uncapped refresh chains) are fixed and tested; naming what's *still*
   wrong yourself is the answer.
 
+## O. Database & data model
+
+**★ O1. How many tables, and what are the main groups?**
+**Answer:** 24 tables in five groups. **Identity** — users, refresh tokens, sessions. **Markets** —
+markets, outcomes, FAQs, flags, disputes, price history. **Trading** — liquidity pools, LP shares,
+orders, positions, trades. **Money** — wallets, transactions. **Platform** — comments, alerts,
+notifications, notification preferences, referrals. Plus the governance pair, treasury and treasury
+logs, and the auth audit log.
+→ `docs/data-model.md`.
+
+**★ O2. What does your database actually *guarantee*, versus what does your code guarantee?**
+**Answer:** The database guarantees identity and uniqueness (UUID keys, one position per user per
+market per outcome, one order per idempotency key), ranges (an order's price must be 0 to 1, amount
+above zero, positions non-negative), and idempotency — two partial unique indexes enforce one
+withdrawal per key and one deposit per Stripe payment intent. What it does **not** guarantee is money
+conservation: the pool's collateral column has no CHECK constraint, so "the escrow always covers what
+it owes" is enforced by our service code and re-verified by a nightly audit. And to be honest, five
+CHECK constraints I wrote in the models are missing from the migrations, so on a real database
+negative wallet balances are prevented by code rather than by Postgres. I'd fix that first.
+→ `docs/data-model.md` §5, §8.2.
+
+**O3. Why is `price <= 1` a database constraint?**
+**Answer:** Because it's the schema's structural statement of what this product is. A share settles at
+exactly $1, so a price above $1 could never be profitable — the constraint makes an impossible state
+unrepresentable rather than validating it at the edge. It's the cheapest possible guard against a bad
+decimal ever entering the book.
+
+**O4. You have no database enums at all. Why not?**
+**Answer:** Deliberate. Every status, side, order type and event type is a plain string with the
+allowed values recorded in code. The comment in the market model says it plainly: the values are "a
+contract enforced by the API/service layer." The trade-off is that a bad write via raw SQL or a psql
+session isn't caught; the benefit is that adding a status is a code change, not a migration — no
+`ALTER TYPE`, no enum-ordering gotchas, no "cannot drop a type still in use". The one place I *do*
+enforce a value in the database is the treasury's singleton flag, because there the constraint is what
+makes the singleton actually hold.
+
+**★ O5. What's the most interesting constraint in the schema?**
+**Answer:** The treasury singleton, because it's two constraints doing one job. A CHECK forces
+`singleton = true` on every row, and a UNIQUE constraint allows at most one row holding that value.
+Individually neither is enough — the CHECK alone allows a thousand identical rows. Together they make
+the table structurally zero-or-one rows, with no application code involved at all.
+→ `app/models/treasury.py:18-22`.
+
+**O6. Explain the partial unique indexes on transactions.**
+**Answer:** There are two, both unique on `reference_id`, but each with a `WHERE` clause — one for
+withdrawals, one for deposits. So the database allows exactly one withdrawal per idempotency key and
+exactly one deposit per Stripe payment intent, while ordinary rows with no reference are untouched.
+Because `NULL`s are excluded by the predicate, that exclusion is what makes it work: it stops
+unrelated transactions colliding on a null reference. This is the deposit webhook's
+double-delivery guard living in the schema rather than in application code.
+→ `app/models/wallet.py:45-56`.
+
+**O7. Why is `positions.settled_at` a number and not a timestamp?**
+**Answer:** It stores a Decimal UTC timestamp, but it's used as an idempotency sentinel rather than a
+date. `NULL` means unsettled; any value means settled. It's the guard that stops `claim_winnings`
+paying the same position twice, and it's tested with `IS NULL` in the query, which is why the index
+on it matters. I did leave it out of the API response, which was a mistake — a client can't tell a
+claimed position from a pending one.
+
+**O8. What stops the pool's collateral going negative?**
+**Answer:** Not the database — there's no CHECK on it. It's `debit_collateral`, which raises an
+`EscrowShortfallError` rather than partially paying. That exception is deliberate: there is no "pay
+what you can" mode, because a partially-paid obligation would stay claimable forever with nobody
+tracking it. And settlement pre-flights the whole arithmetic before touching a single wallet, so a
+shortfall aborts the entire payout instead of leaving the last winner with scraps.
+→ `app/models/liquidity.py:73-97`, `app/workers/tasks.py:834-873`.
+
+**O9. How do you stop a user claiming winnings twice?**
+**Answer:** Two independent layers. In the database, a guarded update selecting only unsettled
+positions, plus a re-check inside the payout loop as defence in depth against the self-service claim
+endpoint. At the application level, a Redis marker per market written only *after* the settlement
+commits — and the "only after" is the important part, because the old code set the market status
+before the worker ran, which meant a status-based guard skipped every settlement.
+→ `app/workers/tasks.py:743-752, 877-879`.
+
+**O10. How is full-text search on markets indexed, and why is it an expression index?**
+**Answer:** It's a GIN index on `to_tsvector('english', question)`, not on the plain column. The reason
+is in the code comment: Postgres has no default GIN operator class for varchar or text, so a plain
+GIN index on `question` can't be created at all. The index has to match the exact expression the
+query uses. And `'english'` is wrapped in `literal_column` so it renders as a literal the planner can
+match, rather than a bind parameter it would refuse to equate.
+
+**★ O11. Tell me about an inconsistency you found between your models and your migrations.**
+**Answer:** Five CHECK constraints — three on wallets, two on markets — exist in the model files and
+are absent from the migrations, so a database built from `alembic upgrade head` doesn't actually have
+them. You can verify it in thirty seconds: grep the migrations for `CheckConstraint`, then grep for
+`ck_wallets` and `ck_markets`, and they only appear in the models. There's also a renamed constraint on
+the treasury and a leftover server default on `transactions.confirmations`. It happened because the
+initial migration got hand-edited to add indexes, and the constraints weren't included in that
+reconciliation.
+→ `docs/data-model.md` §8.2.
+
+**O12. Which is the source of truth — models or migrations?**
+**Answer:** Migrations, and that was deliberate. `create_all` is never called anywhere, startup only
+inspects and warns, and the test suite drops and rebuilds the database from `alembic upgrade head` on
+every run so a stale schema can't mask a failure. The awkward part is that the migration path
+currently produces a *weaker* schema than the models, while `create_all` would produce a stronger one
+on checks but miss the partial unique indexes. Neither path alone is right, which is exactly why I'd
+write a migration to close the gap.
+
+**O13. What is the lock order, and why is it fixed?**
+**Answer:** Market, then pool, then wallet, then position, then LP shares, then orders — and wallets
+are locked sorted by id, so two transactions can't deadlock locking the same pair in opposite orders.
+It's enforced by convention at every call site rather than by a shared helper, which is the weak
+point: a new developer could write a service that violates it and nothing would stop them. A shared
+`acquire_locks_in_order()` helper is the fix.
+→ `docs/docker-concurrency-realtime.md` §B.
+
+**O14. Explain `Numeric(20,8)` versus `Numeric(10,6)`, and why the scales differ.**
+**Answer:** Money and share quantities are `Numeric(20,8)` — 20 digits of range, 8 decimal places,
+which comfortably fits a USDC balance. Prices are `Numeric(10,6)` on orders and positions. But trades
+and alerts use `Numeric(10,8)` — a different scale for what is conceptually the same price. It works
+because Postgres numeric is exact, but it's an inconsistency I'd normalise. Critically, these are
+never floats in storage: a float can't represent 0.1 exactly, and money that's off by a ten-thousandth
+per operation becomes a real loss over millions of rows.
+→ `docs/data-model.md` §4.1.
+
+**O15. How do you keep a user's balance from being spent twice?**
+**Answer:** Wallets carry two numbers: `balance`, and `locked_balance`, which is money reserved for a
+resting limit order but still sitting inside `balance`. Spendable is `balance − locked_balance`, and
+every buy path checks that expression rather than `balance`. Checking `balance` alone would let a user
+place a resting order and then spend the same money on something else. The database also has a CHECK
+that `locked_balance <= balance` — but see O11, that's one of the ones missing from the migrations, so
+the application check is what actually protects this today.
+
+**O16. Do you use read replicas?**
+**Answer:** The architecture supports them — there are two engines and a `get_db_replica` dependency
+that every read endpoint uses, and it falls back to the primary when the replica URL is empty, so it
+works correctly with zero extra infrastructure. No replica is deployed yet. The same pattern holds for
+Redis Sentinel: the code supports master-for-read failover, but no Sentinel service exists in the
+compose files. Both are configuration, not code changes.
+
+**★ O17. How do you avoid N+1 queries, concretely?**
+**Answer:** Three techniques depending on the shape. For a list endpoint, batch with `IN (...)` and
+index the results in Python — the positions endpoint does markets, outcomes and pools in three queries
+instead of three per row. For reply counts, one grouped aggregate over all the parent ids instead of a
+query per comment. And for "top N per group", a window function — `row_number() OVER (PARTITION BY
+outcome_id ORDER BY shares_held DESC)` gives every outcome's leaderboard in a single pass. Whenever
+you'd otherwise write "the top N per group", that's when you reach for a window function.
+→ `docs/platform-features.md` §1.3, §9.2.
+
+**O18. What's a self-referencing foreign key, and where do you use one?**
+**Answer:** Comments: `parent_id` points back at `comments.id`, which is what makes threading possible.
+In the ORM it needs disambiguating — a `remote_side` on the many-to-one side, and the relationship is
+assigned after the class body rather than inside it. The application caps nesting at depth three, but
+the `depth` column has no CHECK constraint, so that cap is ours to enforce, not the database's.
+
+**O19. How would you add a new field safely?**
+**Answer:** A migration, never `create_all` — add the column as nullable (or with a default), deploy
+the code that tolerates both shapes, then backfill and tighten. The reason it's a migration rather than
+a model edit is that production's schema is owned by the migration chain; changing a model alone would
+make autogenerate want to drop and recreate constraints forever, which is exactly the drift in O11.
+
+---
+
+## P. Background jobs, caching, rate limits & monitoring
+
+**★ P1. What runs in the background, and how often?**
+**Answer:** Eight scheduled jobs. Every 30 seconds: expiring stale orders, and the resting-limit-order
+sweep. Every 60 seconds: syncing AMM prices into Redis. Every 5 minutes: closing markets past their
+close date, and writing price-history snapshots for the charts. And three nightly jobs in a deliberate
+order — 3am cleans up expired sessions, 3:30am sweeps protocol fees, and 4am re-audits every pool's
+escrow, *after* the fee sweep, so the audit checks post-sweep state rather than numbers that are about
+to change.
+→ `docs/background-jobs.md` §1.4.
+
+**★ P2. What happens if a background job runs twice?**
+**Answer:** Every task has an idempotency guard, because Celery gives at-least-once delivery. Three
+different styles. Settlement uses a Redis marker per market, written only after the commit. The
+price-history snapshot uses a minute-window dedup — it computes the current minute floor, selects
+which market-and-outcome pairs already have a row in that window, and skips them. And order expiry
+uses its predicate itself as the guard: re-running matches nothing, because the rows are now `expired`.
+If you're relying on "the row is already updated, so it won't match again", that only works if the
+predicate excludes the new state — worth checking every time.
+→ `docs/background-jobs.md` §2.
+
+**★ P3. How does Celery know a task really finished?**
+**Answer:** Two settings together. `task_acks_late` means the message is acknowledged after the task
+runs rather than when it's received, so a worker dying mid-task returns it to the queue. And
+`task_reject_on_worker_lost` means Celery re-queues instead of acknowledging when a worker vanishes.
+Without the second one, the late acknowledgement is lost and the task disappears. Together they give
+at-least-once delivery, which is only safe because of P2. I also set prefetch to 1 so one slow task
+can't hoard the queue, and capped worker concurrency at 4 because separate processes mean separate
+database connection pools.
+
+**P4. Why isn't your dead-letter queue working?**
+**Answer:** It's configured — I declared the RabbitMQ dead-letter exchange and routing key on the
+queue, and a two-hour visibility timeout so a long settlement has room. But production runs Redis as
+the broker, and dead-lettering is a RabbitMQ feature, so those arguments are inert. The code comment
+says so explicitly. Moving the broker URL to RabbitMQ activates it with no code change. That's the
+honest version: configured, documented, and not actually running.
+→ `docs/background-jobs.md` §1.3.
+
+**★ P5. Walk me through the resting-limit-order sweep.**
+**Answer:** Five steps. First, skip markets that haven't moved — the price sync adds them to a Redis
+set, and popping it tells us which to look at. That pop returns `None` on error rather than an empty
+list, so a Redis outage triggers a full scan instead of silently doing nothing. Second, lock in a fixed
+order — market, pool, wallet, order, position. Third, per-order, re-lock the order by id and re-check
+its status, so an order already filled by another path is skipped; that's the over-matching guard.
+Fourth, group by market with a try/except per group, so one bad market can't abort the run, and commit
+at each boundary to release locks. Fifth, do the fill: check available balance as balance minus
+locked, move the money, credit the pool, update or upsert the position, write the trade and transaction
+rows. Then re-arm the sweep — but with `SET NX EX 1`, so fifty fills in one tick cause one enqueue,
+not fifty.
+→ `docs/background-jobs.md` §2.1.
+
+**P6. Why does the price-sync task skip publishing tiny price changes?**
+**Answer:** Because it only publishes when the price moved by more than one ten-thousandth. Without
+that threshold, a market whose price is essentially flat still pushes an update every minute to every
+subscriber, and each one causes a chart redraw on every open tab. It's an explicit anti-fan-out
+measure that costs nothing in accuracy, because a change that small isn't visible anyway.
+
+**★ P7. What does the nightly escrow audit actually check?**
+**Answer:** Five invariants across every pool, at a cost of three queries total regardless of how many
+markets exist — because it aggregates in SQL and interprets in Python. It checks for a missing pool with
+claims outstanding, fees exceeding escrow, negative collateral, LP token supply drift where the issued
+tokens exceed the recorded supply, and the big one: escrow below obligations. That last check compares
+the *larger* of the two open sides plus fees against the collateral — not the sum of both sides. The
+detail matters: at resolution only one side is paid a dollar a share, so the worst case is the bigger
+side. It mirrors the settlement pre-flight exactly, and that's what makes a clean audit meaningful.
+→ `docs/background-jobs.md` §3.3.
+
+**P8. Does the audit fix anything it finds?**
+**Answer:** No, and that's deliberate. It only logs — structured, machine-parseable events you could
+alert on. The reasoning is in the docstring: a repair written by something that doesn't fully
+understand the drift is how a rounding bug turns into a loss. There's even a test asserting a healthy
+pool reports zero violations, so the audit can't cry wolf. The honest weakness is that nothing watches
+it — a violation is detected nightly and then sits in a log file. That's the first thing I'd add.
+
+**P9. How does your caching work, and how do you invalidate?**
+**Answer:** Cache-aside with tag sets. Alongside each cached value there's a Redis set holding the
+names of every key with that tag, so invalidating a tag means reading the set and deleting the members.
+Without it you'd have to track "which keys belong to this market list" somewhere, which is the same
+problem one level down. The tag sets expire ten seconds after their members, so the index outlives what
+it indexes. Every invalidation is wrapped, so a failed cache delete can't fail the trade that
+triggered it.
+
+**P10. What's your weakest spot in caching?**
+**Answer:** No stampede protection. If a hot key expires under load, every concurrent request misses at
+the same instant and they all recompute it. The fix is a per-key mutex — a `SET NX` lock so one
+request rebuilds while the others wait or serve stale — and ideally a Lua unlock that verifies the
+owner, because a naive delete can release someone else's lock. I didn't build it; the ten-second tag
+grace is all I have.
+
+**P11. How does the orderbook cache handle units?**
+**Answer:** The aggregated order rows come back with bid remainders and ask remainders in *different*
+units — a resting buy stores its remaining amount as a USDC budget, while a resting sell stores
+shares. So the code divides bid remainders by their price, making both sides quote size in shares. Miss
+that and bids render as roughly a hundred times too large in the chart. It's the same units trap as the
+trading document describes, showing up in a different place.
+
+**★ P12. How do you stop someone brute-forcing a password?**
+**Answer:** Three layers. A sliding-window rate limit of five per minute on login, keyed by email and
+IP together — keying by IP alone lets one attacker lock out a whole office, keying by email alone lets
+them target one victim, so it's the pair. Progressive friction on top: five free attempts, then an
+exponential delay doubling up to sixteen seconds, then a fifteen-minute lockout. And bcrypt at cost
+twelve, about a hundred milliseconds, so every attempt is expensive for the attacker. Login failures
+are audited with four distinct reasons — unknown user, wrong password, missing 2FA code, wrong 2FA code
+— so you can tell a brute-force pattern from someone who forgot their password.
+→ `docs/auth-and-security.md` §5.
+
+**P13. Why implement the rate limiter in Lua?**
+**Answer:** Because trim, count and insert have to be atomic. With a pipeline, a concurrent request
+could read the count before my insert landed, and two requests could both see "one slot left" and both
+be admitted. Redis runs a script as one indivisible step. It's a sorted set rather than `INCR` plus
+`EXPIRE` because a fixed window lets a client send double the limit across a window boundary — sixty in
+the last second of one minute, sixty in the first second of the next. And each sorted-set member
+includes a random suffix, because two requests in the same millisecond have to be two members or the
+second overwrites the first and the count is wrong.
+
+**P14. What's a detail in the rate limiter most people miss?**
+**Answer:** IPv6 normalisation. A single subscriber is normally handed an entire /64, so a client could
+rotate through billions of addresses and never hit its own bucket. I collapse the address to its /64
+prefix before using it as a key. Also worth knowing: the auth buckets are keyed on email-at-IP as a
+single string, which is why the key looks like `rl:auth:user@example.com@10.0.0.1`.
+
+**P15. When does your rate limiter fail open, and when does it fail closed?**
+**Answer:** Deliberately different, and each site documents why. The plain check fails **closed** — if
+Redis is unreachable, requests are denied — because a limiter that fails open isn't a limiter. The
+progressive-friction check fails **open**, because you don't want a momentary Redis blip locking every
+logged-in user out of their own account. The principle is fail closed on security decisions, fail open
+on convenience, and be explicit about which is which.
+
+**P16. You have rate-limit settings in your config that do nothing. Why?**
+**Answer:** `rate_limit_per_ip` and `rate_limit_per_email_ip` are declared in the settings class but
+nothing reads them — the real numbers are a hardcoded table in the rate-limit service. So changing those
+environment variables has no effect, which is genuinely misleading for whoever operates this. They
+should either be wired up or deleted.
+→ `docs/background-jobs.md` §5.6.
+
+**★ P17. Tell me about the Redis circuit breaker.**
+**Answer:** States are closed, open, half-open; it opens after five consecutive failures and lets one
+probe through after thirty seconds. Two implementation details I'd point at. First, it takes its lock
+only to inspect or change state and **releases it before the network call** — holding a lock during the
+I/O would serialise every Redis user behind one slow call, which is the exact problem a circuit breaker
+exists to reduce. Second, it records the failure state *before* re-raising the exception, so a second
+caller in the same event-loop iteration already sees the breaker open. The naive version records it
+after returning, and a whole burst gets through.
+→ `docs/background-jobs.md` §6.3.
+
+**P18. Why does your Redis client check which event loop it's on?**
+**Answer:** Because an async connection pool is bound to the loop that created it. With eight Uvicorn
+workers, plus pytest, plus Celery's per-thread loops, all potentially in one process, reusing a
+module-global client across loops produces "Future attached to a different loop" errors. So `get_redis`
+compares the running loop's identity and rebuilds the client if it changed, closing the old one. That
+check is what makes the global safe.
+
+**P19. How would you know the system is unhealthy?**
+**Answer:** Three things. Prometheus counters and a latency histogram, labelled by route template rather
+than raw path — reading the route after the handler runs, which keeps IDs out of the labels so
+cardinality stays bounded. One structured JSON log line per request with a request id, and header
+values deliberately never logged because header dumps leak cookies and authorization. And three health
+endpoints: liveness that checks nothing, readiness that checks Postgres and Redis and returns 503 when
+degraded, and the metrics endpoint.
+→ `docs/background-jobs.md` §7.
+
+**P20. Why must liveness not check the database?**
+**Answer:** Because then a database outage would fail liveness, the orchestrator would restart every API
+process, and the outage gets worse — you lose every warm connection pool and add restart churn to an
+already-broken system. Liveness should only ask "is this process wedged?" Readiness asks "can it
+serve?" and only readiness should gate traffic. Keeping those separate is the difference between a
+dependency outage and an outage plus a stampede.
+
+**P21. What's your request id, and why validate the incoming one?**
+**Answer:** We accept an `X-Request-ID` if it matches a strict pattern — alphanumerics, dash and
+underscore, at most 64 characters — and generate a UUID otherwise, then echo it back so a user can
+quote it in a support ticket. The validation is the point: without a character and length cap, a caller
+could inject newlines or megabytes into your logs, or forge someone else's request id. I trace it into
+the rate-limit identifiers and the logs, so one id ties a rejection to its log line.
+
+**★ P22. Why is your middleware in that order?**
+**Answer:** Because Starlette's `add_middleware` inserts at the front, so the last one added is the
+outermost — which means declaration order reads backwards from execution order, and getting it wrong is
+invisible in review. The execution order is: correlation id first, so everything downstream can cite
+it; then throttling, so oversized bodies and cross-origin writes are rejected before any database or JWT
+work; then request logging, because it needs the id and the user and must read the final status; then
+metrics, so rejected requests are still counted; then security headers, inside rate limiting so headers
+reach the 413 and 429 responses too; and CORS innermost, so a layer above can return a bare JSON
+response without CORS mangling it.
+→ `docs/background-jobs.md` §8.1.
+
+**P23. Why does your rate-limit middleware return a response instead of raising an exception?**
+**Answer:** Because of where the exception handlers live. Starlette's catch-all handler belongs to the
+server-error middleware, which is the outermost layer — outside all user middleware. The normal
+HTTP-exception handlers sit *inside* the whole user stack. So an exception raised from the outermost
+user layer would bypass the error-envelope handlers entirely and produce a response the frontend can't
+parse. Returning a ready-made response sidesteps that.
+
+**P24. What happens at startup, and which failures are fatal?**
+**Answer:** In order: configure logging, clear stale metrics files, optionally start Sentry, then fail
+fast if any of the JWT secret, the app secret or the TOTP encryption key is still the placeholder — the
+app refuses to boot with a known-public secret. Then it warns if production has no trusted-proxy list,
+and warns in development that the token blacklist fails open when Redis is unreachable. Then it waits up
+to sixty seconds for Postgres and Redis, because Docker's dependency ordering only covers initial
+startup, not a dependency that dies later. Then it checks the schema is present but never alters it —
+migrations own the schema. And Redis pub/sub failing is only a warning, so the API still serves REST
+without realtime.
+→ `docs/background-jobs.md` §8.
+
+**P25. What would you add to make this observable enough?**
+**Answer:** Three things, in order. Alert on the escrow audit's violation events instead of only
+logging them — the structured log is already machine-parseable, so it's a query away. Add a beat leader
+election, because two beat instances fire every periodic task twice and right now only task
+idempotency protects us. And propagate the request id into Celery task headers so a user-reported
+problem can be traced from the HTTP request through to the settlement task that handled it.
+
+---
+
+## Q. Frontend
+
+**★ Q1. What's your frontend stack, and why?**
+**Answer:** Next.js 16 with React 19 in a Turborepo monorepo using Bun, with TanStack Query for server
+state and Tailwind v4 for styling. Two workspace packages: the app, and a shared UI package. The
+decision I'd defend is that the UI package has **no build step at all** — it's consumed as raw
+TypeScript source through Next's `transpilePackages`, so there's no watch process, no dist folder, and
+no build cache to invalidate.
+→ `docs/frontend.md`.
+
+**★ Q2. How is auth stored on the client, and why is that a security win?**
+**Answer:** Nowhere in JavaScript. The backend sets the access and refresh tokens as HttpOnly cookies, so
+no script can read them — there is no localStorage, no sessionStorage, no `document.cookie` anywhere in
+the app. That means an XSS injection cannot steal the session; it can only make requests as the user.
+Compare a token in localStorage, where one line of injected script reads and exfiltrates it. The
+trade-off is that the client can't check whether a session exists, so the app is explicitly *told* by
+the endpoints that set cookies, and it tracks that in a small session-state machine.
+→ `docs/frontend.md` §6.1.
+
+**★ Q3. What happens when the client gets a 401?**
+**Answer:** It tries to refresh, replays the original request once, then redirects to login. The
+interesting part is that the refresh is single-flight — a module-level promise, so if ten requests all
+401 at once they share one refresh call instead of firing ten. And the refresh treats a 401 or 403 as a
+verdict that the session is gone, but treats a 429, a 5xx or a network error as *inconclusive* and backs
+off for thirty seconds while preserving the current state. That distinction is the fix for a real bug:
+previously an anonymous page view produced one refresh per 401 until the per-minute cap answered 429 and
+the tab rate-limited itself. Conflating "session gone" with "server briefly unwell" logs your users out
+during an outage.
+→ `docs/frontend.md` §4.2.
+
+**★ Q4. How does the WebSocket client work?**
+**Answer:** One socket per browser tab, held in a module-level singleton rather than React state, with
+many components subscribing to it. That's deliberate: if each component opened its own socket, a market
+page with a chart, an orderbook, a trade feed and comments would hold four connections, and the server
+caps connections per IP at fifty. Subscriptions are per market, the URL is market-scoped, and reconnects
+go to whatever market the user is currently looking at rather than the first one they subscribed to.
+→ `docs/frontend.md` §5.
+
+**Q5. Why can the WebSocket be anonymous?**
+**Answer:** Because the data on it is public. Market prices are readable over REST without an account,
+so the socket pushes exactly that and accepts an anonymous handshake — gating live prices behind a
+login would deny them to logged-out visitors, who'd just see a static page. If the visitor does have a
+session, the cookie rides along automatically. The important subtlety is on the server: a *missing*
+token is anonymous, but a token that is present and invalid is rejected outright. Without that third
+case, revoking a session would silently downgrade to anonymous instead of being refused.
+
+**Q6. How does reconnection work?**
+**Answer:** Exponential backoff — a thousand milliseconds doubling up to thirty seconds — capped at eight
+attempts, about two minutes. The cap is deliberate: without it, an endpoint that's down gets retried for
+the lifetime of the tab. There's also sleep-and-wake recovery, listening for the browser's online and
+visibility-change events, because a laptop resuming from sleep drops the socket silently and those are
+the only signals available. And the socket close is deferred by a zero-millisecond timeout, because
+React's Strict Mode double-mounts in development and a registry that briefly empties would otherwise close
+and immediately reopen.
+
+**★ Q7. Tell me about a bug you fixed in the WebSocket client.**
+**Answer:** Two, and they're the same mistake. Closing a socket is asynchronous, so a socket that had
+already been replaced would fire its close event after its successor was live — and the handler nulled
+the connection unconditionally, making the live socket untracked. The next subscribe then opened a second
+socket: two sockets, both receiving, and the flap repeated on every subscribe cycle. The fix was to
+compare identity — if this isn't the current socket, return. The second was a boolean flag meaning "this
+close was intentional", which was shared across sockets, so a late close read a value its successor had
+already reset; the fix was to store the socket identity instead of a boolean. Both teach the same lesson:
+when lifecycle events can arrive out of order, compare identity rather than trusting a flag.
+→ `docs/frontend.md` §5.5.
+
+**★ Q8. Do you have frontend tests?**
+**Answer:** No, and that's the honest headline. Zero test files, no test runner in any package manifest,
+no test script, and no test task in the Turbo pipeline. The backend has 381 tests; the client has none.
+The two highest-risk files here are the API client, with its refresh state machine, and the WebSocket
+hook, with its reconnect and single-flight logic — and both are defended by dense comments explaining the
+exact bug each section prevents, which is a reasonable substitute for tests but genuinely isn't
+equivalent. The fix is to turn each of those comments into a test, starting with the two bugs I just
+described.
+→ `docs/frontend.md` §10.
+
+**Q9. How do you keep the charting library out of the initial bundle?**
+**Answer:** Every one of the nine dynamic imports in the app is server-render-disabled, so the visx and
+d3 code splits into its own chunk and never renders on the server. The effect is that the detail page
+paints text and orderbook first and the chart hydrates after. That's essential here because the chart
+package is over a hundred and sixty files — though only four of them are actually used by the app, which
+I'll come back to.
+→ `docs/frontend.md` §8.1.
+
+**★ Q10. You have a huge chart library but only use four files. Why?**
+**Answer:** The design-system package carries sixteen chart families — candlestick, bar, area, radar,
+sankey, sunburst, choropleth, heatmap, gauge, funnel and more — and the application imports exactly
+four: the live line chart and its axis and line children. Everything else is fully implemented and
+unexercised, including OHLC converters written specifically to feed the candlestick chart. It came in with
+the design system. The honest version is that it's general-purpose scaffolding and the product currently
+needs one of them, and shipping alpha visx packages in production dependencies for four components isn't
+something I'd defend as a deliberate choice.
+→ `docs/frontend.md` §7.3.
+
+**Q11. Server components or client components — what did you choose?**
+**Answer:** Overwhelmingly client: eighty of a hundred and forty-one files carry the client directive,
+including every single one under the components folder. Only one server component actually fetches data
+— the homepage, which runs three API calls in parallel on the server and passes them down as seeds, so
+the first paint already has real markets. The reason for the lopsidedness is structural rather than
+stylistic: anything touching live data, a query, or search parameters has to be a client component.
+
+**★ Q12. What's wrong with your server-side data fetching?**
+**Answer:** It doesn't forward cookies. The homepage reuses the client API wrappers, whose fetch carries
+credentials, but Next.js doesn't forward browser cookies to a fetch issued from a server component — and
+there's no cookies call anywhere in the app. So the server-rendered homepage data is effectively
+anonymous. Harmless for the homepage, since it's public markets and trades, but it means the pattern
+can't be reused for an authenticated route without adding explicit cookie forwarding. The related one: the
+market detail page accepts no params and fetches nothing server-side, so it server-renders no market data
+at all and its metadata is generic.
+→ `docs/frontend.md` §3.2.
+
+**Q13. How do you paginate on the client?**
+**Answer:** Two styles, matched to what each backend endpoint supports. Offset pagination for markets,
+positions and transactions; keyset cursors for the trade tapes and orders, because the backend is
+cursor-paginated there and asking for a page number would just be ignored. The query-key factory
+deliberately gives infinite and non-infinite variants of the same feed different keys, so invalidating
+one doesn't accidentally wipe the other.
+
+**Q14. Do you do optimistic updates?**
+**Answer:** No, and for this product I think that's the right call. There is exactly one direct cache
+write in the whole app and it's a WebSocket push, not an optimistic mutation. Everything else invalidates
+after success. On a trading screen, a wrong optimistic balance is worse than a two-hundred-millisecond
+wait, so I'd argue invalidate-after-success is the more correct choice here rather than a shortcut.
+
+**Q15. How do you protect routes on the client?**
+**Answer:** Three layers, and deliberately no route-guard component. The middleware — which in Next 16
+is renamed to a proxy — validates the session and redirects to login with a next parameter. Second,
+every private query is gated on the current user being loaded, so an anonymous visitor never fires a
+request that would fail. Third, a 401 anywhere triggers the refresh-and-replay path, which skips
+redirecting on public paths so an anonymous visitor gets an empty state instead of a redirect loop. The
+`next` parameter is validated to start with a single slash and not a double one, which is the
+open-redirect defence.
+→ `docs/frontend.md` §2.1.
+
+**★ Q16. What's in the Content Security Policy, and why does it matter most here?**
+**Answer:** The connect-src directive is the critical one, and it's derived from the configured API and
+WebSocket origins rather than hardcoded — because it must list every origin the browser talks to, or
+fetch and WebSocket connections are silently blocked in production, which is a failure mode you only
+discover after deploying. Alongside it: default-src self, object-src none, frame-ancestors none, and
+form-action self. And on the server there's a much stricter policy for the API itself — default-src none,
+form-action none — with an explicit exception for the docs pages, because under a deny-all policy the
+Swagger bundle never loads and you get a blank page with a 200.
+
+**Q17. Do you use Next's image optimisation?**
+**Answer:** No, because there was nothing to optimise — there are no raster images in the app. The logo
+and favicon are inline SVG, the social preview image is generated at the edge, and the two-factor QR code
+is an inline SVG component. So I won't claim image optimisation as a feature.
+
+**Q18. What's your accessibility story?**
+**Answer:** Real rather than token. A skip link targeting a focusable main landmark, live regions for
+async state so screen readers hear updates, `aria-current` on active navigation, and — the one I'm
+proudest of — the WebSocket connection status is exposed as text, "Live", "Sync", "Off", not just a green
+dot. The gap: charts are hidden from assistive technology with a text label on the wrapper giving the
+current probabilities, but there's no data-table alternative, so a screen-reader user gets the summary and
+not the series.
+
+**Q19. Do you support multiple languages?**
+**Answer:** No, and it's a non-goal rather than an oversight. There's no i18n layer, the language
+attribute is hardcoded, and every string is an inline literal — including the terms of service, privacy
+policy and FAQ. Adding a language would mean externalising every literal behind a message catalogue,
+adding locale-aware routing and language negotiation, and parameterising the date formatters the charts
+already use. The first thing I'd do is move the FAQ and legal copy into a content directory.
+
+**★ Q20. Any content bugs in your own app?**
+**Answer:** Two I'd rather raise than have you find. The FAQ tells users to "connect your wallet and your
+account is created automatically" — but there is no wallet-connect code at all; the real auth model is
+email and password with two-factor, and the very next FAQ answer describes it correctly. It's leftover
+copy from a different product. And the old brand name still appears in five files, including the support
+and legal pages, even though the frontend README claims that was swept.
+→ `docs/frontend.md` §11.
+
+---
+
+## R. Platform features: moderation, disputes & fees
+
+**★ R1. What stops an administrator from rigging a market resolution?**
+**Answer:** A dispute window. An admin proposes an outcome, which puts the market into a dispute-window
+state and starts a 48-hour clock. Any user can file a dispute with evidence during that window. An admin
+then adjudicates, and a dispute can be ruled on exactly once. Settlement only runs after the window
+closes without a successful challenge. So resolution isn't one person's decision — there's a timed,
+evidenced, appealable challenge step in the middle.
+→ `docs/platform-features.md` §6.
+
+**★ R2. Why is the dispute window 48 hours, and what happens at the end of it?**
+**Answer:** Forty-eight hours is long enough for an ordinary person to notice and react, short enough that
+the market still settles promptly. At the end of the window, if nobody disputed, the resolution stands and
+settlement is queued. The implementation detail I'd point at is that the market row is read with a row
+lock while a dispute is filed, so two simultaneous filings serialise rather than both succeeding.
+
+**R3. Why do you let people dispute an already-resolved market?**
+**Answer:** On purpose. The status check accepts the resolving, resolved and dispute-window states. The
+reason is that otherwise there'd be a gap: an admin could propose, resolve and settle so quickly that
+nobody could ever dispute, making the window decorative. The code comment says exactly that. It also
+means a null dispute deadline means "unbounded" rather than "expired", which is a subtle condition worth
+knowing.
+
+**★ R4. Why is settlement queued before the database commit?**
+**Answer:** Because I inverted the usual order deliberately. Normally you commit and then dispatch a side
+effect. Here the queue happens first, and if the broker is down we fail with a 503 *before* the database
+records the market as resolved. A resolved market with no settlement ever queued is orphaned permanently
+and nobody would ever retry it, whereas a 503 is recoverable — the client just retries. It's the same
+principle as checking a precondition before committing an irreversible state.
+→ `docs/platform-features.md` §6.4.
+
+**★ R5. How are protocol fees actually accounted for?**
+**Answer:** They accrue per pool, not in the treasury table — on each fill, one percent of the trade value
+is added to the pool's protocol-fees column, and the pool also keeps a two percent trading fee for its
+liquidity providers. The critical concept is that the protocol-fee figure is a *sub-ledger inside* the
+pool's collateral, not extra money. So moving a fee out requires zeroing the claim and debiting the
+backing dollars, in that order, and the debit is strict. And the real destination is a wallet belonging
+to a system account, not the treasury table at all.
+→ `docs/platform-features.md` §8.5.
+
+**R6. What happens if the escrow can't cover the fees owed?**
+**Answer:** The sweep pays what the escrow actually holds, keeps the unpaid remainder recorded, and logs
+an error. The comment states the rule: never zero the record while handing over less than it claims, so
+the next sweep retries it. That decoupling — record and cash move independently, and the record is never
+cleared while cash is short — is the principle I'd point at.
+
+**★ R7. Tell me about something in the treasury that's disconnected.**
+**Answer:** The treasury table is effectively a manual accounting record. Nothing in the application ever
+increases its balance or its collected-fees total — those are only set by the seed script — and the
+documented "fee collected" log event is never written by any code path. The real fee flow runs entirely
+through the system account's wallet. So the table is a useful record for an administrator, but it isn't
+wired into the live fee movement. On a fresh install with no seed, the distribute endpoint correctly
+refuses for insufficient balance.
+→ `docs/platform-features.md` §8.6.
+
+**R8. How do you guarantee there's only one treasury row?**
+**Answer:** With two constraints working together rather than application code — a CHECK forcing the
+singleton flag to true on every row, and a UNIQUE constraint on that same flag. Neither alone is
+sufficient: the CHECK alone allows a thousand identical rows, and UNIQUE alone allows one row with the flag
+false. Together they make the table structurally zero-or-one rows. There's also a race-free
+get-or-create using insert-on-conflict-do-nothing rather than select-then-insert.
+
+**R9. How do users report a bad market?**
+**Answer:** A flag — reason text, five to a thousand characters. One flag per user per market, enforced in
+the application rather than by a unique constraint, so a concurrent double-submit could create two;
+that's a gap. Flags don't hide anything themselves — they're a queue for a human, and an admin resolves or
+escalates them. Two weaknesses: the flag list for a market isn't paginated at all, and nothing notifies an
+admin that a flag exists.
+→ `docs/platform-features.md` §5.
+
+**R10. What moderation powers exist?**
+**Answer:** New markets arrive in a pending-review state — invisible publicly but readable by their
+author — and an admin approves or rejects them, with a compare-and-set on the status so two admins can't
+both win. Admins can also ban and unban users, list users, read the auth audit log, and trigger a
+protocol-fee sweep. Worth being clear about what does *not* exist: there's no way to grant admin in the
+API, no global pause or kill switch, no way to force-close a stuck market, and no audit record for
+moderation decisions or any admin action beyond ban and unban.
+→ `docs/platform-features.md` §7.
+
+**★ R11. How do alerts avoid firing twice when several workers are running?**
+**Answer:** Two independent guards. In Redis, the sorted sets are keyed by market, side and direction, so
+"alerts due at this price" is one range scan, and a Lua script does the fetch and the removal together —
+because the removal happens inside the script, exactly one worker can win a given alert. Then in the
+database, an update guarded on "still not triggered" returns the rows that actually flipped, and only
+those notify. Even if Redis lost the claim, the database still can't notify twice.
+→ `docs/platform-features.md` §2.2.
+
+**R12. Why is it acceptable for the alert index to be lost?**
+**Answer:** Because it's an index, not the source of truth — Postgres holds the real state. The index is
+written through on creation with a seven-day expiry, and if a claim comes back empty the engine rebuilds
+the index from the database and retries once, so a cold index repairs itself on the first miss. There's
+also crash recovery: if the worker dies between the Redis removal and the database commit, it reindexes
+before re-raising, otherwise those alerts would be orphaned out of the index while still un-triggered in
+the database.
+
+**★ R13. What's in your audit log?**
+**Answer:** Fifteen authentication event types — logins, registrations, password changes and resets,
+two-factor setup, enable and disable, bans — with four distinct reasons recorded for a failed login:
+unknown user, wrong password, missing second-factor code, wrong second-factor code. That distinction is
+what lets you tell a scripted attack from someone who forgot their password. Two design points worth
+naming: the user foreign key is set to null on delete, so forensic rows outlive the account and the email
+and IP still identify the actor; and the audit write commits separately and never raises, so a failure to
+log can never turn a valid login into an error.
+→ `docs/platform-features.md` §13.
+
+**★ R14. What's missing from your audit log?**
+**Answer:** Quite a lot, and it's the most useful thing to admit about that subsystem. There's no audit
+event for comments, alerts, notification preferences, market flags including who resolved them, disputes
+including the admin's reasoning, treasury distributions, or market moderation decisions. So admin actions
+beyond ban and unban leave no record at all. And even for bans, the acting admin only exists inside a JSON
+metadata field that the admin audit endpoint doesn't return — so "who banned whom" isn't recoverable from
+the API. That'd be my first fix: an admin-action audit table with a real actor column.
+
+**★ R15. How do you paginate the trade tape, and why not offset?**
+**Answer:** Keyset pagination with an opaque cursor. The cursor encodes the timestamp and the trade id
+together, because timestamps aren't unique — several trades can land in the same millisecond — so the id
+is the tiebreak. The filter is "timestamp is older, or same timestamp and id is smaller", matched against
+a descending sort. Offset pagination would make the database walk and discard a hundred thousand rows to
+reach page two thousand, and the result set can shift under you as new trades arrive. I also fetch one
+extra row to detect whether another page exists, which answers that without a count over a high-write
+table.
+→ `docs/platform-features.md` §10.
+
+**R16. Anything wrong with your pagination?**
+**Answer:** Two things, and one of them was a bug I can describe. The global trade feed refuses offsets
+beyond a thousand and tells the client to use a cursor — and there's a comment explaining that the check
+used to be dead code, because a boolean was computed such that the condition could never be true, so deep
+page requests silently returned the first page. That's a good example of a safeguard that looks like it's
+working when it isn't; you have to read the boolean logic. Second, the per-market feed doesn't have that
+guard at all, so you can force a large sequential scan there — an inconsistency between two nearly
+identical handlers.
+
+**★ R17. What does your API return on error, and how does the client handle it?**
+**Answer:** One envelope everywhere: success with a data field, or failure with an error message and a
+machine-readable error code, plus optional details. Schema validation failures come back as 422 with a
+per-field list. There's a set of custom exception classes so a handler can say "not found", "forbidden",
+"conflict", "insufficient balance", "market closed", "idempotency conflict" and "slippage exceeded"
+without inventing status codes. And validation errors can name an exact condition, which lets the frontend
+switch on the code and say something specific instead of "request failed".
+→ `docs/platform-features.md` §12.
+
+**R18. There's one place that doesn't follow the envelope. Which?**
+**Answer:** The cross-origin check. It returns an error code and a message field but no success flag and no
+error field, so a client with a single error parser will mis-read it. The rate-limit 429 in the same file
+does conform and even has a comment saying the goal is that clients only ever parse one shape — so the
+origin check is the outlier.
+
+**R19. Why does a malformed ID produce 422 rather than 500?**
+**Answer:** Because it's the caller's mistake, not a server fault. Asking for an order by a
+non-identifier value sends an unparseable literal into a query that casts to a database UUID type.
+Without a dedicated handler that error escapes as a 500 and the client concludes the server is broken, when
+in fact the request was malformed. Mapping it to 422 with "invalid ID format" is the honest response — and
+it also stops database errors leaking as 500s in monitoring.
+
+**R20. How do comments handle replies?**
+**Answer:** A self-referencing parent pointer plus a depth column. The application caps depth at three, so
+four levels maximum including the top level. Deleting a comment is a soft delete, so replies keep a valid
+parent and the thread doesn't collapse into orphans. And the parent lookup is scoped to the market, so you
+can't reply to a comment on one market while posting "on" another — a genuine cross-market injection that
+has a test.
+
+**R21. How are referrals rewarded?**
+**Answer:** A flat amount paid in the order path, not at signup — so the reward only happens when the
+referred user actually trades. That's the right trigger: signup-only rewards attract fraud, while a reward
+paid from real activity means it only fires when the platform is being used. Code generation retries five
+times against the unique constraint and lets the database arbitrate the collision rather than
+pre-checking, which would itself race.
+
+---
+
 ---
 
 ## Cheat sheet — numbers worth remembering
@@ -1609,7 +2349,7 @@ delivered in realtime over Redis fan-out."
 | Password hash | bcrypt cost 12, ~100 ms |
 | TOTP | 6 digits, ±30 s window, setup session 900 s |
 | OTP | 8 digits, 600 s TTL, 5 sends / 5 verifies per 300 s, hash-only in Redis |
-| Rate limits | 60/min/IP general · 5/min auth-decision · 3/min auth-fast · 10/min strict |
+| Rate limits | 60/min/IP general · 5/min auth-decision · 3/min auth-fast · 30/min refresh · 10/min strict |
 | Friction | 5 free attempts, then 1→2→4→8→16 s, 900 s lockout |
 | Request body cap | 256 KiB (checked on `Content-Length`) |
 | WS frame cap | 64 KB · 50 subs/socket · 50 conns/IP · 5 conns/user |
@@ -1620,5 +2360,22 @@ delivered in realtime over Redis fan-out."
 | Lock order | market → pool → wallet → position → LPShare → Order (wallets also sorted by id) |
 | Workers | gunicorn 8 × UvicornWorker, `timeout=120`, `graceful_timeout=30` |
 | Beat cadence | order expiry/limit check 30 s · prices 60 s · resolution 5 min · snapshot 300 s |
-| Test suite | 307 tests, DB rebuilt from Alembic `head` every run |
+| Nightly jobs | 03:00 session cleanup → 03:30 protocol-fee sweep → 04:00 escrow audit (that order is deliberate) |
+| Database | **24 tables**, 5 migrations, linear chain. **Zero** DB enums — statuses are plain strings |
+| DB guarantees | identity/uniqueness, ranges (`price <= 1`), idempotency (partial unique indexes) |
+| DB does *not* guarantee | money conservation — escrow discipline is service code + nightly audit |
+| Known schema drift | 5 CHECK constraints in the models but **absent from the migrations** |
+| Dispute window | 48 h from a proposed resolution; a dispute is adjudicable exactly once |
+| Comment depth | max 3 |
+| DB pool | `pool_size=5` per worker × 8 workers = 40, `max_overflow=5`, `pool_pre_ping=True` |
+| Cache TTLs | market detail 300 s · market list 60 s · orderbook 60 s |
+| Redis breaker | opens after 5 consecutive failures, 30 s recovery, one half-open probe |
+| Celery | `acks_late` + `reject_on_worker_lost` (at-least-once), prefetch 1, concurrency 4 |
+| Metrics | `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}` |
+| Health | `/health` liveness (no deps) · `/health/ready` (Postgres+Redis, 503 degraded) |
+| Frontend | Next.js 16.3.3 · React 19.2.8 · Turborepo · Bun · TanStack Query 5 · Tailwind v4 |
+| Frontend routing | 27 pages in 3 route groups; middleware renamed to `proxy.ts` in Next 16 |
+| WS client | 1 socket per tab, capped at 8 reconnect attempts, 30 s max backoff |
+| Frontend tests | **0** — the honest headline |
+| Test suite | **381** tests across 22 files; DB rebuilt from Alembic `head` every run |
 | Test infra | `pm-postgres` on 5433, `pm-redis` on 6380 — `docker start pm-postgres pm-redis` |
