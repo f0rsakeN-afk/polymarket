@@ -524,18 +524,37 @@ From the module docstring (`manager.py:1`):
 ## D5. WebSocket endpoints & auth (`websocket/routes.py`)
 
 - `/ws/markets/{market_id}` — multiplexed: connect to one market, then send
-  `{"type":"subscribe","market_id":...}` / `unsubscribe` / `ping`.
-- `/ws/trades` — global trade feed.
-- `/ws/notifications/{user_id}` — token's uid must match the path uid (IDOR guard).
-- Auth: **cookie `access_token`** (browsers send cookies on the WS handshake — cookies are
-  host-scoped, not port-scoped, so `localhost:3000 → localhost:8000` works). A `?token=` query
-  param is accepted **only** when `WS_ALLOW_QUERY_TOKEN=true` (default false: a token in a URL
-  lands in proxy logs, history and `Referer`).
-  `verify_ws_token()` calls `deps.authenticate_token()`, which is the
-  *same* chain HTTP uses: signature + `type == "access"` + `jti` blacklist + `user.is_active` +
-  `sid` session binding (revoked/expired/wrong owner ⇒ reject). Any failure — including a
-  database error — rejects the connection, so auth fails closed.
-- `MAX_WS_PAYLOAD_SIZE = 64 KB` per frame → a client can't exhaust memory with giant frames.
+  `{"type":"subscribe","market_id":...}` / `unsubscribe` / `ping`. **Public.**
+- `/ws/trades` — global trade feed. **Public.**
+- `/ws/notifications/{user_id}` — **private**: token's uid must match the path uid (IDOR guard).
+- **Why the split is by data, not by convenience.** Everything on the market channel
+  (`orderbook:update`, `trade:new`, `market:price_update`, `comment:*`, `split`/`merge`,
+  `liquidity:*`, `order:expired`) is already served anonymously by
+  `GET /markets/{slug}/orderbook`, `GET /markets/{slug}/trades`, `GET /markets/{slug}/comments`
+  and `GET /trades`. Requiring a token to watch prices gated public information behind a login, and
+  the client — which reconnects with backoff — turned that into a log full of identical handshake
+  rejections. Private frames (`notification`, `alert:triggered`, `order:fill`) never touch a market
+  channel: they ride `user:{uid}:notifications` and `user:{uid}:fills`, which only
+  `/ws/notifications/{user_id}` subscribes to.
+- **Optional auth, strictly validated** (`authenticate_ws_token` → `(user_id, token_presented)`).
+  The cookie is host-scoped, not port-scoped, so `localhost:3000 → localhost:8000` works and the
+  browser sends it unprompted. "No token" and "bad token" are deliberately different answers:
+  - `(None, False)` — anonymous; allowed on the public feeds.
+  - `(user_id, True)` — valid; the user connection cap applies.
+  - `(None, True)` — a token **was** presented and failed ⇒ **reject**. Collapsing this into the
+    anonymous case would mean a revoked or logged-out session quietly continued as anonymous, so
+    revoking a session would stop meaning anything on these sockets.
+
+  Validation is `deps.authenticate_token()` — the same chain HTTP uses: signature +
+  `type == "access"` + `jti` blacklist + `user.is_active` + `sid` session binding — and any
+  failure, including a database error, is reported as invalid, so auth fails closed.
+- A `?token=` query param is honoured **only** when `WS_ALLOW_QUERY_TOKEN=true` (default false: a
+  token in a URL lands in proxy logs, history and `Referer`). With it off, a query token is simply
+  ignored — so on a public socket the caller is anonymous, and on the private one, refused.
+- **What bounds an anonymous socket:** `MAX_CONNECTIONS_PER_IP = 50` (keyed on IP, always
+  available), `MAX_SUBSCRIPTIONS_PER_SOCKET = 50`, and `MAX_WS_PAYLOAD_SIZE = 64 KB` per frame.
+  `MAX_CONNECTIONS_PER_USER` is written `if user_id and …`, so it simply does not apply to a
+  signed-out caller.
 
 ## D6. Background processes feeding realtime
 
@@ -574,6 +593,13 @@ From the module docstring (`manager.py:1`):
    catastrophic — `trending-carousel-item.tsx` opens a subscription per carousel card, all over the
    one socket).
    - Reconnect: exponential `min(1000 * 2^retries, 30_000)`, retries reset on open.
+   - **No auth gate.** The feed is public (see D5), so a logged-out visitor gets live prices just
+     like they get them over REST. The `access_token` cookie rides along automatically when there
+     is a session; the server uses it only for the per-user connection cap.
+   - **Reconnect gives up after 8 consecutive failures** (~2 min of backoff) instead of retrying
+     for the lifetime of the tab, which is what filled the API log with identical handshake
+     rejections. It recovers on `online` or tab focus — a laptop resuming from sleep drops the
+     socket silently and that is the only signal the browser gives.
    - On open it **re-sends `subscribe` for all server-side subs** — because Redis pub/sub has no
      replay, everything after a disconnect is re-fetched instead.
    - **Stale-message guard**: each sub has a `seq` incremented on re-subscribe; the dispatch loop
@@ -581,12 +607,41 @@ From the module docstring (`manager.py:1`):
      to the new subscription.
    - Handler `try/catch` per consumer → one throwing component can't kill the socket.
    - Sub registry cleanup deletes the sub **and its `subLocks` entry** (documented Map-leak fix),
-     and closes the whole WS when `subs.size === 0`.
+     and closes the whole WS when `subs.size === 0` — **deferred by one tick**. React Strict Mode is
+     on by default with the app router (Next 13.5.1+), so in dev every component unmounts and
+     remounts; a registry that briefly empties would otherwise close the socket and immediately
+     reopen it on every page. Anything that re-subscribes on the next tick keeps it.
+   - **A superseded socket must not touch shared state.** `close()` is asynchronous, so a socket
+     that has already been replaced fires `onclose` *after* its successor is live. Nulling
+     `conn.ws` unconditionally made the live socket untracked, so the next `subscribe` opened a
+     second one — two sockets both receiving, flapping on every subscribe/unsubscribe cycle. The
+     handler therefore returns early unless `conn.ws === ws`, and the "closed on purpose" marker is
+     the **socket identity**, not a shared boolean (a boolean is reset by the successor and read
+     back by the predecessor's late event).
    - Status is broadcast as synthetic `{type:"__ws_status__", status}` frames.
 
 2. **`use-user-socket.ts`** — `/ws/notifications/{userId}`, cookie-authenticated (no token in the
-   URL), exponential backoff, `enabled:false` closes immediately, unmount clears the timer.
-   Consumed by `notification-bell.tsx`.
+   URL), exponential backoff, `enabled:false` closes immediately, unmount clears the timer, and the
+   same 8-attempt reconnect cap. Consumed by `notification-bell.tsx`.
+
+**The public socket needs no session; the private one and its queries do.** Auth rides on
+`HttpOnly` cookies, so a logged-out visitor's 401s are *expected*, not a fault to retry — the app
+has to know the difference or it turns one page view into a storm.
+
+Every hook that reads user-private data gates through **`useAuthGate()`** (`hooks/api/use-auth-gate.ts`)
+rather than at each call site: `useWallet`, `useTransactions`, `usePositions`, `useOrders`,
+`useAlerts`, `useNotifications`. The gate lives in the hook so a new component cannot reintroduce
+the bug by forgetting it, and `useLoadingWithGate` keeps `isLoading` true while `/auth/me` is still
+in flight so an authed page does not flash its empty state. This was not hypothetical:
+`trade-form.tsx` sits on the **public** market page, so its ungated wallet fetch produced a
+`No access token provided` on every anonymous page view.
+
+`client.ts` additionally keeps a tri-state session (`unknown` / `active` / `none`) so a 401 is only
+allowed to trigger `/auth/refresh` once, single-flighted — a definitive 401/403 from refresh caches
+"no session" for the tab, and an inconclusive one (429/5xx/offline) only starts a 30 s cooldown.
+Without it a page load produced one refresh per 401 until the endpoint's cap answered 429. The one
+401 that remains by design is `GET /auth/me`: you cannot ask "who am I?" without being told
+"nobody".
 
 **How the UI consumes events** (`market-detail.tsx`):
 

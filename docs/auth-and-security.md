@@ -38,8 +38,19 @@ Without `sid` a JWT would stay valid for its full 15 minutes no matter what you 
 httponly = True          # JS can never read the tokens → XSS can't exfiltrate them
 secure   = (app_env == "production")   # HTTPS only in prod; localhost must work in dev
 samesite = "lax"         # sent on same-origin + safe top-level navigations only
-path     = "/", domain = "localhost" in dev / None in prod
+path     = "/", no Domain attribute (host-only, in every environment)
 ```
+
+> **No `Domain` attribute, deliberately.** Dev used to emit `Domain=localhost` so the cookie would
+> "work across frontend (:3000) and backend (:8000)". It never needed to: cookie scope is
+> host-based and **ignores ports**, so a host-only cookie from `localhost:8000` is sent to
+> `localhost:8000` all the same. The attribute bought nothing and cost real breakage — RFC 6265
+> cookie stores reject `Domain=localhost` outright (Python's `http.cookiejar`, and therefore every
+> httpx/requests client, silently discards it), so a successful login looked anonymous on the very
+> next request. Production was already host-only; dev now matches it.
+> `test_auth_cookies_are_accepted_by_a_standard_cookie_jar` pins this through a real cookie jar,
+> because every other test injects the token with `client.cookies.set(...)` and so skips
+> `Set-Cookie` parsing entirely.
 
 ### Refresh rotation + reuse detection (`POST /auth/refresh`, `auth.py:1037`)
 
@@ -174,8 +185,13 @@ deleted only on success (retry allowed on a mistyped TOTP) and carries the IP fo
 - Sliding-window **Lua** on a Redis ZSET (`ZREMRANGEBYSCORE` + `ZCARD` + `ZADD`) — exact counts,
   no fixed-window boundary burst.
 - Limits: `GENERAL 60/min/IP`, `AUTH_DECISION 5/min/email+IP`, `AUTH_FAST 3/min/email+IP`,
-  `STRICT 10/min/IP`.
-- Auth paths are mapped in `_get_auth_limit_type()`; login/verify/reset → `AUTH_DECISION`.
+  `AUTH_REFRESH 30/min/IP`, `STRICT 10/min/IP`.
+- Auth paths are mapped in `_get_auth_limit_type()`; login/verify/reset → `AUTH_DECISION`,
+  `/auth/refresh` → its own `AUTH_REFRESH` bucket. It is deliberately not `AUTH_FAST`: that
+  3/min cap exists because every endpoint in it sends an email or reveals whether an account
+  exists. Refresh does neither — a signed-in client rotates silently, so 3/min meant a burst
+  of 401s (flaky network, a laptop waking from sleep, several components refetching at once)
+  got the client 429'd and locked out of recovering its own live session.
 - Identifier is `user_id` when authenticated else IP; auth limits composite `email@normalized_ip`
   (IPv6 normalized to /64 so one host isn't fragmented across buckets).
 - Redis error ⇒ **fail closed** (`allowed=False, retry_after=60`).
@@ -345,6 +361,16 @@ Plus: `form-action 'self'` in CSP stops a hijacked form from posting anywhere, a
   **Websocket handshakes run the identical chain** through `deps.authenticate_token()`, so a token
   killed by logout, logout-all or a session revocation dies at the WS upgrade too — not just on the
   next HTTP request.
+- **Websocket auth is optional-but-validated, and the split follows the data.**
+  `/ws/markets/{id}` and `/ws/trades` are public: every frame they carry is already served
+  anonymously by `GET /markets/{slug}/orderbook`, `/markets/{slug}/trades` and `/trades`, so
+  demanding a login would gate public information. `authenticate_ws_token()` returns
+  `(user_id, token_presented)` so *absent* and *invalid* stay distinguishable — a presented token
+  that fails closes the socket (1008) rather than being quietly downgraded to anonymous, which
+  would make session revocation meaningless on those sockets. `/ws/notifications/{user_id}` is the
+  one private surface (it alone serves `user:{uid}:notifications` and `user:{uid}:fills`) and
+  requires the token's uid to equal the path uid (4001 otherwise). Anonymous sockets are bounded by
+  `MAX_CONNECTIONS_PER_IP`, `MAX_SUBSCRIPTIONS_PER_SOCKET` and the 64 KB frame cap.
 - **Admin**: `_get_admin_user()` (`admin.py:37`) raises 403 unless `user.is_admin`. Also enforced
   ad-hoc in `flags.py`, `disputes.py`, `wallet.py` (withdraw confirm), `treasury.py`,
   `markets.py` (resolve/approve). Ban/unban refuses to ban another admin.
@@ -383,6 +409,9 @@ Plus: `form-action 'self'` in CSP stops a hijacked form from posting anywhere, a
 | 5 | Register returned `409 "account already exists"` for a verified email | Uniform `200 {email, status: pending_verification}` + message `"Check your email to continue"` for all three cases; the owner is told by email instead (throttled 10 min). The response no longer carries an id, so it cannot differ between paths | `test_register_duplicate_email_is_not_enumerable` (compares both responses key by key) |
 | 11 | No absolute cap across refresh rotations | Redis `refresh_chain:{sha256}` deadline set at login and inherited by every rotation (`refresh_chain_max_seconds`, default 30 d); past it every token and session is revoked | `test_refresh_rotation_inherits_the_chain_deadline`, `test_refresh_chain_stops_at_the_absolute_deadline` |
 | 12 | `/auth/refresh` compared issuance time to `now` — true for every token — so **every refresh returned 401** | Check rewritten to mean what it says; the chain deadline from row 11 is the real bound | the two tests above (rotation succeeds, then the chain stops) |
+| 13 | `/auth/refresh` shared the 3/min `AUTH_FAST` bucket (sized for endpoints that email or enumerate accounts), so a burst of 401s locked a signed-in client out of rotating its own token | Own `AUTH_REFRESH` bucket, 30/min per IP | `test_refresh_has_its_own_rate_limit_bucket` |
+| 14 | Auth cookies tagged `Domain=localhost` in dev — rejected by RFC 6265 cookie stores, so a real client silently dropped the session it had just been given, and login looked anonymous on the next request. Invisible to the suite because every test injects the token by hand | Host-only cookies in all environments (`Domain` was never needed — cookie scope ignores ports) | `test_auth_cookies_are_accepted_by_a_standard_cookie_jar` |
+| 15 | `/ws/markets/{id}` and `/ws/trades` required a token, gating data the REST endpoints already serve anonymously (`GET /markets/{slug}/orderbook`, `GET /trades`). A logged-out visitor was refused, and since the client reconnects with backoff the refusal repeated indefinitely | Public, with **optional but strictly validated** auth: no token ⇒ anonymous; a token that *is* presented must pass the full chain or the socket closes. Only `/ws/notifications/{user_id}` stays private — it is the sole consumer of `user:{uid}:notifications` and `user:{uid}:fills` | `test_market_websocket_is_public`, `test_global_trades_websocket_is_public`, `test_market_websocket_still_rejects_an_invalid_token`, `test_user_notifications_websocket_rejects_anonymous` |
 
 Two trading-logic defects found alongside these (see `docs/trading-engine.md`): AMM BUY fills wrote
 no `Trade` row (`remaining_shares` is pinned to `0` for buys — now keyed off `amm_shares`), and
@@ -397,6 +426,7 @@ and `test_create_market_initial_probability_is_not_inverted`.
 | 8 | Blacklist **fails open** outside production | `deps.py` (`_BLACKLIST_FAIL_OPEN`) | Dev/staging convenience; production fails closed (Redis down ⇒ deny). Startup now logs a warning naming the consequence (`app_env=…: token blacklist checks FAIL OPEN…`) so nobody discovers it during an incident. |
 | 9 | `SameSite=Lax`, no synchroniser token | `deps.py` (`set_auth_cookies`) | Standard SPA+JSON design; `Lax` is needed so emailed links still work. The un-covered threat is a same-site (subdomain) attacker — closed by the JSON content-type + Origin allowlist, not by a token. |
 | 13 | `WS_ALLOW_QUERY_TOKEN=true` (opt-in) puts a live JWT in a URL | `config.py` | Only if someone enables it deliberately, for a non-browser client that cannot store a cookie. The shipped default is `false`; URLs end up in proxy logs, history and `Referer`. |
+| 16 | An anonymous client can hold up to `MAX_CONNECTIONS_PER_IP = 50` sockets on the public market feed | `websocket/manager.py` | Inherent to serving public prices without a login, and bounded per IP with a subscription cap and a frame-size cap on top. The alternative — gating price data behind an account — was the bug this replaced. Per-*user* capping only applies once there is a user. |
 
 ---
 
