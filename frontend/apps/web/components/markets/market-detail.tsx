@@ -87,25 +87,45 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   }, [orderbookData])
 
   /**
-   * Per-outcome mid price from the orderbook.
-   * GET /markets/{slug} does NOT put a price on `outcomes` • only the market-level
-   * yes_price/no_price. Multi-outcome markets therefore have no price anywhere else,
-   * so we derive it here (best bid/ask midpoint) instead of reading a field that
-   * was never there.
+   * Per-outcome price, from the API's `outcomes[].price` when present.
+   *
+   * The API prices every outcome from its own pool (parimutuel) or from the
+   * binary pair, so this is a real quote. The orderbook midpoint is used only as
+   * a fallback, because a resting book is often empty on a thin market and an
+   * empty book must not blank out a price the backend already knows.
+   *
+   * Deriving the price purely from the orderbook was the original defect: with no
+   * orders resting, every outcome fell back to the same even split, which is why
+   * the page showed "Yes 75 / No 25" for an eight-way market.
    */
   const outcomePrices = useMemo(() => {
     const map: Record<string, number> = {}
+
+    // 1. Authoritative: the price the API put on each outcome.
+    for (const outcome of market?.outcomes ?? []) {
+      const price = Number(outcome.price)
+      if (outcome.name && Number.isFinite(price)) {
+        map[outcome.name.toLowerCase()] = price
+      }
+    }
+
+    // 2. Fallback: a resting orderbook midpoint, for outcomes the API did not
+    //    price (e.g. a cached market detail response).
     for (const [name, book] of Object.entries(orderbookData?.data?.outcomes ?? {})) {
+      const key = name.toLowerCase()
+      if (map[key] !== undefined) continue
+
       const bids = (book.bids ?? []).map((b) => Number(b.price)).filter((p) => Number.isFinite(p))
       const asks = (book.asks ?? []).map((a) => Number(a.price)).filter((p) => Number.isFinite(p))
       const bestBid = bids.length ? Math.max(...bids) : NaN
       const bestAsk = asks.length ? Math.min(...asks) : NaN
-      if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) map[name] = (bestBid + bestAsk) / 2
-      else if (Number.isFinite(bestAsk)) map[name] = bestAsk
-      else if (Number.isFinite(bestBid)) map[name] = bestBid
+      if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) map[key] = (bestBid + bestAsk) / 2
+      else if (Number.isFinite(bestAsk)) map[key] = bestAsk
+      else if (Number.isFinite(bestBid)) map[key] = bestBid
     }
+
     return map
-  }, [orderbookData])
+  }, [orderbookData, market?.outcomes])
 
   /** Orderbook keys are lower-cased outcome names; fall back to an even split. */
   const priceFor = useCallback(
@@ -202,15 +222,21 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const { yesOutcome, noOutcome, outcomeList } = useMemo(() => {
     const outcomes = market?.outcomes ?? []
-    const yes = outcomes.find((o) => o.name.toLowerCase() === "yes")
-    const no = outcomes.find((o) => o.name.toLowerCase() === "no")
     return {
-      yesOutcome: yes ?? outcomes[0],
-      noOutcome: no ?? outcomes[1],
+      // Matched by name, never by position. The previous
+      // `yes ?? outcomes[0]` / `no ?? outcomes[1]` fallbacks made this pair
+      // non-null for EVERY market with two or more outcomes, so `isBinary`
+      // below was always true - and an eight-way market like
+      // "euro-2024-winner" rendered as "Yes 75 / No 25" taken from the binary
+      // pool's yes_price/no_price, which for a market with no Yes or No outcome
+      // are meaningless seed values, not anybody's price.
+      yesOutcome: outcomes.find((o) => o.name.toLowerCase() === "yes"),
+      noOutcome: outcomes.find((o) => o.name.toLowerCase() === "no"),
       outcomeList: outcomes,
     }
   }, [market])
 
+  // Binary only when the outcomes really are the YES/NO pair.
   const isBinary = !!(yesOutcome && noOutcome)
 
   const outcomeNames = useMemo(() => outcomeList.map((o) => o.name), [outcomeList])

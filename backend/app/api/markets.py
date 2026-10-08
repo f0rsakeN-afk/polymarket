@@ -52,7 +52,7 @@ from app.services.cache_service import (
 from app.services.market_service import MarketService
 from app.workers.tasks import resolve_market
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/markets", tags=["markets"])
 
 
@@ -61,6 +61,7 @@ def market_to_response(
     yes_price: Decimal = Decimal("0.5"),
     no_price: Decimal = Decimal("0.5"),
     outcomes: list | None = None,
+    outcome_prices: dict[str, float] | None = None,
 ) -> MarketResponse:
     resp = MarketResponse(
         id=str(market.id),
@@ -80,8 +81,24 @@ def market_to_response(
         winning_outcome_name=None,
     )
     if outcomes:
+        # Fall back to the binary pair so every outcome always carries a price:
+        # yes_price / 1 - yes_price keyed by outcome id. On a parimutuel market
+        # the real per-outcome values are supplied by the caller instead.
         resp.outcomes = [
-            OutcomeResponse(id=str(o.id), name=o.name, outcome_index=o.outcome_index)
+            OutcomeResponse(
+                id=str(o.id),
+                name=o.name,
+                outcome_index=o.outcome_index,
+                price=(
+                    outcome_prices.get(str(o.id))
+                    if outcome_prices
+                    else (
+                        float(yes_price)
+                        if o.name.lower() == "yes"
+                        else float(no_price)
+                    )
+                ),
+            )
             for o in outcomes
         ]
     return resp
@@ -98,7 +115,7 @@ async def list_markets(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db_replica),
 ):
-    # Visibility gate first — it must run before the shared cache is read, or a
+    # Visibility gate first • it must run before the shared cache is read, or a
     # cached moderator view could be served to an anonymous caller.
     if status and status in UNPUBLISHED_STATUSES:
         raise ValidationError(
@@ -116,7 +133,13 @@ async def list_markets(
     if cached is not None:
         return MarketListResponse(**cached)
 
-    base = select(Market, LiquidityPool)
+    # Market only - no join to LiquidityPool.
+    #
+    # A parimutuel market has one pool per outcome, so joining made a single
+    # market return N rows. That inflated the row count used for `has_more`,
+    # duplicated the market across a page, and let one market's N pools consume
+    # the whole page_size. Nothing here filters or sorts on the pool.
+    base = select(Market)
     if q:
         # PostgreSQL full-text search using plainto_tsquery & tsrank_cd for relevance.
         # The to_tsvector('english', question) expression must match the
@@ -165,42 +188,42 @@ async def list_markets(
         except Exception:
             raise ValidationError("Invalid cursor")
         query = (
-            base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
-            .order_by(order)
+            base.order_by(order)
             .limit(page_size + 1)
         )
     else:
-        # Offset-based pagination with safety limit — avoid > 1000 row skip
+        # Offset-based pagination with safety limit • avoid > 1000 row skip
         if (page - 1) * page_size > 1000:
             raise ValidationError(
                 "Pagination offset exceeds 1000. Use cursor pagination instead.",
                 error_code="PAGINATION_LIMIT"
             )
         query = (
-            base.outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
-            .order_by(order)
+            base.order_by(order)
             .offset((page - 1) * page_size)
             .limit(page_size + 1)
         )
 
     result = await db.execute(query)
-    rows = result.all()
+    # .scalars() because the select is a single entity - result.all() would
+    # hand back Row objects rather than Market instances.
+    rows = list(result.scalars().all())
     has_more = len(rows) > page_size
     if has_more:
         rows = rows[:page_size]
 
-    page_markets = [market for market, _ in rows]
+    page_markets = list(rows)
     market_ids = [m.id for m in page_markets]
 
     # Batched price fetch: one Redis pipeline + one SELECT for all misses.
-    # (Never N sequential per-market lookups — that fanned out DB sessions
+    # (Never N sequential per-market lookups • that fanned out DB sessions
     # and stalled cold list pages.)
     price_map = await MarketService.get_market_prices_batch(
         [str(m.id) for m in page_markets], db=db,
     )
 
     market_responses = []
-    for i, (market, pool) in enumerate(rows):
+    for market in page_markets:
         yes_price, no_price = price_map[str(market.id)]
         market_responses.append(market_to_response(market, yes_price, no_price))
 
@@ -215,15 +238,36 @@ async def list_markets(
         key = str(o.market_id)
         outcomes_by_market.setdefault(key, []).append(o)
 
+    # Per-outcome prices for the parimutuel markets on this page. Batched into
+    # one query rather than one per market - the home page draws a line per
+    # outcome and cannot use the single yes/no pair for anything but a binary
+    # market.
+    pools_result = await db.execute(
+        select(LiquidityPool).where(LiquidityPool.market_id.in_(market_ids))
+    )
+    pools_by_market: dict = {}
+    for pool in pools_result.scalars().all():
+        pools_by_market.setdefault(str(pool.market_id), []).append(pool)
+
     for resp in market_responses:
         outcomes = outcomes_by_market.get(resp.id)
-        if outcomes and len(outcomes) > 2:
-            resp.outcomes = [
-                OutcomeResponse(
-                    id=str(o.id), name=o.name, outcome_index=o.outcome_index
-                )
-                for o in outcomes
-            ]
+        if not outcomes:
+            continue
+        # Name-based, not `len(outcomes) > 2`: a two-way NAMED market ("Trump vs
+        # Biden") is parimutuel too and needs real per-outcome prices just as
+        # much as an eight-way one.
+        if not MarketService.is_parimutuel(list(outcomes)):
+            continue
+        prices = MarketService.outcome_prices(pools_by_market.get(resp.id, []))
+        resp.outcomes = [
+            OutcomeResponse(
+                id=str(o.id),
+                name=o.name,
+                outcome_index=o.outcome_index,
+                price=prices.get(str(o.id)),
+            )
+            for o in outcomes
+        ]
 
     resp = MarketListResponse(
         data=market_responses,
@@ -258,7 +302,7 @@ async def get_market(slug: str, request: Request, db: AsyncSession = Depends(get
         raise NotFoundError(f"Market '{slug}' not found")
 
     # Unpublished markets (pending review / rejected) are only readable by the
-    # user who submitted them and by admins — and 404 rather than 403 for
+    # user who submitted them and by admins • and 404 rather than 403 for
     # everyone else, so the existence of unpublished submissions isn't leaked.
     if market.status in UNPUBLISHED_STATUSES:
         viewer = await get_optional_user(request, db)
@@ -280,14 +324,18 @@ async def get_market(slug: str, request: Request, db: AsyncSession = Depends(get
     )
     outcomes = outcomes_result.scalars().all()
 
+    # Per-outcome prices, keyed by outcome id. A parimutuel market has no
+    # YES/NO pair, so without this the response would carry a single binary
+    # price pair that says nothing about any actual outcome - which is what made
+    # an eight-way market render as "Yes 75 / No 25".
+    outcome_prices = MarketService.outcome_prices(
+        await MarketService.load_outcome_pools(db, market.id)
+    )
+
     data = {
-        **market_to_response(market, yes_price, no_price).model_dump(),
-        "outcomes": [
-            OutcomeResponse(
-                id=str(o.id), name=o.name, outcome_index=o.outcome_index
-            ).model_dump()
-            for o in outcomes
-        ],
+        **market_to_response(
+            market, yes_price, no_price, outcomes, outcome_prices=outcome_prices
+        ).model_dump(),
         "spread": spread,
         "created_at": market.created_at.isoformat() if market.created_at else None,
     }
@@ -305,7 +353,7 @@ async def get_orderbook(slug: str, db: AsyncSession = Depends(get_db_replica)):
     # Check cache using market_id (not slug)
     cached = await cache_get_orderbook(str(market.id))
     if cached is not None:
-        # Cache stores the raw orderbook — wrap it so the response shape is
+        # Cache stores the raw orderbook • wrap it so the response shape is
         # identical to the cache-miss path ({success, data}).
         return success_response(cached)
 
@@ -362,15 +410,50 @@ async def create_market(
         db.add_all([outcome_yes, outcome_no])
     await db.flush()
 
-    pool = LiquidityPool(
-        market_id=market.id,
-        yes_shares=0,
-        no_shares=0,
-        collateral=0,
-        fee_rate=settings.trading_fee_rate,
-        lp_token_supply=0,
+    created_outcomes = list(
+        (
+            await db.execute(
+                select(Outcome)
+                .where(Outcome.market_id == market.id)
+                .order_by(Outcome.outcome_index)
+            )
+        ).scalars().all()
     )
-    db.add(pool)
+    parimutuel = MarketService.is_parimutuel(created_outcomes)
+
+    # One pool per outcome for a parimutuel market, a single binary pool
+    # otherwise.
+    #
+    # Creating a binary pool for a market with named outcomes left it with eight
+    # outcomes and one meaningless YES/NO reserve, so every outcome priced off
+    # that one reserve and the market reported "Yes 75 / No 25" regardless of
+    # what the outcomes actually were.
+    if parimutuel:
+        pools = [
+            LiquidityPool(
+                market_id=market.id,
+                outcome_id=o.id,
+                yes_shares=0,
+                no_shares=0,
+                collateral=0,
+                fee_rate=settings.trading_fee_rate,
+                lp_token_supply=0,
+            )
+            for o in created_outcomes
+        ]
+    else:
+        pools = [
+            LiquidityPool(
+                market_id=market.id,
+                outcome_id=None,
+                yes_shares=0,
+                no_shares=0,
+                collateral=0,
+                fee_rate=settings.trading_fee_rate,
+                lp_token_supply=0,
+            )
+        ]
+    db.add_all(pools)
     await db.flush()
 
     if data.initial_liquidity > 0:
@@ -383,35 +466,47 @@ async def create_market(
         if wallet and wallet.balance >= Decimal(str(data.initial_liquidity)):
             amount_dec = Decimal(str(data.initial_liquidity))
             wallet.balance -= amount_dec
-            if data.initial_probability is not None:
-                # price(YES) = yes_shares / (yes_shares + no_shares), so the
-                # YES side must be seeded with `initial_probability` of the
-                # collateral — the inverse (the old behaviour) made a market
-                # created at 0.70 open at 0.30.
-                p = Decimal(str(data.initial_probability))
-                yes_shares = amount_dec * p
-                no_shares = amount_dec * (Decimal(1) - p)
-                pool.yes_shares += yes_shares
-                pool.no_shares += no_shares
+
+            if parimutuel:
+                # `initial_probability` is a YES/NO concept and does not
+                # generalise to N outcomes, so the seed is split evenly - which
+                # also means every outcome opens at 1/N and the prices sum to 1.
+                share = amount_dec / Decimal(len(pools))
+                for target in pools:
+                    target.yes_shares += share
+                    target.credit_collateral(share)
+                    target.lp_token_supply = share * Decimal(2)
             else:
-                half = amount_dec / Decimal(2)
-                pool.yes_shares += half
-                pool.no_shares += half
-            pool.credit_collateral(amount_dec)
-            pool.lp_token_supply = amount_dec * Decimal(2)
-            # The seeding wallet is the pool's first LP. Mint its shares so
+                pool = pools[0]
+                if data.initial_probability is not None:
+                    # price(YES) = yes_shares / (yes_shares + no_shares), so the
+                    # YES side must be seeded with `initial_probability` of the
+                    # collateral • the inverse (the old behaviour) made a market
+                    # created at 0.70 open at 0.30.
+                    prob = Decimal(str(data.initial_probability))
+                    pool.yes_shares += amount_dec * prob
+                    pool.no_shares += amount_dec * (Decimal(1) - prob)
+                else:
+                    half = amount_dec / Decimal(2)
+                    pool.yes_shares += half
+                    pool.no_shares += half
+                pool.credit_collateral(amount_dec)
+                pool.lp_token_supply = amount_dec * Decimal(2)
+
+            # The seeding wallet is each pool's first LP. Mint its shares so
             # `lp_token_supply == sum(lp_shares.lp_tokens)` holds for
-            # API-created markets too (it previously didn't — the supply was
+            # API-created markets too (it previously didn't • the supply was
             # set with no holder, locking the seed away forever) and the
             # creator earns/exits like any other LP.
-            db.add(
-                LPShare(
-                    pool_id=pool.id,
-                    user_id=user.id,
-                    lp_tokens=amount_dec * Decimal(2),
-                    collateral_deposited=amount_dec,
+            for target in pools:
+                db.add(
+                    LPShare(
+                        pool_id=target.id,
+                        user_id=user.id,
+                        lp_tokens=target.lp_token_supply,
+                        collateral_deposited=target.collateral,
+                    )
                 )
-            )
             market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount_dec
 
     await db.commit()
@@ -422,7 +517,7 @@ async def create_market(
         message=(
             "Market created"
             if market.status == STATUS_ACTIVE
-            else "Market submitted — pending admin approval"
+            else "Market submitted • pending admin approval"
         ),
     )
 
@@ -547,8 +642,10 @@ async def get_related(slug: str, db: AsyncSession = Depends(get_db_replica)):
         raise NotFoundError(f"Market '{slug}' not found")
 
     related = await db.execute(
-        select(Market, LiquidityPool)
-        .outerjoin(LiquidityPool, Market.id == LiquidityPool.market_id)
+        # Market only - the old outerjoin to LiquidityPool fanned a parimutuel
+        # market out into one row per outcome, so "related" could return the same
+        # market several times and starve out genuine matches.
+        select(Market)
         .where(
             Market.id != market.id,
             (Market.category == market.category)
@@ -557,11 +654,16 @@ async def get_related(slug: str, db: AsyncSession = Depends(get_db_replica)):
         .order_by(Market.total_volume.desc())
         .limit(5)
     )
-    rows = related.all()
+    rows = [m for m in related.scalars().all()]
+    prices = await MarketService.get_market_prices_batch(
+        [str(m.id) for m in rows], db=db
+    )
     return success_response(
         [
-            market_to_response(m, *MarketService.compute_prices(p)).model_dump()
-            for m, p in rows
+            market_to_response(
+                m, *prices.get(str(m.id), (Decimal("0.5"), Decimal("0.5")))
+            ).model_dump()
+            for m in rows
         ]
     )
 
@@ -580,7 +682,7 @@ async def resolve_market_endpoint(
     # Lock the market row: the settlement worker takes the same lock, and this
     # request enqueues that worker *before* it commits. Holding the row lock
     # across enqueue→commit means the worker can only read this request's
-    # writes after they land — so it can never race ahead and have its
+    # writes after they land • so it can never race ahead and have its
     # `status = "resolved"` clobbered by this transaction's later write.
     result = await db.execute(
         select(Market).where(Market.slug == slug).with_for_update()
@@ -593,7 +695,7 @@ async def resolve_market_endpoint(
         raise ValidationError("Market is already resolved")
 
     # Distributed lock: prevent two API pods from both resolving the same market.
-    # Uses Redis SETNX with TTL — lock is auto-released if this pod dies.
+    # Uses Redis SETNX with TTL • lock is auto-released if this pod dies.
     r = await get_redis()
     lock_key = f"resolve_api_lock:{market.id}"
     lock_acquired = await r.set(lock_key, str(user.id), nx=True, ex=300)
@@ -617,10 +719,10 @@ async def resolve_market_endpoint(
         task_dedup_key = f"resolve_enqueue:{market.id}"
         dedup_already_set = not await r.set(task_dedup_key, "1", nx=True, ex=3600)
         if dedup_already_set:
-            # Another request already enqueued the resolution task — do not double-resolve.
+            # Another request already enqueued the resolution task • do not double-resolve.
             raise ConflictError("Resolution task already enqueued")
 
-        # Enqueue settlement — guaranteed unique thanks to the dedup key check above.
+        # Enqueue settlement • guaranteed unique thanks to the dedup key check above.
         # Propagate X-Request-ID for tracing across service boundaries.
         try:
             request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
@@ -635,7 +737,7 @@ async def resolve_market_endpoint(
             logger.exception(f"Failed to enqueue settlement for market {market.id}")
             raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
 
-        # Mark as resolving (NOT resolved) — the worker flips to resolved after settlement.
+        # Mark as resolving (NOT resolved) • the worker flips to resolved after settlement.
         # Worker skips markets already in resolving/resolved, so this also guards double-settlement.
         market.status = "resolving"
         market.winning_outcome_id = outcome.id
@@ -655,7 +757,7 @@ async def resolve_market_endpoint(
         )
     finally:
         # Release the distributed lock; 300s TTL is a safety net if we crash
-        # before this runs (lock auto-expires and market stays "resolving" — safe).
+        # before this runs (lock auto-expires and market stays "resolving" • safe).
         await r.delete(lock_key)
 
 
@@ -674,7 +776,7 @@ async def claim_winnings(
     # "resolving" is claimable too: both callers that record a winning
     # outcome (POST /resolve and the dispute flow) set it in the same commit
     # that moves the market out of "active", and settlement may refuse to run
-    # if the escrow is short — refusing to settle must NOT lock a winner out of
+    # if the escrow is short • refusing to settle must NOT lock a winner out of
     # money they already won. Claiming here is safe against a concurrent
     # settle: both paths take Pool → Position → Wallet locks in that order and
     # both require settled_at IS NULL, so exactly one of them pays.
@@ -684,15 +786,39 @@ async def claim_winnings(
         raise ValidationError("Market has no winning outcome set")
 
     # Lock the pool escrow under the canonical order (Market → Pool →
-    # Position → Wallet) — settlement takes the same locks in this sequence,
+    # Position → Wallet) • settlement takes the same locks in this sequence,
     # so a claim racing the Celery settle serialises instead of deadlocking.
-    pool_result = await db.execute(
-        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-    )
-    pool = pool_result.scalar_one_or_none()
+    #
+    # Scoped to the WINNING outcome's pool, falling back to the market's single
+    # binary pool. A parimutuel market has one pool per outcome and no binary
+    # pool, so the old market_id-only lookup raised MultipleResultsFound here -
+    # and taking whichever pool came first would pay a winner out of a
+    # different outcome's escrow. A binary market does have winning_outcome_id
+    # set, but its pool is the NULL-outcome one, hence the fallback.
+    pool = None
+    if market.winning_outcome_id:
+        pool_result = await db.execute(
+            select(LiquidityPool)
+            .where(
+                LiquidityPool.market_id == market.id,
+                LiquidityPool.outcome_id == market.winning_outcome_id,
+            )
+            .with_for_update()
+        )
+        pool = pool_result.scalar_one_or_none()
+    if pool is None:
+        pool_result = await db.execute(
+            select(LiquidityPool)
+            .where(
+                LiquidityPool.market_id == market.id,
+                LiquidityPool.outcome_id.is_(None),
+            )
+            .with_for_update()
+        )
+        pool = pool_result.scalar_one_or_none()
 
     # Idempotency: check settled_at before any write. SETNX on the DB row is the
-    # authoritative guard — if two requests race here, only one wins.
+    # authoritative guard • if two requests race here, only one wins.
     pos_result = await db.execute(
         select(Position)
         .where(
@@ -722,16 +848,16 @@ async def claim_winnings(
     # The claim is *funded* from the pool escrow, not minted (single-entry
     # ledger). All-or-nothing: paying 10 of a 40-share claim would consume the
     # position (settled_at, shares_held = 0) for less than it is worth, so a
-    # shortfall refuses instead — the position stays claimable and an ops top-up
+    # shortfall refuses instead • the position stays claimable and an ops top-up
     # makes it succeed on retry.
     available = Decimal(str(pool.collateral or 0)) if pool is not None else Decimal(0)
     if payout > available:
-        # Nothing has been debited yet — compare, don't probe-and-mutate. A
+        # Nothing has been debited yet • compare, don't probe-and-mutate. A
         # partial claim would consume the position (settled_at, shares_held=0)
         # for less than it is worth, and the remainder would be owed to nobody:
         # the position is the record that the debt is still open, so it stays
         # exactly as it is and the claim can be retried once the escrow is
-        # funded. `pool is None` lands here too — the old `else payout` branch
+        # funded. `pool is None` lands here too • the old `else payout` branch
         # credited the wallet in full with no escrow behind it.
         logger.error(json.dumps({
             "event": "claim_escrow_shortfall",
@@ -743,13 +869,13 @@ async def claim_winnings(
             "pool_exists": pool is not None,
         }))
         raise ValidationError(
-            "This claim cannot be paid in full right now — the market escrow is "
+            "This claim cannot be paid in full right now • the market escrow is "
             "underfunded. Your position is untouched; try again later or "
             "contact support.",
             error_code="ESCROW_INSUFFICIENT",
         )
 
-    # Mark as settled atomically — prevents double-claim on client retry
+    # Mark as settled atomically • prevents double-claim on client retry
     winning_pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
     pool.debit_collateral(payout)   # strict: proved coverable, must not race away
     wallet.balance += payout

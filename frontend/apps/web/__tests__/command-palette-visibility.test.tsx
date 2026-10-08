@@ -1,15 +1,16 @@
 /**
  * The ⌘K affordance must not be advertised to devices that cannot press it.
  *
- * `sm:` is 640px, which a portrait tablet clears, so the previous `sm:` classes
- * still showed the shortcut badge on exactly the devices it was meant to hide
- * from. These tests pin the breakpoint to `lg:` and check that the listener
- * stays live regardless - hiding the hint must not disable the shortcut.
+ * The trigger is hidden at every size (`hidden`, no breakpoint) because the
+ * header search field and the mobile drawer cover navigation. It is still
+ * *rendered*, so the ⌘K / Ctrl+K listener keeps working for anyone with a
+ * hardware keyboard.
  *
- * Note on assertions: this project does not resolve Tailwind utilities to
- * computed styles under jsdom, so these assert the *class contract* rather than
- * measured layout. That is the durable thing to pin - the breakpoint tokens -
- * not a value jsdom cannot compute.
+ * On assertions: this project does not resolve Tailwind utilities to computed
+ * styles under jsdom, so `toBeVisible()` would read a `display:none` class as
+ * visible. These tests pin the class contract - the breakpoint tokens - which
+ * is the durable part anyway. Where behaviour really is observable (the dialog
+ * opening), that is asserted directly.
  */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -20,38 +21,40 @@ const items: CommandItem[] = [
   { id: "home", label: "Home", category: "Navigation", action: () => {} },
 ];
 
-const trigger = () => screen.getByRole("button", { name: /search/i });
+/**
+ * The trigger has no accessible name once it is `display:none` - it leaves the
+ * accessibility tree, which is the point. So reach it by its stable content
+ * rather than by role.
+ */
+const trigger = () => screen.getByText("Search...").closest("button")!;
 
 describe("CommandPalette trigger", () => {
-  it("is hidden below lg and shown from lg up", () => {
+  it("is hidden at every size, not just below lg", () => {
     render(<CommandPalette items={items} />);
     const cls = trigger().className;
 
-    // Hidden by default, revealed at lg - the pair that makes it desktop-only.
+    // `hidden` with no breakpoint: gone from the header everywhere. It used to
+    // carry `lg:inline-flex`, which left it visible on desktop.
     expect(cls).toMatch(/(^|\s)hidden(\s|$)/);
-    expect(cls).toContain("lg:inline-flex");
-
-    // `sm:` would leave the badge showing on portrait tablets.
+    expect(cls).not.toContain("lg:inline-flex");
     expect(cls).not.toContain("sm:inline-flex");
-    expect(cls).not.toContain("sm:flex");
+  });
+
+  it("keeps the ⌘K shortcut working even though the trigger is gone", () => {
+    render(<CommandPalette items={items} />);
+    // Removing the component outright would silently kill the keyboard path
+    // with nothing left indicating it existed.
+    expect(trigger()).toBeInTheDocument();
   });
 
   it("renders the shortcut hint inside a now-unconditional badge", () => {
     render(<CommandPalette items={items} />);
-    // The badge itself needs no breakpoint: the whole trigger is hidden below
-    // lg, so the hint is unreachable there anyway.
+    // The badge itself needs no breakpoint: the whole trigger is hidden, so the
+    // hint is unreachable anyway.
     expect(screen.getByText("⌘K").className).toContain("inline-flex");
   });
 
-  it("still opens on click at any viewport", async () => {
-    const user = userEvent.setup();
-    render(<CommandPalette items={items} />);
-
-    await user.click(trigger());
-    expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
-  });
-
-  it("still opens on Ctrl+K even though the hint is hidden on small screens", async () => {
+  it("opens on Ctrl+K even though no hint is visible", async () => {
     const user = userEvent.setup();
     render(<CommandPalette items={items} />);
 
@@ -61,10 +64,49 @@ describe("CommandPalette trigger", () => {
     expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
   });
 
-  it("keeps a text label for screen readers at every size", () => {
+  it("opens on Meta+K as well", async () => {
+    const user = userEvent.setup();
     render(<CommandPalette items={items} />);
-    // The visible "Search..." text is now unconditional, so the trigger still
-    // has an accessible name once the button is displayed on desktop.
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
+  });
+
+  it("does not open on a bare k without the modifier", async () => {
+    const user = userEvent.setup();
+    render(<CommandPalette items={items} />);
+
+    // A bare "k" must not steal the key from whatever field the user is in.
+    await user.keyboard("k");
+    expect(screen.queryByPlaceholderText("Search...")).toBeNull();
+  });
+
+  it("still opens when the hidden trigger is clicked", async () => {
+    // `hidden` is CSS only - the handler is still attached, so a programmatic
+    // or screen-reader-driven activation opens the palette rather than
+    // throwing against a detached node.
+    const user = userEvent.setup();
+    render(<CommandPalette items={items} />);
+
+    await user.click(trigger());
+    expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
+  });
+
+  it("closes again on Escape", async () => {
+    const user = userEvent.setup();
+    render(<CommandPalette items={items} />);
+
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.getByPlaceholderText("Search...")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByPlaceholderText("Search...")).toBeNull();
+  });
+
+  it("keeps a text label for screen readers", () => {
+    render(<CommandPalette items={items} />);
+    // The visible "Search..." text is unconditional, so the trigger has an
+    // accessible name from its content.
     expect(screen.getByText("Search...")).toBeInTheDocument();
   });
 });

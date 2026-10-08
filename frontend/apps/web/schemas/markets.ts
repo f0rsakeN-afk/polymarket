@@ -16,7 +16,13 @@ export const listMarketsSchema = z.object({
 export const outcomeResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
-  outcome_index: z.number().int().min(0).max(1),
+  // Not capped at 1: a parimutuel market has one outcome per option, so an
+  // eight-way market has indices 0..7. The old `.max(1)` would reject those
+  // payloads outright.
+  outcome_index: z.number().int().min(0),
+  // This outcome's own price. Optional because an older cached response may
+  // omit it, but present on every market the API returns today.
+  price: z.number().nullable().optional(),
 })
 
 export const marketResponseSchema = z.object({
@@ -81,7 +87,8 @@ export const orderBookSchema = z.object({
 
 export const marketOutcomeCreateSchema = z.object({
   name: z.string().min(1).max(100),
-  outcome_index: z.number().int().min(0).max(1),
+  // Same as above: creating a market with more than two outcomes.
+  outcome_index: z.number().int().min(0),
 })
 
 export const createMarketRequestSchema = z.object({

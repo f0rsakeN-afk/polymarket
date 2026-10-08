@@ -9,9 +9,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, select, text
 
 from app.amm.engine import BinaryAMM
+from app.api.exceptions import ValidationError
 from app.config import settings
 from app.database import async_session
 from app.deps import hash_password
@@ -32,7 +33,9 @@ from app.models import (
 )
 from app.models.liquidity import EscrowShortfallError
 from app.services.liquidity_service import LiquidityService
+from app.services.market_service import MarketService
 from app.services.matching_engine import MatchingEngine
+from app.services.order_service import OrderService
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("PredictX")
@@ -213,19 +216,19 @@ def check_limit_order_execution(self):
                             await db.rollback()
                             continue
 
-                        pool_result = await db.execute(
-                            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+                        outcomes_result = await db.execute(
+                            select(Outcome)
+                            .where(Outcome.market_id == market.id)
+                            .order_by(Outcome.outcome_index)
                         )
-                        pool = pool_result.scalar_one_or_none()
-                        if not pool:
-                            continue
+                        all_outcomes = list(outcomes_result.scalars().all())
+                        parimutuel = MarketService.is_parimutuel(all_outcomes)
 
-                        # Outcome count decides whether an AMM leg is even
-                        # meaningful for this market (see amm_side below).
-                        count_result = await db.execute(
-                            select(func.count()).select_from(Outcome).where(Outcome.market_id == market.id)
-                        )
-                        market_outcome_count = int(count_result.scalar_one())
+                        # The pool and AMM are resolved PER ORDER below, keyed on
+                        # the order's outcome. A market-level lookup used to be
+                        # safe because market_id was UNIQUE; with per-outcome rows
+                        # it raises MultipleResultsFound, and picking one pool
+                        # would fill orders in other outcomes against it.
 
                         for order in market_orders:
                             # Re-lock the individual order row
@@ -253,13 +256,35 @@ def check_limit_order_execution(self):
                             if not outcome:
                                 continue
 
-                            # Resolve the AMM side explicitly. The engine selects its
-                            # reserve with a literal `outcome == "yes"`, so passing
-                            # a raw name routed every outcome that was not "yes"
-                            # into the NO reserve. None for 3+ outcome markets.
-                            amm_side: str | None = None
-                            if market_outcome_count <= 2:
-                                amm_side = "yes" if outcome.name.lower() == "yes" else "no"
+                            try:
+                                pool = await OrderService._resolve_pool(
+                                    db, market, outcome, parimutuel, lock=True
+                                )
+                            except ValidationError:
+                                continue
+
+                            # Resolve the AMM side explicitly. The engine selects
+                            # its reserve with a literal `outcome == "yes"`, so
+                            # passing a raw name routed every outcome that was
+                            # not "yes" into the NO reserve.
+                            amm_side: str | None = "yes"
+                            outcome_amm = None
+                            market_total = None
+                            if parimutuel:
+                                # Built over ALL outcome pools so `total` is the
+                                # market total and the complement is correct.
+                                outcome_amm, market_total = (
+                                    MarketService.build_outcome_amm(
+                                        await MarketService.load_outcome_pools(
+                                            db, market.id
+                                        ),
+                                        outcome.id,
+                                    )
+                                )
+                            else:
+                                amm_side = (
+                                    "yes" if outcome.name.lower() == "yes" else "no"
+                                )
 
                             order_side = re_locked_order.side
                             order_amount = re_locked_order.remaining_amount
@@ -275,13 +300,11 @@ def check_limit_order_execution(self):
                             amm_fee = Decimal(0)
                             sell_proceeds_amm = Decimal(0)
 
-                            # Same rule as OrderService.execute_order: a market with
-                            # 3+ outcomes has no AMM leg, because one binary book
-                            # cannot price mutually exclusive outcomes. A resting
-                            # order there is serviced by the book alone - it must
-                            # not be filled against the NO reserve.
+                            # An AMM leg exists for every market now that a parimutuel one is
+                            # priced from its own outcome pools. Decided by whether
+                            # the AMM above could be built, not by outcome count.
                             if remaining > 0 and amm_side is not None:
-                                 amm = BinaryAMM(
+                                 amm = outcome_amm or BinaryAMM(
                                      yes_shares=pool.yes_shares,
                                      no_shares=pool.no_shares,
                                      fee_rate=pool.fee_rate,
@@ -395,7 +418,12 @@ def check_limit_order_execution(self):
                                  pool.protocol_fees += protocol_fee
 
                                  pool.yes_shares = amm.yes_shares
-                                 pool.no_shares = amm.no_shares
+                                 if not parimutuel:
+                                     # Binary only. On a parimutuel outcome
+                                     # no_shares is a derived complement, not
+                                     # stored state, so writing it back would
+                                     # put a real number where there is none.
+                                     pool.no_shares = amm.no_shares
 
                                  re_locked_order.remaining_amount -= remaining
                                  if re_locked_order.remaining_amount <= 0:
@@ -436,13 +464,37 @@ def check_limit_order_execution(self):
                             await db.commit()
 
                             if re_locked_order.status == "filled":
-                                total = pool.yes_shares + pool.no_shares
-                                yes_price = float(pool.yes_shares / total) if total > 0 else 0.5
-                                no_price = float(pool.no_shares / total) if total > 0 else 0.5
+                                if parimutuel:
+                                    # A binary yes/no pair says nothing about any
+                                    # outcome, so publish a real price per
+                                    # outcome taken from the pools. Without it
+                                    # the front end has nothing to draw the extra
+                                    # chart lines from and they sit frozen.
+                                    outcome_prices = MarketService.outcome_prices(
+                                        await MarketService.load_outcome_pools(
+                                            db, market.id
+                                        )
+                                    )
+                                    by_id = {
+                                        str(o.id): o.name for o in all_outcomes
+                                    }
+                                    yes_price = float(
+                                        outcome_prices.get(str(outcome.id), 0)
+                                    )
+                                    no_price = 1 - yes_price
+                                else:
+                                    total = pool.yes_shares + pool.no_shares
+                                    yes_price = float(pool.yes_shares / total) if total > 0 else 0.5
+                                    no_price = float(pool.no_shares / total) if total > 0 else 0.5
                                 try:
                                     from app.websocket.manager import redis_pubsub
                                     await redis_pubsub.publish_price_update(
-                                        str(market.id), yes_price, no_price, float(market.total_volume)
+                                        str(market.id), yes_price, no_price,
+                                        float(market.total_volume),
+                                        outcome_prices=(
+                                            {by_id[k]: float(v) for k, v in outcome_prices.items() if k in by_id}
+                                            if parimutuel else None
+                                        ),
                                     )
                                     check_price_alerts.delay(str(market.id), yes_price, no_price)
                                     await redis_pubsub.publish_order_fill(str(re_locked_order.user_id), {
@@ -543,31 +595,63 @@ def sync_amm_prices(self):
     result = None
     try:
         async def _run():
-            from app.models import LiquidityPool, Market
+            from app.models import Market
             from app.redis import get_redis
             from app.websocket.manager import redis_pubsub
 
             async with get_session() as db:
+                # Markets only, not a Market x Pool join. A parimutuel market
+                # has one pool per outcome, so the join fanned a single market
+                # out into N rows and each pass wrote the same cache key.
                 result = await db.execute(
-                    select(Market, LiquidityPool).join(
-                        LiquidityPool, Market.id == LiquidityPool.market_id
-                    ).where(Market.status == "active")
+                    select(Market).where(Market.status == "active")
                 )
-                rows = result.all()
+                markets = list(result.scalars().all())
+                # (market, yes_price, no_price, per-outcome prices or None)
+                priced = []
+                for market in markets:
+                    pool = await MarketService.load_binary_pool(db, market.id)
+                    if pool is not None:
+                        total = pool.yes_shares + pool.no_shares
+                        if total > 0:
+                            priced.append(
+                                (market, float(pool.yes_shares / total),
+                                 float(pool.no_shares / total), None)
+                            )
+                        else:
+                            priced.append((market, 0.5, 0.5, None))
+                        continue
 
-            if not rows:
+                    # Parimutuel: the cached yes/no pair becomes the leading
+                    # outcome versus the rest, and the real per-outcome prices
+                    # are stored alongside so the chart can draw every line.
+                    per_outcome = MarketService.outcome_prices(
+                        await MarketService.load_outcome_pools(db, market.id)
+                    )
+                    if not per_outcome:
+                        priced.append((market, 0.5, 0.5, None))
+                        continue
+                    lead = max(per_outcome.values())
+                    names = {
+                        str(o.id): o.name
+                        for o in (
+                            await db.execute(
+                                select(Outcome).where(Outcome.market_id == market.id)
+                            )
+                        ).scalars().all()
+                    }
+                    priced.append((
+                        market, float(lead), float(Decimal(1) - lead),
+                        {names[k]: float(v) for k, v in per_outcome.items() if k in names},
+                    ))
+
+            if not priced:
                 return "No active markets"
 
             r = await get_redis()
             pipe = r.pipeline()
 
-            for market, pool in rows:
-                total = pool.yes_shares + pool.no_shares
-                if total > 0:
-                    yes_price = float(pool.yes_shares / total)
-                    no_price = float(pool.no_shares / total)
-                else:
-                    yes_price, no_price = 0.5, 0.5
+            for market, yes_price, no_price, outcome_prices in priced:
 
                 key = f"market:{market.id}:price"
                 # Check if prices actually changed before updating.
@@ -588,10 +672,12 @@ def sync_amm_prices(self):
                 # Only push WS updates when prices actually changed.
                 if price_changed:
                     await redis_pubsub.publish_price_update(
-                        str(market.id), yes_price, no_price, float(market.total_volume))
+                        str(market.id), yes_price, no_price,
+                        float(market.total_volume),
+                        outcome_prices=outcome_prices)
 
             await pipe.execute()
-            return f"Synced prices for {len(rows)} markets"
+            return f"Synced prices for {len(markets)} markets"
 
         result = celery_run(_run())
     finally:
@@ -623,17 +709,17 @@ def snapshot_price_history(self):
     try:
         async def _run():
             async with get_session() as db:
+                # Markets only: the old Market x Pool join fanned a parimutuel
+                # market out into one row per outcome, snapshotting it N times.
                 result = await db.execute(
-                    select(Market, LiquidityPool).join(
-                        LiquidityPool, Market.id == LiquidityPool.market_id
-                    ).where(Market.status == "active")
+                    select(Market).where(Market.status == "active")
                 )
-                rows = result.all()
+                markets = list(result.scalars().all())
 
-                if not rows:
+                if not markets:
                     return "No active markets"
 
-                market_ids = [r[0].id for r in rows]
+                market_ids = [m.id for m in markets]
                 outcomes_result = await db.execute(
                     select(Outcome).where(Outcome.market_id.in_(market_ids))
                 )
@@ -655,41 +741,52 @@ def snapshot_price_history(self):
                 existing_pairs = {(r[0], r[1]) for r in existing_result.scalars().all()}
 
                 snapshots = []
-                for market, pool in rows:
-                    total = pool.yes_shares + pool.no_shares
-                    yes_price = pool.yes_shares / total if total > 0 else Decimal("0.5")
-                    no_price = pool.no_shares / total if total > 0 else Decimal("0.5")
-
+                for market in markets:
                     market_outcomes = outcomes_by_market.get(market.id, [])
-                    if len(market_outcomes) == 2:
-                        for outcome in market_outcomes:
-                            if (market.id, outcome.id) in existing_pairs:
-                                continue  # Skip duplicate snapshot
-                            price = yes_price if outcome.name.lower() == "yes" else no_price
-                            snapshots.append(PriceHistory(
-                                market_id=market.id,
-                                outcome_id=outcome.id,
-                                price=price,
-                                total_volume=market.total_volume,
-                                snapshot_at=now,
-                            ))
+                    if not market_outcomes:
+                        continue
+
+                    binary = await MarketService.load_binary_pool(db, market.id)
+                    if binary is not None:
+                        total = binary.yes_shares + binary.no_shares
+                        yes_price = binary.yes_shares / total if total > 0 else Decimal("0.5")
+                        no_price = binary.no_shares / total if total > 0 else Decimal("0.5")
+                        prices = {
+                            str(o.id): (
+                                yes_price if o.name.lower() == "yes" else no_price
+                            )
+                            for o in market_outcomes
+                        }
                     else:
-                        uniform_price = Decimal(1) / Decimal(str(len(market_outcomes))) if market_outcomes else Decimal("0.5")
-                        for o in market_outcomes:
-                            if (market.id, o.id) in existing_pairs:
-                                continue
-                            snapshots.append(PriceHistory(
-                                market_id=market.id,
-                                outcome_id=o.id,
-                                price=uniform_price,
-                                total_volume=market.total_volume,
-                                snapshot_at=now,
-                            ))
+                        # Parimutuel: each outcome's real share of the market
+                        # total. This used to write a flat 1/N for every outcome,
+                        # which drew N identical overlapping lines and made the
+                        # chart look frozen.
+                        prices = MarketService.outcome_prices(
+                            await MarketService.load_outcome_pools(db, market.id)
+                        )
+                        if not prices:
+                            even = Decimal(1) / Decimal(str(len(market_outcomes)))
+                            prices = {str(o.id): even for o in market_outcomes}
+
+                    for o in market_outcomes:
+                        if (market.id, o.id) in existing_pairs:
+                            continue  # Skip duplicate snapshot
+                        price = prices.get(str(o.id))
+                        if price is None:
+                            continue
+                        snapshots.append(PriceHistory(
+                            market_id=market.id,
+                            outcome_id=o.id,
+                            price=price,
+                            total_volume=market.total_volume,
+                            snapshot_at=now,
+                        ))
 
                 if snapshots:
                     db.add_all(snapshots)
                     await db.commit()
-                return f"Snapshotted {len(snapshots)} price records for {len(rows)} markets"
+                return f"Snapshotted {len(snapshots)} price records for {len(markets)} markets"
 
         result = celery_run(_run())
     finally:
@@ -794,10 +891,31 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
             }))
             return f"Market {market_id} outcome mismatch • stale settlement task dropped"
 
+        # Scoped to the WINNING outcome's pool, falling back to the market's single
+        # binary pool. A parimutuel market has one pool per outcome, so the old
+        # market_id-only lookup raised MultipleResultsFound - and paying winners
+        # out of whichever pool came first would move one outcome's escrow to
+        # cover another's payout. A binary market also has winning_outcome_id
+        # set but stores its reserve in the NULL-outcome pool.
         pool_result = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+            select(LiquidityPool)
+            .where(
+                LiquidityPool.market_id == market.id,
+                LiquidityPool.outcome_id == winning_outcome_id,
+            )
+            .with_for_update()
         )
         pool = pool_result.scalar_one_or_none()
+        if pool is None:
+            pool_result = await db.execute(
+                select(LiquidityPool)
+                .where(
+                    LiquidityPool.market_id == market.id,
+                    LiquidityPool.outcome_id.is_(None),
+                )
+                .with_for_update()
+            )
+            pool = pool_result.scalar_one_or_none()
 
         # Get or create system treasury user with row lock to prevent concurrent creation.
         # System users use a cryptographically random password_hash derived from

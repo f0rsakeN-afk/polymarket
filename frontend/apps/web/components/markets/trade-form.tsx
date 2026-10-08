@@ -154,7 +154,14 @@ function TradeForm({
   const { data: currentUser } = useCurrentUser()
   const { data: wallet } = useWallet()
 
-  const isMultiOutcome = outcomes && outcomes.length > 2
+  // Parimutuel = no real YES/NO pair, decided by outcome NAME. Counting
+  // outcomes would treat a two-way named market as binary and preselect
+  // "yes" • an outcome that market does not have.
+  const isMultiOutcome = useMemo(() => {
+    if (!outcomes || outcomes.length === 0) return false
+    const names = outcomes.map((o) => o.name.toLowerCase())
+    return !(names.includes("yes") && names.includes("no"))
+  }, [outcomes])
   const [outcome, setOutcome] = useState<string>(
     isMultiOutcome ? (outcomes?.[0]?.name?.toLowerCase() ?? "yes") : "yes"
   )

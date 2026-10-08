@@ -51,7 +51,7 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
 
       {/* Combined asks + bids rows */}
       <div className="flex flex-col gap-0.5">
-        {/* Asks (sell orders) — lowest ask at bottom, shown right side */}
+        {/* Asks (sell orders) • lowest ask at bottom, shown right side */}
         {[...asks].reverse().map((ask, i) => (
           <div key={`ask-${i}`} className="relative h-5 overflow-hidden rounded-[3px]">
             <div
@@ -78,7 +78,7 @@ const OutcomeOrderbook = memo(function OutcomeOrderbook({
           </span>
         </div>
 
-        {/* Bids (buy orders) — highest bid at top */}
+        {/* Bids (buy orders) • highest bid at top */}
         {bids.map((bid, i) => (
           <div key={`bid-${i}`} className="relative h-5 overflow-hidden rounded-[3px]">
             <div
@@ -122,6 +122,16 @@ const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
     [outcomeNames, outcomes]
   )
 
+  // Two-column grid for binary markets, single column for parimutuel ones.
+  // Name-based, not count-based: "Trump vs Biden" has two outcomes but no
+  // YES/NO pair, so it is parimutuel and needs the single-column layout.
+  //
+  // Declared above the early returns so it is not a conditional hook.
+  const isBinary = useMemo(() => {
+    const names = outcomeNames.map((n) => n.toLowerCase())
+    return names.includes("yes") && names.includes("no")
+  }, [outcomeNames])
+
   if (isLoading) {
     return (
       <div role="status" className="flex h-48 items-center justify-center">
@@ -138,9 +148,6 @@ const OrderBook = memo(function OrderBook({ slug }: { slug: string }) {
       </div>
     )
   }
-
-  // Two-column grid for binary markets, single column for multi-outcome
-  const isBinary = outcomeNames.length === 2
 
   return (
     <section aria-label="Order book" className="space-y-4">

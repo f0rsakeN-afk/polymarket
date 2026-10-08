@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.amm.engine import BinaryAMM
@@ -34,6 +34,7 @@ from app.services.cache_service import (
     cache_invalidate_orderbook,
     cache_set_orderbook,
 )
+from app.services.market_service import MarketService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 
@@ -155,6 +156,47 @@ class OrderService:
         return prices
 
     @staticmethod
+    async def _resolve_pool(
+        db: AsyncSession,
+        market: Market,
+        outcome: Outcome,
+        parimutuel: bool,
+        lock: bool = False,
+    ) -> LiquidityPool:
+        """The pool row an order on `outcome` mutates.
+
+        A market_id-only lookup used to be safe because market_id was UNIQUE.
+        With per-outcome rows it matches several and raises
+        MultipleResultsFound, so the lookup is explicit:
+
+          parimutuel -> this outcome's own pool (outcome_id = outcome.id)
+          binary      -> the single pool with outcome_id IS NULL
+
+        `lock=True` takes row locks for the order path, where the shares are
+        about to be mutated.
+        """
+        stmt = select(LiquidityPool).where(
+            LiquidityPool.market_id == market.id,
+            LiquidityPool.outcome_id == outcome.id
+            if parimutuel
+            else LiquidityPool.outcome_id.is_(None),
+        )
+        if lock:
+            stmt = stmt.with_for_update()
+
+        pool = (await db.execute(stmt)).scalar_one_or_none()
+        if pool is None:
+            if parimutuel:
+                raise ValidationError(
+                    f"No liquidity pool for outcome '{outcome.name}'",
+                    error_code="MARKET_NO_LIQUIDITY",
+                )
+            raise ValidationError(
+                "Market has no liquidity", error_code="MARKET_NO_LIQUIDITY"
+            )
+        return pool
+
+    @staticmethod
     async def compute_quote(
         db: AsyncSession,
         user_id: str,
@@ -182,35 +224,33 @@ class OrderService:
         if not outcome:
             raise ValidationError(f"Invalid outcome '{outcome_name}'", error_code="INVALID_OUTCOME")
 
-        pool_result = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id)
+        all_outcomes_q = await db.execute(
+            select(Outcome)
+            .where(Outcome.market_id == market.id)
+            .order_by(Outcome.outcome_index)
         )
-        pool = pool_result.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
+        outcomes_q = list(all_outcomes_q.scalars().all())
+        parimutuel = MarketService.is_parimutuel(outcomes_q)
 
-        amm = BinaryAMM(
-            yes_shares=pool.yes_shares,
-            no_shares=pool.no_shares,
-            fee_rate=pool.fee_rate,
-        )
+        # Pool resolution matches execute_order: a parimutuel market has no
+        # NULL-outcome pool at all, so looking only for one would report "no
+        # liquidity" on a market that has plenty - one pool per outcome.
+        pool = await OrderService._resolve_pool(db, market, outcome, parimutuel)
 
-        # Same rule as execute_order: the AMM can only price a market with two
-        # outcomes. With three or more, every outcome that is not literally "yes"
-        # would quote off the NO reserve - and this quote is what the trade form
-        # shows the user, so a wrong side here is a wrong price on screen.
-        outcome_count_result = await db.execute(
-            select(func.count()).select_from(Outcome).where(Outcome.market_id == market.id)
-        )
-        outcome_count = int(outcome_count_result.scalar_one())
-        if outcome_count > 2:
-            raise ValidationError(
-                f"'{outcome_name}' is priced by the order book; this market has "
-                f"{outcome_count} outcomes and no AMM reserve to quote against.",
-                error_code="AMM_NOT_AVAILABLE",
+        if parimutuel:
+            # Built over ALL outcome pools so `total` is the market total and the
+            # complement is correct.
+            amm, _ = MarketService.build_outcome_amm(
+                await MarketService.load_outcome_pools(db, market.id), outcome.id
             )
-
-        amm_side = "yes" if outcome_name.lower() == "yes" else "no"
+            amm_side = "yes"
+        else:
+            amm = BinaryAMM(
+                yes_shares=pool.yes_shares,
+                no_shares=pool.no_shares,
+                fee_rate=pool.fee_rate,
+            )
+            amm_side = "yes" if outcome_name.lower() == "yes" else "no"
 
         price_before = float(amm.price(amm_side))
 
@@ -284,12 +324,10 @@ class OrderService:
         if not outcome:
             raise ValidationError(f"Invalid outcome '{data.outcome}'")
 
-        pool = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+        # Pool resolution, scoped by outcome. See OrderService._resolve_pool.
+        pool = await OrderService._resolve_pool(
+            db, market, outcome, MarketService.is_parimutuel(all_outcomes), lock=True
         )
-        pool = pool.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
 
         wallet = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -374,27 +412,33 @@ class OrderService:
             fee_rate=pool.fee_rate,
         )
 
-        # ── Which AMM side, if any ──
+        # ── Which AMM, and for which side ──
         #
-        # A market's outcomes are mutually exclusive, but the pool is a single
-        # binary book with one YES reserve and one NO reserve. For a 2-outcome
-        # market that maps cleanly. It does NOT map for 3+ outcomes: the engine
-        # picks its reserve with `outcome == "yes"`, so every outcome that was
-        # not literally the string "yes" fell into the NO reserve and was filled
-        # at the wrong price - "No" and "Draw" shared one reserve and therefore
-        # quoted the same price.
+        # Binary markets: one pool, and the outcome picks the YES or NO reserve.
         #
-        # Rather than misprice those orders, multi-outcome markets are priced by
-        # the order book alone: the book is already per-outcome and is already
-        # broadcast live. `amm_side` stays None for them, which routes the
-        # unfilled remainder into the resting-order path below instead of an AMM
-        # fill at a price that means nothing.
-        is_multi_outcome = len(all_outcomes) > 2
-        amm_side: str | None = None
-        if not is_multi_outcome:
+        # Parimutuel markets (no real Yes/No outcome pair - which includes
+        # two-way NAMED markets like "Trump vs Biden", not just 3+ ones): each
+        # outcome owns a pool whose yes_shares is that outcome's share count.
+        # The AMM is constructed per outcome with its own reserve and the market
+        # total, so it is always traded on the YES side - there is no second
+        # reserve to fall into. Previously the outcome NAME was passed in and the
+        # engine's `outcome == "yes"` test silently sent every other outcome to
+        # the NO reserve.
+        is_parimutuel = MarketService.is_parimutuel(all_outcomes)
+        outcome_pools: list = []
+        if is_parimutuel:
+            outcome_pools = await MarketService.load_outcome_pools(db, market.id)
+            # Rebuild the AMM over ALL outcome pools so `total` is the market
+            # total, not this outcome's book - that is what makes the complement
+            # correct and the prices sum to 1.
+            amm, _market_total = MarketService.build_outcome_amm(
+                outcome_pools, outcome.id
+            )
+            amm_side = "yes"
+        else:
             amm_side = "yes" if data.outcome.lower() == "yes" else "no"
 
-        price_before = amm.price(amm_side) if amm_side else Decimal(0)
+        price_before = amm.price(amm_side)
         limit_price = data.price if isinstance(data.price, Decimal) else (Decimal(str(data.price)) if data.price is not None else None)
 
         matched_shares, matched_usdc, match_details = await MatchingEngine.match_order_against_book(
@@ -623,6 +667,10 @@ class OrderService:
             pool.protocol_fees += protocol_fee
 
             pool.yes_shares = amm.yes_shares
+            # no_shares is derived for a parimutuel outcome (the complement of
+            # the market total), so writing it back is harmless for binary and
+            # keeps the binary pair consistent. The authoritative field for a
+            # parimutuel outcome is yes_shares.
             pool.no_shares = amm.no_shares
 
         total_shares = matched_shares + amm_shares
@@ -818,18 +866,22 @@ class OrderService:
 
         try:
             yes_price, no_price = OrderService._get_market_prices(pool)
-            # For 3+ outcome markets the binary book cannot express a per-outcome
-            # price, so attach the book-derived mids. Without them the front end
-            # has no value to draw a per-outcome line from and the chart's extra
-            # outcomes sit frozen at their seed price while binary markets track
-            # live. All outcomes are priced, not just the traded one, so every
+            # For a parimutuel market the single binary yes/no pair says nothing
+            # about any outcome, so attach a real price per outcome taken from
+            # the outcome pools. Without it the front end has no value to draw a
+            # per-outcome line from and every outcome except the first sits
+            # frozen. ALL outcomes are priced, not just the traded one, so every
             # line moves on every frame.
             outcome_prices: dict[str, float] | None = None
-            if is_multi_outcome:
-                book = await build_orderbook(db, str(market.id))
-                outcome_prices = OrderService.outcome_prices_from_book(
-                    book, all_outcomes
+            if is_parimutuel:
+                by_id = MarketService.outcome_prices(
+                    await MarketService.load_outcome_pools(db, market.id)
                 )
+                outcome_prices = {
+                    o.name: float(by_id.get(str(o.id), Decimal(0)))
+                    for o in all_outcomes
+                    if str(o.id) in by_id
+                }
             await redis_pubsub.publish_price_update(
                 str(market.id),
                 yes_price,

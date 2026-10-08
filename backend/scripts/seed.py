@@ -1,5 +1,5 @@
 """
-Seed script for Polymarket.
+Seed script for PredictX.
 Run with: python -m scripts.seed
 """
 import asyncio
@@ -92,6 +92,19 @@ DISPUTE_EVIDENCE = [
     "Official announcement from the organization confirms.",
 ]
 
+def _outcome_weights(n: int) -> list[float]:
+    """Share weights for a parimutuel market's outcomes.
+
+    Normalised to sum to 1, because price_i = shares_i / SUM(shares) and the
+    outcome prices must total 1. Shaped like a plausible favourite/long-tail
+    distribution - an even split makes every line overlap, and a purely random
+    one produces a favourite below 0.2 which reads as noise.
+    """
+    raw = [1.0 / (i + 1) ** 1.4 for i in range(n)]
+    total = sum(raw)
+    return [r / total for r in raw]
+
+
 FAQ_QUESTIONS = [
     ("What does this market resolve to?", "This market will resolve based on the outcome of the event described in the question."),
     ("How is the winner determined?", "The market resolves based on credible public sources."),
@@ -135,11 +148,18 @@ async def seed():
             result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
             wallet = result.scalar_one_or_none()
             if not wallet:
+                # Two independent randints could produce locked > balance, which
+                # ck_wallets_locked_lte_balance correctly rejects - and it did,
+                # intermittently, because both draws came from overlapping ranges.
+                # Deriving locked from balance makes the invariant hold by
+                # construction instead of by luck.
+                balance = Decimal(str(randint(5000, 100000)))
+                locked = balance * Decimal(str(round(uniform(0, 0.4), 4)))
                 wallet = Wallet(
                     id=uuid.uuid4(),
                     user_id=user.id,
-                    balance=Decimal(str(randint(5000, 100000))),
-                    locked_balance=Decimal(str(randint(0, 5000))),
+                    balance=balance,
+                    locked_balance=locked,
                     currency="USDC",
                 )
                 db.add(wallet)
@@ -197,55 +217,114 @@ async def seed():
                 await db.flush()
 
                 # Create outcomes
-                if market_data.get("multi_outcome"):
-                    for idx, outcome_name in enumerate(market_data["outcomes"]):
-                        outcome = Outcome(
-                            id=uuid.uuid4(),
-                            market_id=market.id,
-                            name=outcome_name,
-                            outcome_index=idx,
-                        )
-                        db.add(outcome)
-                else:
-                    for idx, name in enumerate(["Yes", "No"]):
-                        outcome = Outcome(
-                            id=uuid.uuid4(),
-                            market_id=market.id,
-                            name=name,
-                            outcome_index=idx,
-                        )
-                        db.add(outcome)
-
-                await db.flush()
-
-                # Create liquidity pool
-                yes_price = market_data["yes_price"]
-                no_price = 1 - yes_price
-                total_liquidity = market_data["liquidity"]
-
-                pool = LiquidityPool(
-                    id=uuid.uuid4(),
-                    market_id=market.id,
-                    yes_shares=Decimal(str(total_liquidity * no_price)),
-                    no_shares=Decimal(str(total_liquidity * yes_price)),
-                    collateral=Decimal(str(total_liquidity)),
-                    fee_rate=Decimal("0.02"),
-                    lp_token_supply=Decimal(str(total_liquidity)),
-                    protocol_fees=Decimal(str(round(total_liquidity * uniform(0.005, 0.02), 8))),
+                #
+                # `multi_outcome` here means "no YES/NO pair" - which covers a
+                # two-way named market as well as an eight-way one. Decided by
+                # shape, not by count, matching MarketService.is_parimutuel.
+                outcome_names = (
+                    list(market_data["outcomes"])
+                    if market_data.get("multi_outcome")
+                    else ["Yes", "No"]
                 )
-                db.add(pool)
+                outcome_rows = []
+                for idx, name in enumerate(outcome_names):
+                    outcome = Outcome(
+                        id=uuid.uuid4(),
+                        market_id=market.id,
+                        name=name,
+                        outcome_index=idx,
+                    )
+                    db.add(outcome)
+                    outcome_rows.append(outcome)
+
                 await db.flush()
 
-                # Create LP shares for this pool
-                for user in users[:5]:
-                    lp_share = LPShare(
+                total_liquidity = Decimal(str(market_data["liquidity"]))
+
+                if outcome_names == ["Yes", "No"]:
+                    # Binary: one pool, yes/no reserves summing to total_liquidity.
+                    # shares are inverted against the price so that
+                    # yes_shares/total == yes_price.
+                    yes_price = Decimal(str(market_data["yes_price"]))
+                    pool = LiquidityPool(
                         id=uuid.uuid4(),
-                        pool_id=pool.id,
-                        user_id=user.id,
-                        lp_tokens=Decimal(str(uniform(100, 10000))),
-                        collateral_deposited=Decimal(str(uniform(50, 5000))),
+                        market_id=market.id,
+                        outcome_id=None,
+                        yes_shares=Decimal(str(total_liquidity * (1 - yes_price))),
+                        no_shares=Decimal(str(total_liquidity * yes_price)),
+                        collateral=total_liquidity,
+                        fee_rate=Decimal("0.02"),
+                        lp_token_supply=total_liquidity,
+                        protocol_fees=Decimal(
+                            str(
+                                round(
+                                    total_liquidity
+                                    * Decimal(str(uniform(0.005, 0.02))),
+                                    8,
+                                )
+                            )
+                        ),
                     )
-                    db.add(lp_share)
+                    db.add(pool)
+                    await db.flush()
+                else:
+                    # Parimutuel: one pool PER OUTCOME, no binary pool. Shares are
+                    # distributed so price_i = shares_i / SUM(shares), i.e. the
+                    # outcome prices sum to 1.
+                    #
+                    # The old seed wrote a single binary pool here with
+                    # yes_price/no_price derived from the market-level price - so
+                    # an eight-way market reported "Yes 75 / No 25", which are
+                    # not any of its outcomes.
+                    weights = _outcome_weights(len(outcome_rows))
+                    for outcome, weight in zip(outcome_rows, weights):
+                        shares = Decimal(str(total_liquidity * Decimal(str(weight))))
+                        db.add(
+                            LiquidityPool(
+                                id=uuid.uuid4(),
+                                market_id=market.id,
+                                outcome_id=outcome.id,
+                                yes_shares=shares,
+                                no_shares=Decimal(0),
+                                collateral=Decimal(str(total_liquidity / len(outcome_rows))),
+                                fee_rate=Decimal("0.02"),
+                                lp_token_supply=Decimal(str(total_liquidity / len(outcome_rows))),
+                                protocol_fees=Decimal(
+                                    str(
+                                        round(
+                                            (total_liquidity / len(outcome_rows))
+                                            * Decimal(str(uniform(0.005, 0.02))),
+                                            8,
+                                        )
+                                    )
+                                ),
+                            )
+                        )
+                    await db.flush()
+
+                # Create LP shares, spread across whichever pools this market has.
+                # A parimutuel market has one pool per outcome and no single
+                # `pool` variable, so this must iterate the rows.
+                market_pools = list(
+                    (
+                        await db.execute(
+                            select(LiquidityPool).where(
+                                LiquidityPool.market_id == market.id
+                            )
+                        )
+                    ).scalars().all()
+                )
+                for target_pool in market_pools:
+                    for user in users[:5]:
+                        db.add(
+                            LPShare(
+                                id=uuid.uuid4(),
+                                pool_id=target_pool.id,
+                                user_id=user.id,
+                                lp_tokens=Decimal(str(uniform(100, 10000))),
+                                collateral_deposited=Decimal(str(uniform(50, 5000))),
+                            )
+                        )
 
                 # Create FAQs
                 for idx, (question, answer) in enumerate(FAQ_QUESTIONS):
@@ -265,9 +344,14 @@ async def seed():
         # Create LP shares for existing pools (that don't have LP shares yet)
         print("Creating LP shares...")
         for market in markets:
-            result = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id == market.id))
-            pool = result.scalar_one_or_none()
-            if pool:
+            # Every pool for this market: a parimutuel market has one per
+            # outcome and no binary pool, so `scalar_one_or_none()` would raise
+            # MultipleResultsFound.
+            result = await db.execute(
+                select(LiquidityPool).where(LiquidityPool.market_id == market.id)
+            )
+            market_pools = result.scalars().all()
+            for pool in market_pools:
                 result = await db.execute(select(LPShare).where(LPShare.pool_id == pool.id))
                 existing_shares = result.scalars().all()
                 if len(existing_shares) < 5:
@@ -287,6 +371,7 @@ async def seed():
                             db.add(lp_share)
 
         await db.flush()
+        await db.commit()
 
         # Create refresh tokens and sessions
         print("Creating auth tokens...")
@@ -448,15 +533,32 @@ async def seed():
             if not wallet:
                 continue
 
-            wallet_balance = Decimal(0)
+            # Start from the wallet's EXISTING balance, not zero. Starting at zero and
+            # then assigning `wallet.balance = wallet_balance` overwrote the
+            # seeded balance with just this loop's net delta, which could land
+            # near zero while `locked_balance` kept its seeded value -
+            # violating ck_wallets_locked_lte_balance.
+            wallet_balance = Decimal(wallet.balance)
 
             for _ in range(randint(5, 20)):
-                tx_type = choice(["deposit", "trade_buy", "trade_sell", "liquidity_add", "liquidity_remove", "settlement_win"])
-                if tx_type == "deposit":
+                is_deposit = choice(
+                    ["deposit", "trade_buy", "trade_sell", "liquidity_add", "liquidity_remove", "settlement_win"]
+                ) == "deposit"
+                # A debit can only be recorded against funds the wallet holds.
+                # Picking one before any deposit drove the balance negative and
+                # violated ck_wallets_balance_nonneg - the constraint was right to
+                # reject it, so the generator is what needed fixing.
+                if is_deposit or wallet_balance <= 0:
+                    tx_type = "deposit"
                     amount = Decimal(str(uniform(100, 10000)))
                     wallet_balance += amount
                 else:
+                    tx_type = choice(
+                        ["trade_buy", "trade_sell", "liquidity_add", "liquidity_remove", "settlement_win"]
+                    )
                     amount = Decimal(str(uniform(10, 5000)))
+                    # Clamp so the closing balance can never go negative.
+                    amount = min(amount, wallet_balance)
                     wallet_balance -= amount
 
                 tx = Transaction(
@@ -476,6 +578,12 @@ async def seed():
 
             # Update wallet balance
             wallet.balance = wallet_balance
+            # Clamp the seeded escrow against the closing balance. Debits above
+            # can take the balance below the locked figure, and
+            # ck_wallets_locked_lte_balance rejects that.
+            wallet.locked_balance = min(
+                Decimal(wallet.locked_balance), wallet_balance
+            )
 
         await db.flush()
 
@@ -515,7 +623,7 @@ async def seed():
                     id=uuid.uuid4(),
                     user_id=user.id,
                     type=choice(["order_fill", "market_resolution", "dispute_new", "price_alert"]),
-                    title=f"Notification from {choice(['Polymarket', 'System', 'Market Resolver'])}",
+                    title=f"Notification from {choice(['PredictX', 'System', 'Market Resolver'])}",
                     body=f"This is a sample notification about {choice(['your order being filled', 'a market you follow', 'a new dispute', 'price movement'])}.",
                     data={"market_id": str(choice(markets).id) if markets else None},
                     read_at=choice([None, now - timedelta(days=randint(0, 7))]),

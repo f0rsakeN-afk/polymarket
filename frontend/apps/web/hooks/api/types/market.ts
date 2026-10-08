@@ -12,7 +12,7 @@ export interface MarketResponse {
   closes_at: string
   winning_outcome_id: string | null
   winning_outcome_name: string | null
-  /** null for markets that only have the default YES/NO pair — see MarketDetailResponse */
+  /** null for markets that only have the default YES/NO pair • see MarketDetailResponse */
   outcomes: Outcome[] | null
 }
 
@@ -28,6 +28,8 @@ export interface Outcome {
   id: string
   name: string
   outcome_index: number
+  /** This outcome's own price; null when the API did not price it. */
+  price?: number | null
 }
 
 export interface FAQ {

@@ -12,8 +12,9 @@ from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
 from app.schemas.liquidity import AddLiquidityRequest, RemoveLiquidityRequest
 from app.services.liquidity_service import LiquidityService
+from app.services.market_service import MarketService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/markets", tags=["liquidity"])
 
 
@@ -25,7 +26,9 @@ async def add_liquidity(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    result = await LiquidityService.add_liquidity(db, user, market_id, Decimal(str(data.amount)))
+    result = await LiquidityService.add_liquidity(
+        db, user, market_id, Decimal(str(data.amount)), outcome_name=data.outcome
+    )
     return success_response(result, message="Liquidity added")
 
 
@@ -37,7 +40,9 @@ async def remove_liquidity(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    result = await LiquidityService.remove_liquidity(db, user, market_id, Decimal(str(data.lp_tokens)))
+    result = await LiquidityService.remove_liquidity(
+        db, user, market_id, Decimal(str(data.lp_tokens)), outcome_name=data.outcome
+    )
     return success_response(result, message="Liquidity removed")
 
 
@@ -53,10 +58,13 @@ async def get_lp_position(
         from app.api.exceptions import NotFoundError
         raise NotFoundError("Market not found")
 
-    pool = await db.execute(select(LiquidityPool).where(LiquidityPool.market_id == market.id))
-    pool = pool.scalar_one_or_none()
+    # A user's LP stake can span several pools on a parimutuel market - one per
+    # outcome - so the stake is summed across all of them. The old
+    # market_id-only lookup raised MultipleResultsFound there, and taking one
+    # pool would under-report a stake spread across the market.
+    pools = await MarketService.load_all_pools(db, market.id)
 
-    if not pool:
+    if not pools:
         return success_response({
             "lp_tokens": "0.0",
             "collateral_deposited": "0.0",
@@ -66,25 +74,33 @@ async def get_lp_position(
         })
 
     lp_result = await db.execute(
-        select(LPShare).where(LPShare.pool_id == pool.id, LPShare.user_id == user.id)
+        select(LPShare).where(
+            LPShare.pool_id.in_([p.id for p in pools]),
+            LPShare.user_id == user.id,
+        )
     )
-    lp_share = lp_result.scalar_one_or_none()
+    lp_shares = list(lp_result.scalars().all())
 
-    if not lp_share:
+    def _pooled(attr: str) -> Decimal:
+        return sum((getattr(p, attr) for p in pools), Decimal(0))
+
+    if not lp_shares:
         return success_response({
             "lp_tokens": "0.0",
             "collateral_deposited": "0.0",
-            "pool_lp_token_supply": str(float(pool.lp_token_supply)) if pool else "0.0",
-            "pool_yes_shares": str(float(pool.yes_shares)) if pool else "0.0",
-            "pool_no_shares": str(float(pool.no_shares)) if pool else "0.0",
+            "pool_lp_token_supply": str(_pooled("lp_token_supply")),
+            "pool_yes_shares": str(_pooled("yes_shares")),
+            "pool_no_shares": str(_pooled("no_shares")),
         })
 
     return success_response({
-        "lp_tokens": str(lp_share.lp_tokens),
-        "collateral_deposited": str(lp_share.collateral_deposited),
-        "pool_lp_token_supply": str(pool.lp_token_supply),
-        "pool_yes_shares": str(pool.yes_shares),
-        "pool_no_shares": str(pool.no_shares),
+        "lp_tokens": str(sum((s.lp_tokens for s in lp_shares), Decimal(0))),
+        "collateral_deposited": str(
+            sum((s.collateral_deposited for s in lp_shares), Decimal(0))
+        ),
+        "pool_lp_token_supply": str(_pooled("lp_token_supply")),
+        "pool_yes_shares": str(_pooled("yes_shares")),
+        "pool_no_shares": str(_pooled("no_shares")),
     })
 
 
