@@ -19,7 +19,7 @@ class Position(Base, UUIDMixin, TimestampMixin):
         Index("ix_positions_user_id", "user_id"),
         Index("ix_positions_created_at", "created_at"),
         Index("ix_positions_user_market_outcome", "user_id", "market_id", "outcome_id"),
-        # shares_held >= 0 enforced at DB level — no application trust
+        # shares_held >= 0 enforced at DB level • no application trust
         CheckConstraint("shares_held >= 0", name="ck_positions_shares_held_non_negative"),
     )
 

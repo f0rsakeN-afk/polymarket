@@ -1,7 +1,7 @@
-# Data Model — Every Table, Constraint and Index
+# Data Model • Every Table, Constraint and Index
 
 The complete relational schema: **24 tables**, what each one is for, what the database actually
-enforces, and — importantly — where the declared model and the provisioned schema **disagree**.
+enforces, and • importantly • where the declared model and the provisioned schema **disagree**.
 
 > Written from `backend/app/models/*.py` and `backend/migrations/versions/*.py`. Where the two
 > disagree, this document says so explicitly rather than describing the intent.
@@ -10,16 +10,16 @@ enforces, and — importantly — where the declared model and the provisioned s
 
 ## 0. How to read this
 
-- **§1–2** — the conventions every table follows. Read once.
-- **§3** — the entity-relationship map. One screen, the whole system.
-- **§4** — the table reference, grouped by domain.
-- **§5** — how money is modelled (`Numeric` scales, escrow discipline, signed amounts).
-- **§6** — **what the database enforces vs what only the application enforces.** The most
+- **§1–2** • the conventions every table follows. Read once.
+- **§3** • the entity-relationship map. One screen, the whole system.
+- **§4** • the table reference, grouped by domain.
+- **§5** • how money is modelled (`Numeric` scales, escrow discipline, signed amounts).
+- **§6** • **what the database enforces vs what only the application enforces.** The most
   defensible section in this document.
-- **§7–8** — the constraint and index catalogue, with the reason each one exists.
-- **§9** — migrations, and a verified drift between models and migrations.
-- **§10** — engine, pooling and session management.
-- **§11** — the honest gaps, stated before you're asked.
+- **§7–8** • the constraint and index catalogue, with the reason each one exists.
+- **§9** • migrations, and a verified drift between models and migrations.
+- **§10** • engine, pooling and session management.
+- **§11** • the honest gaps, stated before you're asked.
 
 ---
 
@@ -35,10 +35,10 @@ class User(Base, UUIDMixin, TimestampMixin):
 ```
 
 **There is no `Mapped[]` / `mapped_column` anywhere in `app/models/`.** The Python type is inferred
-by SQLAlchemy from the SQL type. If you claim "fully typed models", you are wrong — say
+by SQLAlchemy from the SQL type. If you claim "fully typed models", you are wrong • say
 "SQLAlchemy 2.0 `DeclarativeBase` with the imperative `Column()` style".
 
-Note the mixin order is `class X(Base, UUIDMixin, TimestampMixin)` — base class first, mixins after.
+Note the mixin order is `class X(Base, UUIDMixin, TimestampMixin)` • base class first, mixins after.
 
 ### 1.2 The two mixins (`app/models/base.py`)
 
@@ -62,7 +62,7 @@ Three consequences worth knowing out loud:
    id fails.
 3. **20 of 24 tables carry `TimestampMixin`.** The four that do **not** are `refresh_tokens`,
    `sessions` (it declares its own `created_at` plus `last_active_at`), `trades` and
-   `price_history` — because `executed_at` / `snapshot_at` are the meaningful times for those.
+   `price_history` • because `executed_at` / `snapshot_at` are the meaningful times for those.
 
 ### 1.3 Two facts that surprise people
 
@@ -88,7 +88,7 @@ Four tables have **unnamed** constraints: `orders` (3 CHECKs + 1 unique), `lp_sh
 
 Every relationship uses the SQLAlchemy default `lazy="select"` (lazy load on attribute access).
 There are **no** `lazy="selectin"`, `lazy="joined"`, `secondary` tables, or `backref`s anywhere.
-`overlaps="…"` appears twice — `user.py:41` and `user.py:59` — purely to silence a SQLAlchemy warning
+`overlaps="…"` appears twice • `user.py:41` and `user.py:59` • purely to silence a SQLAlchemy warning
 on the self-referential session/token relationship.
 
 **Practical consequence:** touching a relationship attribute outside an explicit `selectinload()`
@@ -122,7 +122,7 @@ emits a query. That is exactly why list endpoints batch their enrichment (`posit
      │  └────────────1:N──► orders / positions / trades
 
   treasury (singleton) ──1:N──► treasury_logs
-  auth_audit_events  (user_id ON DELETE SET NULL — survives user deletion)
+  auth_audit_events  (user_id ON DELETE SET NULL • survives user deletion)
 ```
 
 ---
@@ -131,37 +131,37 @@ emits a query. That is exactly why list endpoints batch their enrichment (`posit
 
 ### 3.1 Identity & sessions
 
-#### `users` — `app/models/user.py:10-27`
+#### `users` • `app/models/user.py:10-27`
 `UUIDMixin + TimestampMixin`. No FKs, no `__table_args__`.
 
 | Column | Type | Null | Default | Extra |
 |---|---|---|---|---|
 | `id` | `UUID` | PK | `uuid4` | |
-| `email` | `String(255)` | no | — | `unique=True, index=True` |
-| `username` | `String(100)` | no | — | `index=True` |
-| `password_hash` | `String(255)` | no | — | |
+| `email` | `String(255)` | no | • | `unique=True, index=True` |
+| `username` | `String(100)` | no | • | `index=True` |
+| `password_hash` | `String(255)` | no | • | |
 | `is_email_verified` | `Boolean` | no | `False` | |
 | `is_active` | `Boolean` | no | `True` | |
 | `is_admin` | `Boolean` | no | `False` | |
 | `is_system` | `Boolean` | no | `False` | system/treasury account (`user.py:19`) |
-| `referral_code` | `String(32)` | **yes** | — | `unique=True` |
-| `totp_secret_encrypted` | `String(255)` | yes | — | Fernet ciphertext |
+| `referral_code` | `String(32)` | **yes** | • | `unique=True` |
+| `totp_secret_encrypted` | `String(255)` | yes | • | Fernet ciphertext |
 | `is_2fa_enabled` | `Boolean` | no | `False` | |
 | `is_2fa_pending` | `Boolean` | no | `False` | setup started, not confirmed |
 
 Relationships: `comments`, `referrals_made` (`foreign_keys="Referral.referrer_id"`),
 `referrals_received` (`foreign_keys="Referral.referred_id"`).
 
-#### `refresh_tokens` — `user.py:30-41` (no `TimestampMixin`)
+#### `refresh_tokens` • `user.py:30-41` (no `TimestampMixin`)
 | Column | Type | Null | Extra |
 |---|---|---|---|
 | `user_id` | `UUID` | no | FK → `users.id` `ON DELETE CASCADE` |
-| `token_hash` | `String(255)` | no | `unique=True` — only the hash is stored |
+| `token_hash` | `String(255)` | no | `unique=True` • only the hash is stored |
 | `expires_at` | `DateTime(tz)` | no | |
 | `revoked` | `Boolean` | no | `index=True`, default `False` |
 | `device_info` | `Text` | yes | |
 
-#### `sessions` — `user.py:44-59` (no `TimestampMixin`)
+#### `sessions` • `user.py:44-59` (no `TimestampMixin`)
 | Column | Type | Null | Extra |
 |---|---|---|---|
 | `user_id` | `UUID` | no | FK CASCADE, `index=True` |
@@ -177,7 +177,7 @@ The **one-to-one** `sessions ↔ refresh_tokens` is expressed as `RefreshToken.c
 
 ### 3.2 Markets & outcomes
 
-#### `markets` — `app/models/market.py:45-109`
+#### `markets` • `app/models/market.py:45-109`
 
 **`status` is the field to talk about.** Seven module-level string constants, not an enum
 (`market.py:24-30`):
@@ -199,22 +199,22 @@ Columns (22):
 
 | Column | Type | Null | Default | Extra |
 |---|---|---|---|---|
-| `slug` | `String(255)` | no | — | `unique=True, index=True` |
-| `question` | `String(1000)` | no | — | **GIN expression index** (§8) |
-| `description` | `String(5000)` | yes | — | |
-| `category` / `subcategory` | `String(100)` | yes | — | `category` indexed |
-| `image_url` | `String(500)` | yes | — | |
-| `created_by` | `UUID` | yes | — | **no FK** |
+| `slug` | `String(255)` | no | • | `unique=True, index=True` |
+| `question` | `String(1000)` | no | • | **GIN expression index** (§8) |
+| `description` | `String(5000)` | yes | • | |
+| `category` / `subcategory` | `String(100)` | yes | • | `category` indexed |
+| `image_url` | `String(500)` | yes | • | |
+| `created_by` | `UUID` | yes | • | **no FK** |
 | `status` | `String(20)` | no | `"active"` | `index=True` |
-| `resolved_at` | `DateTime(tz)` | yes | — | |
-| `resolution_criteria` | `String(2000)` | yes | — | |
-| `resolution_source` | `String(1000)` | yes | — | |
-| `winning_outcome_id` | `UUID` | yes | — | **no FK** — see §10 (gap 2) |
-| `proposed_outcome_id` | `UUID` | yes | — | **no FK** |
-| `dispute_deadline` | `DateTime(tz)` | yes | — | set to now + 48h |
-| `resolution_proposed_at` | `DateTime(tz)` | yes | — | |
+| `resolved_at` | `DateTime(tz)` | yes | • | |
+| `resolution_criteria` | `String(2000)` | yes | • | |
+| `resolution_source` | `String(1000)` | yes | • | |
+| `winning_outcome_id` | `UUID` | yes | • | **no FK** • see §10 (gap 2) |
+| `proposed_outcome_id` | `UUID` | yes | • | **no FK** |
+| `dispute_deadline` | `DateTime(tz)` | yes | • | set to now + 48h |
+| `resolution_proposed_at` | `DateTime(tz)` | yes | • | |
 | `opens_at` | `DateTime(tz)` | no | `now(UTC)` | |
-| `closes_at` | `DateTime(tz)` | no | — | |
+| `closes_at` | `DateTime(tz)` | no | • | |
 | `total_liquidity` | `Numeric(20,8)` | no | `0` | |
 | `total_volume` | `Numeric(20,8)` | no | `0` | |
 | `num_trades` | `Integer` | no | `0` | |
@@ -228,14 +228,14 @@ Index("ix_markets_question_fts", func.to_tsvector(literal_column("'english'"), q
       postgresql_using="gin"),
 ```
 
-**Why that FTS index is shaped that way** — the code comments explain it, and it is good viva
+**Why that FTS index is shaped that way** • the code comments explain it, and it is good viva
 material: PostgreSQL has no default GIN opclass for `varchar`/`text`, so a plain GIN index on
 `question` cannot be created. The index must be on the **exact expression** the query uses
 (`plainto_tsquery('english', q) @@ to_tsvector('english', question)`), and `'english'` is wrapped in
 `literal_column` so it renders as a literal the planner can match rather than a bind parameter.
 
-#### `outcomes` — `market.py:112-127`
-`__table_args__` is declared *before* the columns here — legal, because it references columns by
+#### `outcomes` • `market.py:112-127`
+`__table_args__` is declared *before* the columns here • legal, because it references columns by
 string name.
 ```python
 CheckConstraint("outcome_index >= 0"),                              # unnamed
@@ -252,22 +252,22 @@ Columns: `market_id` (FK CASCADE), `name` `String(100)`, `outcome_index` `Intege
 
 | Table | File | Purpose | Notable |
 |---|---|---|---|
-| `market_faqs` | `faq.py:8-16` | Per-market Q&A shown on the detail page | `question`/`answer` `Text`, `display_order` `Integer` nullable. **No index on `market_id`** — the only FK and the only access path. |
-| `market_flags` | `flag.py:8-19` | A user reporting a market | `reason` `Text`, `status` `String(20)` default `"open"`, `index=True`. **No uniqueness on `(market_id, user_id)`** — dedup is app-level (`api/flags.py:31-36`). |
+| `market_faqs` | `faq.py:8-16` | Per-market Q&A shown on the detail page | `question`/`answer` `Text`, `display_order` `Integer` nullable. **No index on `market_id`** • the only FK and the only access path. |
+| `market_flags` | `flag.py:8-19` | A user reporting a market | `reason` `Text`, `status` `String(20)` default `"open"`, `index=True`. **No uniqueness on `(market_id, user_id)`** • dedup is app-level (`api/flags.py:31-36`). |
 | `disputes` | `dispute.py:8-18` | A challenge to a proposed resolution | `evidence` `Text`, `evidence_url` `String(1000)`, `status` default `"open"`, `index=True`. **No uniqueness on `(market_id, user_id)`.** |
 | `price_history` | `price_history.py:9-21` | Chart time-series | `price` `Numeric(10,6)`, `total_volume` `Numeric(20,8)` nullable, `snapshot_at` `DateTime(tz)`. **No relationships declared at all.** |
 
 ### 3.3 Trading
 
-#### `liquidity_pools` — `app/models/liquidity.py:32-102`
+#### `liquidity_pools` • `app/models/liquidity.py:32-102`
 One pool per market (`market_id` is `unique=True`).
 
 | Column | Type | Default | Meaning |
 |---|---|---|---|
-| `market_id` | `UUID` | — | FK CASCADE, `unique=True` → 1:1 |
+| `market_id` | `UUID` | • | FK CASCADE, `unique=True` → 1:1 |
 | `yes_shares` | `Numeric(20,8)` | `0` | share reserve |
 | `no_shares` | `Numeric(20,8)` | `0` | share reserve |
-| `collateral` | `Numeric(20,8)` | `0` | **USDC escrow — the single source of truth for payout capacity** |
+| `collateral` | `Numeric(20,8)` | `0` | **USDC escrow • the single source of truth for payout capacity** |
 | `fee_rate` | `Numeric(5,4)` | `0.02` | LP fee |
 | `lp_token_supply` | `Numeric(20,8)` | `0` | LP shares outstanding |
 | `protocol_fees` | `Numeric(20,8)` | `0` | **a sub-ledger inside `collateral`, not extra money** |
@@ -281,28 +281,28 @@ def credit_collateral(self, amount):        # liquidity.py:61-71
 def debit_collateral(self, amount):         # liquidity.py:73-97
     if amount <= 0: return Decimal(0)       # zero is a no-op, not an error
     if amount > self.collateral:
-        raise EscrowShortfallError(f"pool {self.id}: collateral shortfall — "
+        raise EscrowShortfallError(f"pool {self.id}: collateral shortfall • "
                                    f"owe {amount}, hold {available}")
     self.collateral -= amount
 
-def can_cover(self, amount): ...            # liquidity.py:99-102 — read-only probe
+def can_cover(self, amount): ...            # liquidity.py:99-102 • read-only probe
 ```
 
 `EscrowShortfallError(RuntimeError)` (`liquidity.py:10-22`) is raised deliberately rather than
 absorbed: **there is no "pay what you can" mode.** A partially-paid obligation would stay
 claimable forever with nobody tracking it.
 
-Note also `pool.protocol_fees` — moving a fee out requires zeroing the claim *and* debiting the
+Note also `pool.protocol_fees` • moving a fee out requires zeroing the claim *and* debiting the
 backing dollars, in that order.
 
-#### `lp_shares` — `liquidity.py:105-115`
+#### `lp_shares` • `liquidity.py:105-115`
 `pool_id` + `user_id` (both FK CASCADE, **no indexes**), `lp_tokens` `Numeric(20,8)`,
-`collateral_deposited` `Numeric(20,8)`. `UniqueConstraint("pool_id", "user_id")` (unnamed) — one LP
+`collateral_deposited` `Numeric(20,8)`. `UniqueConstraint("pool_id", "user_id")` (unnamed) • one LP
 row per user per pool.
 
-#### `orders` — `app/models/order.py:17-63`
+#### `orders` • `app/models/order.py:17-63`
 
-`__table_args__` — **three CHECKs, one unique, seven composite indexes**:
+`__table_args__` • **three CHECKs, one unique, seven composite indexes**:
 ```python
 CheckConstraint("amount > 0"), CheckConstraint("price >= 0"), CheckConstraint("price <= 1"),
 UniqueConstraint("user_id", "client_order_id", name="uq_orders_user_client_order"),
@@ -328,12 +328,12 @@ Index("ix_orders_market_outcome_price",      "market_id", "outcome_id", "price")
 | `shares_bought` / `shares_sold` / `fees_paid` | `Numeric(20,8)` | yes | |
 | `slippage` | `Numeric(10,6)` | yes | |
 | `executed_at` | `DateTime(tz)` | yes | |
-| `client_order_id` | `String(100)` | yes | `index=True` — **the idempotency key** |
+| `client_order_id` | `String(100)` | yes | `index=True` • **the idempotency key** |
 
 `price <= 1` is the schema's structural statement that this is a prediction market: a share can
 never cost more than the $1 it settles at.
 
-#### `positions` — `app/models/position.py:15-38`
+#### `positions` • `app/models/position.py:15-38`
 ```python
 UniqueConstraint("user_id", "market_id", "outcome_id"),
 Index("ix_positions_user_id", "user_id"),
@@ -350,10 +350,10 @@ CheckConstraint("shares_held >= 0", name="ck_positions_shares_held_non_negative"
 > guard that stops `claim_winnings` paying twice. It is *not* exposed in `PositionResponse`, so a
 > client cannot tell a claimed position from a pending one.
 
-`ix_positions_user_id` is redundant — its column is the leading column of both the unique
+`ix_positions_user_id` is redundant • its column is the leading column of both the unique
 constraint's index and `ix_positions_user_market_outcome`.
 
-#### `trades` — `app/models/trade.py:10-27` (no `TimestampMixin`)
+#### `trades` • `app/models/trade.py:10-27` (no `TimestampMixin`)
 Indexes: `ix_trades_user_id`, `ix_trades_market_id`, `ix_trades_executed_at`,
 `ix_trades_user_executed (user_id, executed_at)`.
 
@@ -367,12 +367,12 @@ Indexes: `ix_trades_user_id`, `ix_trades_market_id`, `ix_trades_executed_at`,
 | `executed_at` | `DateTime(tz)` | default `now(UTC)` |
 
 `trade.py` declares **no `user` relationship** despite holding `user_id`. `executed_at` is not
-unique — which is precisely why the trade tape needs a `(executed_at, id)` keyset cursor
+unique • which is precisely why the trade tape needs a `(executed_at, id)` keyset cursor
 (`api/trades.py:36-45`).
 
 ### 3.4 Money
 
-#### `wallets` — `app/models/wallet.py:18-33`
+#### `wallets` • `app/models/wallet.py:18-33`
 ```python
 UniqueConstraint("user_id", "currency"),
 CheckConstraint("balance >= 0",        name="ck_wallets_balance_nonneg"),
@@ -384,13 +384,13 @@ unreachable but harmless.
 
 Two balances, and the distinction matters: `balance` is spendable; `locked_balance` is reserved
 money sitting inside `balance` for a resting limit order. Available = `balance - locked_balance`,
-and every buy path checks that expression rather than `balance` alone — otherwise locked funds
+and every buy path checks that expression rather than `balance` alone • otherwise locked funds
 would be spendable twice.
 
-> **All three CHECK constraints are absent from the migrations** — see §9.2. This is the single most
+> **All three CHECK constraints are absent from the migrations** • see §9.2. This is the single most
 > important honest gap in the data model.
 
-#### `transactions` — `wallet.py:36-78`
+#### `transactions` • `wallet.py:36-78`
 The append-only money ledger. Every balance change writes one row.
 
 | Column | Type | Note |
@@ -398,7 +398,7 @@ The append-only money ledger. Every balance change writes one row.
 | `user_id` / `wallet_id` | `UUID` | FK CASCADE; **no `user` relationship declared** |
 | `type` | `String(30)` | `deposit, withdrawal, trade_buy, trade_sell, fee, liquidity_add, liquidity_remove, settlement_win, settlement_loss, refund, split, merge` |
 | `amount` | `Numeric(20,8)` | **signed: positive = credit, negative = debit** |
-| `balance_after` | `Numeric(20,8)` | running balance snapshot — makes the ledger self-auditing |
+| `balance_after` | `Numeric(20,8)` | running balance snapshot • makes the ledger self-auditing |
 | `reference_id` | `String(255)` | the idempotency key |
 | `reference_type` | `String(50)` | `order`, `withdrawal`, `liquidity_pool` |
 | `status` | `String(20)` | `pending`, `completed`, `failed` |
@@ -417,11 +417,11 @@ Index("uq_transactions_deposit_ref", "reference_id", unique=True,
 One withdrawal per idempotency key (safe under a concurrent double-submit); one deposit per Stripe
 `payment_intent_id` (safe under webhook double-delivery). `NULL` reference ids are excluded by the
 predicate, so ordinary rows are unaffected. Despite the `uq_` prefix these are **indexes, not
-constraints** — worth saying so.
+constraints** • worth saying so.
 
 ### 3.5 Platform & social
 
-#### `comments` — `app/models/comment.py:8-38`
+#### `comments` • `app/models/comment.py:8-38`
 ```python
 Index("ix_comments_market_id", "market_id"),
 Index("ix_comments_parent_id", "parent_id"),
@@ -432,47 +432,47 @@ Columns: `market_id`, `user_id`, `parent_id` (self-FK CASCADE, nullable), `conte
 
 The thread is **soft-deleted** (`is_deleted`) so replies keep their parent. The self-referential
 `parent` / `replies` pair is assigned *after* the class body (`comment.py:27-38`) with
-`remote_side=Comment.__table__.c.id` — the standard way to disambiguate a one-to-many self-reference.
+`remote_side=Comment.__table__.c.id` • the standard way to disambiguate a one-to-many self-reference.
 
-`depth` exists to bound nesting (the API caps it at 3) but has **no CHECK constraint** — a raw
+`depth` exists to bound nesting (the API caps it at 3) but has **no CHECK constraint** • a raw
 insert can nest arbitrarily deep.
 
-#### `alerts` — `app/models/alert.py:17-34`
+#### `alerts` • `app/models/alert.py:17-34`
 Two **partial indexes** with the predicate `triggered = false`:
 ```python
 Index("ix_alerts_market_pending", "market_id", postgresql_where=text("triggered = false")),
 Index("ix_alerts_user_pending",  "user_id",     postgresql_where=text("triggered = false")),
 ```
-`outcome` `String(10)` nullable — `"yes"`, `"no"`, or **NULL meaning either**; `condition`
+`outcome` `String(10)` nullable • `"yes"`, `"no"`, or **NULL meaning either**; `condition`
 `String(10)` = `above`/`below`; `trigger_price` **`Numeric(10,8)`**; `triggered` default `False`;
 `triggered_at` nullable. No `Market.alerts` relationship exists.
 
-#### `notifications` / `notification_preferences` — `app/models/notification.py`
+#### `notifications` / `notification_preferences` • `app/models/notification.py`
 `notifications`: `user_id` (indexed), `type` `String(50)` (indexed), `title` `String(500)`,
-`body` `Text`, `data` `sqlalchemy.JSON` — **generic JSON, not JSONB**, unlike
+`body` `Text`, `data` `sqlalchemy.JSON` • **generic JSON, not JSONB**, unlike
 `transactions.extra_data`; `read_at` nullable (NULL = unread); `channel` `String(20)` default
 `"in_app"` (`in_app, email, push`).
 
-`notification_preferences`: `user_id` `unique=True`, and **eight nullable** boolean flags —
+`notification_preferences`: `user_id` `unique=True`, and **eight nullable** boolean flags •
 `email_alerts`, `email_order_fills`, `email_market_resolution`, `email_weekly_digest` (default
 `False`), `push_alerts`, `push_order_fills`, `push_market_resolution`. One row per user.
 
-#### `referrals` — `app/models/referral.py:10-21`
+#### `referrals` • `app/models/referral.py:10-21`
 **Two FKs to `users`**: `referrer_id` and `referred_id`, both CASCADE. `referral_code` `String(32)`
 indexed, `status` nullable default `"pending"`, `reward_amount` `Numeric(20,8)` nullable default
-`Decimal(0)` — the only model default that constructs an explicit `Decimal`.
+`Decimal(0)` • the only model default that constructs an explicit `Decimal`.
 
-**No uniqueness on `referred_id`** — one user being referred more than once is prevented in the
+**No uniqueness on `referred_id`** • one user being referred more than once is prevented in the
 application, not the database. The two `User` relationships disambiguate with
 `foreign_keys=[referrer_id]` / `foreign_keys=[referred_id]`.
 
 ### 3.6 Governance & money-ops
 
-#### `treasury` (singular table) — `app/models/treasury.py:16-29`
+#### `treasury` (singular table) • `app/models/treasury.py:16-29`
 `balance`, `total_fees_collected`, `total_fees_distributed` all `Numeric(20,8)` default `0`, plus
 a `singleton` `Boolean` default `True`.
 
-**The singleton is enforced by three constraints working together** — the only place a "value" is
+**The singleton is enforced by three constraints working together** • the only place a "value" is
 DB-enforced in this schema:
 ```python
 CheckConstraint("balance >= 0",        name="ck_treasury_balance_nonneg"),
@@ -484,24 +484,24 @@ holding it. Together the table is structurally **0-or-1 rows**. A second row is 
 violation; a row with `singleton = false` is a check violation.
 
 The code comment at `treasury.py:24-25` records a real hazard: *"`unique=True` here as well makes
-autogenerate emit a second, unnamed one"* — hence the named constraint in `__table_args__` only.
+autogenerate emit a second, unnamed one"* • hence the named constraint in `__table_args__` only.
 
 `treasury_logs`: `treasury_id` (FK CASCADE), `event` `String(50)` **indexed**
 (`fee_collected`, `distribution`), `amount` `Numeric(20,8)`, `reference_type`, `reference_id`.
 
-#### `auth_audit_events` — `app/models/audit.py:9-41`
+#### `auth_audit_events` • `app/models/audit.py:9-41`
 Docstring: *"Immutable audit log of authentication events. Used for forensics, anomaly detection,
 and compliance."*
 
 | Column | Type | Note |
 |---|---|---|
-| `user_id` | `UUID` | **FK `ON DELETE SET NULL`** — the only non-CASCADE FK in the schema |
-| `email` | `String(255)` | `index=True` — survives user deletion |
+| `user_id` | `UUID` | **FK `ON DELETE SET NULL`** • the only non-CASCADE FK in the schema |
+| `email` | `String(255)` | `index=True` • survives user deletion |
 | `ip_address` | `String(45)` | `index=True` |
 | `user_agent` | `Text` | |
 | `event` | `String(64)` | `index=True`, 15 values |
 | `metadata_` | `Text` → DB column **`metadata`** | attribute renamed to dodge SQLAlchemy's reserved word; holds a **JSON string** in a TEXT column |
-| `success` | `String(10)` | `"success"` / `"failure"` — a string, not a boolean, so partial states are representable |
+| `success` | `String(10)` | `"success"` / `"failure"` • a string, not a boolean, so partial states are representable |
 | `failure_reason` | `String(128)` | |
 
 `ON DELETE SET NULL` is the right call: a failed login on an unknown email has `user_id = NULL`, and
@@ -520,7 +520,7 @@ runtime enforcement, so both pass silently.
 
 ## 4. How money is modelled
 
-### 4.1 `Numeric` scale is not uniform — this trips people up
+### 4.1 `Numeric` scale is not uniform • this trips people up
 
 | Column | Type |
 |---|---|
@@ -537,7 +537,7 @@ one idea: **never create a claim you cannot pay.**
 
 1. **Credit only from a real source.** Splitting `$1` credits $1 and mints a YES/NO pair; a buy
    credits what the buyer paid.
-2. **`debit_collateral` is strict** — it raises `EscrowShortfallError` rather than partially paying.
+2. **`debit_collateral` is strict** • it raises `EscrowShortfallError` rather than partially paying.
 3. **Settlement pre-flights before touching a wallet** (`tasks.py:834-873`): compute
    `winner_total + protocol_fees`, and if that exceeds `collateral`, abort the *entire* settlement
    and leave every position claimable. It never pays a winner partially and stamps the rest settled.
@@ -561,7 +561,7 @@ model files claim.
 | Order price in 0–1, amount > 0 | ✅ **DB CHECK** | `orders` (`migrations:374-376`) |
 | Positions can't go negative | ✅ **DB CHECK** | `ck_positions_shares_held_non_negative` |
 | `outcome_index >= 0`, unique per market | ✅ **DB** | `outcomes` |
-| Wallet `balance >= 0` | ⚠️ **model only** — missing from migrations | `wallet.py:22` |
+| Wallet `balance >= 0` | ⚠️ **model only** • missing from migrations | `wallet.py:22` |
 | Wallet `locked_balance >= 0` | ⚠️ **model only** | `wallet.py:23` |
 | `locked_balance <= balance` | ⚠️ **model only** | `wallet.py:24` |
 | `markets.total_liquidity >= 0` | ⚠️ **model only** | `market.py:95` |
@@ -572,19 +572,19 @@ model files claim.
 | One order per `(user_id, client_order_id)` | ✅ **DB unique** | `orders` |
 | One LP row per `(pool_id, user_id)` | ✅ **DB unique** | `liquidity.py:107` |
 | One position per `(user, market, outcome)` | ✅ **DB unique** | `position.py:17` |
-| **Pool collateral never negative** | ❌ **application only** — `debit_collateral` | `liquidity.py:73-97` |
-| **Escrow always covers open claims** | ❌ **application only** — settlement pre-flight + nightly audit | `tasks.py:834-873`, `escrow_audit.py` |
-| **A position is claimed at most once** | ❌ **application only** — `settled_at IS NULL` re-check | `tasks.py:877-879` |
+| **Pool collateral never negative** | ❌ **application only** • `debit_collateral` | `liquidity.py:73-97` |
+| **Escrow always covers open claims** | ❌ **application only** • settlement pre-flight + nightly audit | `tasks.py:834-873`, `escrow_audit.py` |
+| **A position is claimed at most once** | ❌ **application only** • `settled_at IS NULL` re-check | `tasks.py:877-879` |
 | `markets.status` ∈ the 7 values | ❌ **application only**, by explicit design | `market.py:22-23` |
 | Every other enum-like `String` | ❌ **application only** | §1.3 |
-| Comment depth ≤ 3 | ❌ **application only** — `MAX_DEPTH` | `api/comments.py:20` |
+| Comment depth ≤ 3 | ❌ **application only** • `MAX_DEPTH` | `api/comments.py:20` |
 | One flag per `(user, market)` | ❌ **application only** | `api/flags.py:31-36` |
 | One referral per referred user | ❌ **application only** | `api/referrals.py` |
 | `updated_at` maintenance | ❌ **ORM-only** (`onupdate=`) | `base.py:16-17` |
 
 **The one-sentence answer:** *"The database enforces identity, uniqueness, ranges and idempotency
 keys; money conservation is enforced by the service layer, and the escrow arithmetic is
-re-verified by a nightly audit."* That is a defensible position — but you must know about the five
+re-verified by a nightly audit."* That is a defensible position • but you must know about the five
 missing CHECK constraints rather than claiming the DB prevents negative balances.
 
 ---
@@ -600,12 +600,12 @@ missing CHECK constraints rather than claiming the DB prevents negative balances
 | `outcome_index >= 0` | `outcomes` | unnamed |
 | `uq_outcome_market_index` | `outcomes` | `(market_id, outcome_index)` |
 | `ck_positions_shares_held_non_negative` | `positions` | `shares_held >= 0` |
-| — | `positions` | `(user_id, market_id, outcome_id)` unnamed |
+| • | `positions` | `(user_id, market_id, outcome_id)` unnamed |
 | `ck_wallets_balance_nonneg` ⚠️ | `wallets` | `balance >= 0` |
 | `ck_wallets_locked_nonneg` ⚠️ | `wallets` | `locked_balance >= 0` |
 | `ck_wallets_locked_lte_balance` ⚠️ | `wallets` | `locked_balance <= balance` |
-| — | `wallets` | `(user_id, currency)` unnamed |
-| — | `lp_shares` | `(pool_id, user_id)` unnamed |
+| • | `wallets` | `(user_id, currency)` unnamed |
+| • | `lp_shares` | `(pool_id, user_id)` unnamed |
 | `ck_markets_liquidity_nonneg` ⚠️ | `markets` | `total_liquidity >= 0` |
 | `ck_markets_volume_nonneg` ⚠️ | `markets` | `total_volume >= 0` |
 | `ck_treasury_balance_nonneg` | `treasury` | `balance >= 0` (name drifts, §9.3) |
@@ -616,12 +616,12 @@ missing CHECK constraints rather than claiming the DB prevents negative balances
 
 ---
 
-## 7. Index catalogue — and *why* each exists
+## 7. Index catalogue • and *why* each exists
 
 ### 7.1 The order-book index
 
 `ix_orders_market_outcome_side_price (market_id, outcome_id, side, price)` is the workhorse. The
-book query filters by market + outcome + side and orders by price — so a 4-column index whose
+book query filters by market + outcome + side and orders by price • so a 4-column index whose
 leading three columns are equality predicates and whose last is the sort key serves it without a
 sort. `ix_orders_market_outcome_price (market_id, outcome_id, price)` is the 3-column variant for
 queries that don't filter by side.
@@ -629,9 +629,9 @@ queries that don't filter by side.
 ### 7.2 The sweeper indexes
 
 Two support the 30-second background tasks:
-- `ix_orders_status_expires (status, expires_at)` — `expire_stale_orders` scans
+- `ix_orders_status_expires (status, expires_at)` • `expire_stale_orders` scans
   `status IN ('pending','partial') AND expires_at <= now()`.
-- `ix_orders_type_status_remaining (order_type, status, remaining_amount)` — `check_limit_order_execution`
+- `ix_orders_type_status_remaining (order_type, status, remaining_amount)` • `check_limit_order_execution`
   finds candidate resting orders.
 
 ### 7.3 Composite indexes matching real access patterns
@@ -641,7 +641,7 @@ Two support the 30-second background tasks:
 `ix_trades_user_executed`, `ix_transactions_user_created`, `ix_price_history_market_snapshot`,
 `ix_comments_market_parent` each mirror one specific query.
 
-### 7.4 Partial indexes — where "the interesting rows" is a predicate
+### 7.4 Partial indexes • where "the interesting rows" is a predicate
 
 - `alerts`: both indexes are `WHERE triggered = false`. The sweeper only ever wants un-triggered
   alerts, and once triggered a row is dead weight in the index.
@@ -649,18 +649,18 @@ Two support the 30-second background tasks:
 
 ### 7.5 Full-text search
 
-`ix_markets_question_fts` — GIN on `to_tsvector('english', question)`, backing
+`ix_markets_question_fts` • GIN on `to_tsvector('english', question)`, backing
 `plainto_tsquery('english', q) @@ to_tsvector('english', question)`. See §3.2 for why the index must
 carry the expression.
 
 ### 7.6 Analytics indexes on the audit log
 
 `ix_auth_audit_user_event (user_id, event)`, `ix_auth_audit_email_event (email, event)`,
-`ix_auth_audit_created_at (created_at)` — "under comment: Derived for analytics" (`audit.py:34`).
+`ix_auth_audit_created_at (created_at)` • "under comment: Derived for analytics" (`audit.py:34`).
 
 ---
 
-## 8. Migrations — and a verified drift
+## 8. Migrations • and a verified drift
 
 ### 8.1 The chain
 
@@ -680,7 +680,7 @@ carry the expression.
 
 `migrations/` is excluded from ruff entirely (`pyproject.toml:58`).
 
-### 8.2 Drift #1 — five CHECK constraints exist only in the models
+### 8.2 Drift #1 • five CHECK constraints exist only in the models
 
 This is verifiable in about thirty seconds:
 
@@ -700,21 +700,21 @@ The migrations contain only four CHECKs: `treasury.balance >= 0` (`763d787eabf1:
 balance, a negative `locked_balance`, `locked_balance > balance`, or negative market liquidity /
 volume. In a migrated database that safety is enforced by application code only.
 
-### 8.3 Drift #2 and #3 — smaller, but name them
+### 8.3 Drift #2 and #3 • smaller, but name them
 
 - **`ck_treasury_balance_nonneg` name mismatch.** The model names it; the migration declares
   `sa.CheckConstraint('balance >= 0')` unnamed (`763d787eabf1:30`), so PostgreSQL names it
-  `treasury_balance_check`. Same expression, different name — autogenerate would forever want to
+  `treasury_balance_check`. Same expression, different name • autogenerate would forever want to
   drop and recreate it.
 - **Leftover `server_default`.** `0ccfc38683a8:25` adds `transactions.confirmations` with
   `server_default='0'` and never removes it, while the *same file* explicitly adds **and then
   removes** `server_default='true'` on `treasury.singleton` (`:27,31`) to match the ORM. Because
   `migrations/env.py` sets no `compare_server_default=True`, autogenerate will never surface this.
 
-### 8.4 Drift #4 — the "initial" migration was hand-edited
+### 8.4 Drift #4 • the "initial" migration was hand-edited
 
 `763d787eabf1` already contains indexes that the *later* `9b4f2a71c3d8` describes as never having
-existed — which is consistent — but it also contains `__table_args__` indexes of the *current*
+existed • which is consistent • but it also contains `__table_args__` indexes of the *current*
 models (`ix_markets_status_closes_at`, `ix_liquidity_pools_market_id`, `ix_outcomes_market_id`,
 `ix_trades_*`, `ix_transactions_wallet_id`, `ix_auth_audit_*_event`). Those are exactly the things a
 first autogenerate of an older model set would omit, so the file has been reconciled by hand. The
@@ -731,15 +731,15 @@ every `index=True` column; the unique-index behaviour of `users.email` / `market
 partial indexes (predicates match character-for-character); the FTS expression index; the named
 constraints `uq_outcome_market_index`, `uq_orders_user_client_order`,
 `ck_positions_shares_held_non_negative`, `uq_treasury_singleton`, `ck_treasury_singleton_true`;
-every FK target and every `ondelete` value — including the lone `SET NULL`; and the correct absence
+every FK target and every `ondelete` value • including the lone `SET NULL`; and the correct absence
 of `created_at`/`updated_at` on the four `UUIDMixin`-only tables.
 
 ### 8.6 "Which is the source of truth?"
 
-**Migrations — and it is deliberate.** `Base.metadata.create_all()` is never invoked anywhere in
+**Migrations • and it is deliberate.** `Base.metadata.create_all()` is never invoked anywhere in
 `app/` or `tests/`. Startup only inspects and warns (`app/app.py:189-194`: *"migrations own the
 schema (no auto create_all)"*). Tests `DROP DATABASE … WITH (FORCE)`, recreate, then run
-`alembic upgrade head` on every run (`tests/conftest.py:80-135`) — with the stated rationale that a
+`alembic upgrade head` on every run (`tests/conftest.py:80-135`) • with the stated rationale that a
 stale schema must never mask a failure.
 
 So the net position is: **the provisioned schema is the models minus the five CHECK constraints
@@ -749,7 +749,7 @@ neither path alone is correct.
 
 ---
 
-## 9. Engine, pooling and sessions — `app/database.py` (98 lines)
+## 9. Engine, pooling and sessions • `app/database.py` (98 lines)
 
 ### 9.1 Two engines
 
@@ -771,12 +771,12 @@ def _get_replica_engine():            # database.py:23-34
 
 `@lru_cache` gives exactly one engine per process; `app.py:208-209` disposes both on shutdown.
 
-- `pool_pre_ping=True` recycles connections broken by an idle proxy or firewall — essential behind
+- `pool_pre_ping=True` recycles connections broken by an idle proxy or firewall • essential behind
   a load balancer.
 - `pool_recycle=3600` bounds absolute connection age (primary only).
 - `AsyncAdaptedQueuePool` is SQLAlchemy's async-aware wrapper around `QueuePool`.
 
-### 9.2 The pool arithmetic — know these numbers
+### 9.2 The pool arithmetic • know these numbers
 
 | Setting | Default | Note |
 |---|---|---|
@@ -785,7 +785,7 @@ def _get_replica_engine():            # database.py:23-34
 | `db_pool_timeout` | `30` | seconds to wait for a connection |
 
 With gunicorn's 8 workers that's 40 steady connections + up to 40 overflow = 80, under PostgreSQL's
-100 default. **This is the answer to "how did you avoid exhausting connections?"** — the pool is
+100 default. **This is the answer to "how did you avoid exhausting connections?"** • the pool is
 sized *per worker*, deliberately, and the comment in the config shows the multiplication.
 
 ### 9.3 Two session factories
@@ -794,9 +794,9 @@ Both `@lru_cache`d `async_sessionmaker`s with the same two options (`database.py
 ```python
 async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
 ```
-- **`expire_on_commit=False`** — attributes stay usable after `commit()` without a re-SELECT. Task
+- **`expire_on_commit=False`** • attributes stay usable after `commit()` without a re-SELECT. Task
   code reads fields after committing; without this it would trigger lazy loads on a dead session.
-- **`autoflush=False`** — pending changes are *not* flushed before a query, so flush points are
+- **`autoflush=False`** • pending changes are *not* flushed before a query, so flush points are
   explicit rather than implicit.
 
 ### 9.4 The test seam
@@ -814,14 +814,14 @@ the maker directly would hand you a sessionmaker.
 ### 9.5 The two FastAPI dependencies
 
 ```python
-async def get_db():           # database.py:82-88           — primary
-async def get_db_replica():   # database.py:91-98           — read replica
+async def get_db():           # database.py:82-88           • primary
+async def get_db_replica():   # database.py:91-98           • read replica
 ```
 Both are async generators: `_ensure_session_makers()`, `async with ... as session: yield`, and an
-explicit `await session.close()` in `finally`. **Neither commits or rolls back** — transaction
+explicit `await session.close()` in `finally`. **Neither commits or rolls back** • transaction
 boundaries belong to the route or service.
 
-Read endpoints are meant to depend on `get_db_replica` (docstring: *"Read-only replica session — use
+Read endpoints are meant to depend on `get_db_replica` (docstring: *"Read-only replica session • use
 for list/get endpoints that don't modify data"*). When `database_replica_url` is empty it silently
 serves the primary, so the architecture is already correct with zero extra infrastructure.
 
@@ -831,18 +831,18 @@ serves the primary, so the architecture is already correct with zero extra infra
 
 1. **Five CHECK constraints are in the models but not in the schema** (§8.2). Verify it yourself
    before claiming it.
-2. **`markets.winning_outcome_id` and `proposed_outcome_id` are not foreign keys** — plain `UUID`
+2. **`markets.winning_outcome_id` and `proposed_outcome_id` are not foreign keys** • plain `UUID`
    columns with no referential integrity on the two most safety-critical fields in the system.
    A bad write is not caught by the database; `settle_market` catches it by re-reading and
    refusing on mismatch (`tasks.py:766-775`).
-3. **No database enums** — all 15+ enum-like columns are unconstrained strings (§1.3).
-4. **Every relationship is lazy** — N+1 is a live risk, which is why list endpoints batch.
+3. **No database enums** • all 15+ enum-like columns are unconstrained strings (§1.3).
+4. **Every relationship is lazy** • N+1 is a live risk, which is why list endpoints batch.
 5. **No index on `lp_shares.pool_id`/`user_id`, `market_faqs.market_id`, or `comments.depth`**;
    `ix_positions_user_id` is redundant.
 6. **`created_by` on `markets` is not a FK** either.
 7. **Depth limits and dedup for comments/flags/referrals are application-only** (§5).
 8. **`metadata` is a JSON string in a TEXT column** (`AuthAuditEvent`) while `extra_data` is proper
-   JSONB — two representations of the same idea.
+   JSONB • two representations of the same idea.
 9. **Five tables are missing indexes on their only FK**, which is the classic N+1 setup.
 
 ---

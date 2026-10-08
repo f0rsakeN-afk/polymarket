@@ -49,8 +49,8 @@ export const nextJsConfig = [
       // The react-hooks v6 recommended set ships compiler-style heuristics
       // (refs read during render, setState inside an effect) as *errors*,
       // with ~65 pre-existing hits in the chart package. They stay visible
-      // on every run but are deliberately not gating: everything else —
-      // undefined vars, unused code, bad imports, next/image rules — fails
+      // on every run but are deliberately not gating: everything else •
+      // undefined vars, unused code, bad imports, next/image rules • fails
       // the build as an error.
       "react-hooks/refs": "warn",
       "react-hooks/set-state-in-effect": "warn",

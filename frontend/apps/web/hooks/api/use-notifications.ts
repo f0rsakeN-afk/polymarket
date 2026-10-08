@@ -11,7 +11,7 @@ export function useNotifications(
   /**
    * Gate the fetch on having a session. The endpoint requires auth, so letting
    * it run for an anonymous visitor produces a 401 on every page load (the bell
-   * lives in the shared header) — and each 401 used to kick off a token refresh.
+   * lives in the shared header) • and each 401 used to kick off a token refresh.
    */
   options?: { enabled?: boolean }
 ) {

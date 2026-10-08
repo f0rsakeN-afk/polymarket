@@ -10,15 +10,15 @@ from enum import Enum
 from app.config import settings
 from app.redis import get_redis, redis_cb
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 class LimitType(Enum):
-    GENERAL = "general"           # per IP — 60/min
-    AUTH_DECISION = "auth"       # per email+IP — 5/min (login, verify, reset)
-    AUTH_FAST = "auth_fast"     # per email+IP — 3/min (resend/forgot)
-    AUTH_REFRESH = "auth_refresh"  # per IP — 30/min (silent token rotation)
-    STRICT = "strict"           # per IP — 10/min (mutations)
+    GENERAL = "general"           # per IP • 60/min
+    AUTH_DECISION = "auth"       # per email+IP • 5/min (login, verify, reset)
+    AUTH_FAST = "auth_fast"     # per email+IP • 3/min (resend/forgot)
+    AUTH_REFRESH = "auth_refresh"  # per IP • 30/min (silent token rotation)
+    STRICT = "strict"           # per IP • 10/min (mutations)
 
 
 @dataclass
@@ -48,7 +48,7 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
 local count = redis.call('ZCARD', key)
 
 if count >= limit then
-    -- Over limit — return over_limit=1, remaining=0
+    -- Over limit • return over_limit=1, remaining=0
     return {1, 0}
 end
 
@@ -62,7 +62,7 @@ return {0, remaining}
 """
 
 # Progressive friction: tracks failed attempts and returns a delay to apply.
-# Lockout activates at max_attempts (checked BEFORE increment — not after).
+# Lockout activates at max_attempts (checked BEFORE increment • not after).
 # Delays: attempt max_attempts → 1s, max_attempts+1 → 2s, etc. (capped at 16s).
 # KEYS[1] = friction_key, ARGV[1] = max_attempts, ARGV[2] = lockout_seconds, ARGV[3] = now
 PROGRESSIVE_FRICTION_SCRIPT = """
@@ -81,7 +81,7 @@ if unlock_at > now then
     return {0, remaining, 1}  -- is_locked=1
 end
 
--- Check BEFORE increment — lockout fires at max_attempts, not max_attempts+1
+-- Check BEFORE increment • lockout fires at max_attempts, not max_attempts+1
 local delay = 0
 local is_locked = 0
 
@@ -140,10 +140,10 @@ class RateLimitService:
         # Strip empty segments from :: expansion
         meaningful = [p for p in parts if p]
         if len(meaningful) >= 4:
-            # Enough explicit parts — take first 4 groups
+            # Enough explicit parts • take first 4 groups
             return ":".join(p.zfill(4) for p in meaningful[:4]) + "::"
         if len(meaningful) < 4:
-            # Less than 4 explicit parts means :: is present — rebuild /64 from what's there
+            # Less than 4 explicit parts means :: is present • rebuild /64 from what's there
             # e.g. "2001:db8::1" → "2001:0db8::"
             filled = [p.zfill(4) for p in meaningful] + ["0000"] * (4 - len(meaningful))
             return ":".join(filled[:4]) + "::"

@@ -1,9 +1,9 @@
-# Polymarket — Prediction Market Platform
+# PredictX • Prediction Market Platform
 
-A Polymarket-style exchange for event outcomes: an order book plus an automated market maker, with
+A PredictX-style exchange for event outcomes: an order book plus an automated market maker, with
 wallets, positions, settlement at $1 per correct share, and realtime prices over WebSockets.
 
-> **All project documentation lives in [`docs/`](docs/README.md)** — start there.
+> **All project documentation lives in [`docs/`](docs/README.md)** • start there.
 
 ## Documentation
 
@@ -65,7 +65,7 @@ cd backend && .venv/bin/pytest -q     # 387 tests, DB rebuilt from migrations ea
 
 ```bash
 cd backend
-cp .env.example .env          # generate real secrets — see docs/deployment.md
+cp .env.example .env          # generate real secrets • see docs/deployment.md
 docker compose -f docker-compose.prod.yml up --build -d
 ```
 
@@ -84,7 +84,7 @@ Browser ── HTTP/REST ──► Next.js :3000 ──► nginx ──► FastA
                                           (settlement, order expiry, price snapshots)
 ```
 
-WebSockets are served by the FastAPI process itself — there is no separate gateway service. All 8
+WebSockets are served by the FastAPI process itself • there is no separate gateway service. All 8
 workers subscribe to Redis pub/sub so any instance can push to its own connected clients.
 
 ## Ports
@@ -92,7 +92,7 @@ workers subscribe to Redis pub/sub so any instance can push to its own connected
 | Service | Dev (host) | Notes |
 |---|---|---|
 | Frontend | `:3000` | `cd frontend && bun run dev` |
-| Backend API | `:8000` | `./start.sh` — REST **and** `/ws` |
+| Backend API | `:8000` | `./start.sh` • REST **and** `/ws` |
 | Postgres | `:5433` | container `pm-postgres` / `docker-compose.dev.yml` |
 | Redis | `:6380` | container `pm-redis` / `docker-compose.dev.yml` |
 

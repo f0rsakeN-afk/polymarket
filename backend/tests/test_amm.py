@@ -42,7 +42,7 @@ def test_no_heavily_backed_no_price_high():
     assert float(amm.price("yes")) < 0.2  # inverse
 
 
-# ── Buy — state mutation ───────────────────────────────────────────────────────
+# ── Buy • state mutation ───────────────────────────────────────────────────────
 
 def test_buy_yes_mutates_state():
     """Buying YES increases YES shares, no_shares unchanged. Fee leaves pool, no shares minted for it."""
@@ -95,7 +95,7 @@ def test_round_trip_returns_only_fees():
     price on a buy (zero price impact), so the buy pushed the price up and the
     sell handed back more than was paid. With impact charged on the buy and
     the pre-trade price credited on the sell, a round trip returns exactly
-    (1-fee)^2 of the input — the fee is the only thing it can cost.
+    (1-fee)^2 of the input • the fee is the only thing it can cost.
     """
     for fee in (Decimal(0), Decimal("0.02")):
         amm = BinaryAMM(yes_shares=Decimal(5000), no_shares=Decimal(5000), fee_rate=fee)
@@ -105,7 +105,7 @@ def test_round_trip_returns_only_fees():
         back = amm.sell("yes", quote.shares_out).collateral_in
 
         if fee == 0:
-            # Exactly break-even (to dust) — no free money out of the pool.
+            # Exactly break-even (to dust) • no free money out of the pool.
             assert float(back) == pytest.approx(float(start), rel=1e-6)
         else:
             expected = start * (Decimal(1) - fee) ** 2
@@ -116,7 +116,7 @@ def test_round_trip_returns_only_fees():
 def test_round_trip_large_size_never_profitable():
     """The same invariant holds for a trade that visibly moves the pool."""
     amm = BinaryAMM(yes_shares=Decimal(100), no_shares=Decimal(100), fee_rate=Decimal(0))
-    start = Decimal(50)  # 50% of one side — a huge order
+    start = Decimal(50)  # 50% of one side • a huge order
 
     quote = amm.buy("yes", start)
     back = amm.sell("yes", quote.shares_out).collateral_in
@@ -136,7 +136,7 @@ def test_sell_then_buy_round_trip_returns_only_fees():
     quote = amm.buy("yes", proceeds)
     assert quote.shares_out < Decimal(100), (
         "buying back with the sale proceeds must not restore (or exceed) "
-        f"the 100 shares sold — got {quote.shares_out}"
+        f"the 100 shares sold • got {quote.shares_out}"
     )
 
 
@@ -187,7 +187,7 @@ def test_buy_no_price_effect():
     assert float(amm.price("yes")) < yes_before
 
 
-# ── Sell — state mutation ─────────────────────────────────────────────────────
+# ── Sell • state mutation ─────────────────────────────────────────────────────
 
 def test_sell_yes_mutates_state():
     """Selling YES decreases YES shares, NO shares unchanged."""

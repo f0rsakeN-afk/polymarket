@@ -144,7 +144,7 @@ export function TwoFactorPageClient() {
         </p>
       </div>
 
-      {/* Enabled — show disable form */}
+      {/* Enabled • show disable form */}
       {isEnabled && step === "status" && (
         <Card>
           <CardHeader className="pb-4">
@@ -233,7 +233,7 @@ export function TwoFactorPageClient() {
         </Card>
       )}
 
-      {/* Setup — show QR + confirm */}
+      {/* Setup • show QR + confirm */}
       {step === "setup" && setupData && (
         <Card>
           <CardHeader className="pb-4">
@@ -250,7 +250,7 @@ export function TwoFactorPageClient() {
               <p className="text-xs text-muted-foreground">
                 Can&apos;t scan? Enter this secret manually:{" "}
                 <code className="font-mono text-xs bg-muted px-1 rounded break-all">
-                  {(() => { try { return new URL(setupData.uri).searchParams.get("secret") ?? "—" } catch { return "—" } })()}
+                  {(() => { try { return new URL(setupData.uri).searchParams.get("secret") ?? "•" } catch { return "•" } })()}
                 </code>
               </p>
             </div>
@@ -308,7 +308,7 @@ export function TwoFactorPageClient() {
         </Card>
       )}
 
-      {/* Not enabled — start setup */}
+      {/* Not enabled • start setup */}
       {!isEnabled && step === "status" && (
         <Card>
           <CardHeader className="pb-4">

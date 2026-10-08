@@ -57,17 +57,17 @@ from app.services.password_strength_service import PasswordStrengthService
 from app.services.rate_limit_service import RateLimitService
 from app.services.totp_service import TOTPService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# OTP key prefixes — match the values in OTPService
+# OTP key prefixes • match the values in OTPService
 _OTP_VERIFY = "verify"
 _OTP_MAGIC = "magic"
 _OTP_RESET = "resetpwd"
 
 
 def _hash_refresh_token(token: str) -> str:
-    """Hash refresh token before storing — plaintext token never touches the DB."""
+    """Hash refresh token before storing • plaintext token never touches the DB."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -75,7 +75,7 @@ def _hash_refresh_token(token: str) -> str:
 # Rotation mints a brand-new token with a brand-new `expires_at`, so the
 # per-token TTL alone bounds a single token, not the login chain: a client
 # that keeps refreshing renews forever. The chain therefore carries an anchor
-# in Redis — an absolute deadline set at login (or inherited from the previous
+# in Redis • an absolute deadline set at login (or inherited from the previous
 # token on rotation) that no amount of renewing can move. The key is per-token
 # hash so two devices log in independently.
 _REFRESH_CHAIN_KEY = "refresh_chain:"
@@ -88,7 +88,7 @@ def _chain_key(token_hash: str) -> str:
 async def _refresh_chain_deadline(token_hash: str) -> float | None:
     """Unix deadline after which this login chain must stop renewing.
 
-    `None` means "no anchor recorded" — a token issued before the feature, or
+    `None` means "no anchor recorded" • a token issued before the feature, or
     a Redis flush. The caller keeps the per-token bound and logs; it does not
     reject, because failing closed here would cut every session loose the
     moment Redis restarts.
@@ -99,8 +99,8 @@ async def _refresh_chain_deadline(token_hash: str) -> float | None:
         if not raw:
             return None
         return float(raw.decode() if isinstance(raw, bytes) else raw)
-    except Exception as e:  # noqa: BLE001 — Redis down must not lock everyone out
-        logger.warning(f"refresh-chain lookup failed ({e}) — chain cap skipped for this request")
+    except Exception as e:  # noqa: BLE001 • Redis down must not lock everyone out
+        logger.warning(f"refresh-chain lookup failed ({e}) • chain cap skipped for this request")
         return None
 
 
@@ -110,7 +110,7 @@ async def _anchor_refresh_chain(
     """Write the chain deadline the freshly issued token must live under.
 
     Login (no predecessor) starts the clock; rotation inherits the
-    predecessor's remaining deadline, which is what makes the cap absolute —
+    predecessor's remaining deadline, which is what makes the cap absolute •
     renewing never resets it. Failure is non-fatal and logged: a session that
     cannot record an anchor still expires on the per-token TTL.
     """
@@ -134,10 +134,10 @@ async def _anchor_refresh_chain(
             inherited = float(raw.decode() if isinstance(raw, bytes) else raw)
         else:
             # Anchor lost mid-chain. Re-seed from THIS token's issuance rather
-            # than `fresh_deadline` — same window either way, and it keeps
+            # than `fresh_deadline` • same window either way, and it keeps
             # working instead of disabling the cap for the rest of the chain.
             logger.warning(
-                "refresh-chain anchor missing for rotating token — re-seeded at issue time"
+                "refresh-chain anchor missing for rotating token • re-seeded at issue time"
             )
             inherited = fresh_deadline
         remaining = max(1, int(inherited - issued_at.timestamp()))
@@ -147,8 +147,8 @@ async def _anchor_refresh_chain(
         # The old key's job is done; without this every rotation would leave
         # a key behind until its TTL expires.
         await redis_cb.call(lambda: r.delete(_chain_key(previous_hash)))
-    except Exception as e:  # noqa: BLE001 — logged above, never fatal to login
-        logger.warning(f"refresh-chain anchor not written ({e}) — chain cap not enforced")
+    except Exception as e:  # noqa: BLE001 • logged above, never fatal to login
+        logger.warning(f"refresh-chain anchor not written ({e}) • chain cap not enforced")
 
 
 async def _issue_tokens(
@@ -168,7 +168,7 @@ async def _issue_tokens(
     refresh_token_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
     # Session row must exist before the access token is minted so the token can
-    # carry `sid` — that's what lets GET /auth/sessions mark the caller's own row.
+    # carry `sid` • that's what lets GET /auth/sessions mark the caller's own row.
     access_token, jti = create_access_token(str(user_id), session_id=session_id)
     issued_at = datetime.now(UTC)
     expires_at = issued_at + timedelta(seconds=settings.jwt_refresh_expire)
@@ -205,7 +205,7 @@ async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_
     """
     from sqlalchemy import update
     if keep_token_hash:
-        # Atomic UPDATE excluding the token to keep — no Python-side SELECT loop
+        # Atomic UPDATE excluding the token to keep • no Python-side SELECT loop
         await db.execute(
             update(RefreshToken)
             .where(
@@ -231,7 +231,7 @@ async def _revoke_chain(db: AsyncSession, user_id: str, reason: str) -> None:
 
     Shared by reuse detection and the refresh-chain cap: both mean "nothing
     issued in this chain is trusted any more", and both must end with the same
-    blast radius — all tokens revoked, all sessions revoked, one commit.
+    blast radius • all tokens revoked, all sessions revoked, one commit.
     """
     await _revoke_all_refresh_tokens(db, user_id)
     sessions_result = await db.execute(
@@ -240,7 +240,7 @@ async def _revoke_chain(db: AsyncSession, user_id: str, reason: str) -> None:
     for s in sessions_result.scalars().all():
         s.revoked = True
     await db.commit()
-    logger.warning(f"{reason} — all sessions revoked for user {user_id}")
+    logger.warning(f"{reason} • all sessions revoked for user {user_id}")
 
 
 def _get_client_ip(request: Request) -> str:
@@ -298,7 +298,7 @@ def _ip_matches(stored_ip: str, current_ip: str) -> bool:
             return parts, True  # IPv4
 
         if ":" in ip_str:
-            # IPv6 — use stdlib to normalize and extract first 48 bits
+            # IPv6 • use stdlib to normalize and extract first 48 bits
             try:
                 addr = ipaddress.ip_address(ip_str)
                 if isinstance(addr, ipaddress.IPv6Address):
@@ -321,10 +321,10 @@ def _ip_matches(stored_ip: str, current_ip: str) -> bool:
         # ponytail: 3-octet match is a balance between NAT tolerance and security.
         # Upgrade to /24 (4 octets) if full subnet isolation is needed.
         return stored_parts[:3] == current_parts[:3]
-    # IPv6 — compare first 48 bits (first 3 groups)
+    # IPv6 • compare first 48 bits (first 3 groups)
     if not stored_is_v4 and not current_is_v4:
         return stored_parts[:3] == current_parts[:3]
-    # Protocol mismatch — be strict
+    # Protocol mismatch • be strict
     return stored_ip == current_ip
 
 
@@ -384,7 +384,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     existing_user = email_result.scalar_one_or_none()
     if existing_user:
         if existing_user.is_email_verified:
-            # Tell the owner someone tried to register with their address —
+            # Tell the owner someone tried to register with their address •
             # throttled, or the form becomes a way to flood an inbox. The
             # caller is told nothing the new-account path would not have said.
             r = await get_redis()
@@ -396,7 +396,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
             await AuthAuditService.log_register(db, data.email, str(existing_user.id), ip, ua)
             logger.info(f"Register attempted for an existing verified account: {data.email}")
             return await _pending_verification(data.email)
-        # Unverified — resend the code so they can complete verification
+        # Unverified • resend the code so they can complete verification
         code = await OTPService.send_code(data.email, _OTP_VERIFY)
         EmailService.send_verification_code(data.email, code)
         await AuthAuditService.log_register(db, data.email, str(existing_user.id), ip, ua)
@@ -483,7 +483,7 @@ async def resend_verification(data: ResendVerificationRequest, db: AsyncSession 
 
 @router.post("/set-password", summary="Set password (requires email verification)")
 async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    # Resolve these before any early raise — record_failure() needs `ip`.
+    # Resolve these before any early raise • record_failure() needs `ip`.
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
 
@@ -535,7 +535,7 @@ async def magic_link_url(data: MagicLinkRequest, request: Request, db: AsyncSess
     ua = request.headers.get("user-agent", "")[:200]
     token = str(uuid.uuid4())
     r = await get_redis()
-    # JSON payload — never delimited strings: IPv6 addresses and user-agents
+    # JSON payload • never delimited strings: IPv6 addresses and user-agents
     # both contain colons and break naive split parsing.
     await redis_cb.call(
         lambda: r.set(
@@ -578,7 +578,7 @@ async def verify_magic_url(data: VerifyMagicUrlRequest, request: Request, respon
         stored_ip = rest[:second_colon] if second_colon != -1 else rest
 
     # Reject if IP changed (with any-port/strip-port tolerance: compare first two octets)
-    # Do NOT delete the token — if IP mismatch is due to NAT/proxy rotation, the legitimate
+    # Do NOT delete the token • if IP mismatch is due to NAT/proxy rotation, the legitimate
     # user should be able to retry from the correct IP without requesting a new link.
     if stored_ip and not _ip_matches(stored_ip, ip):
         raise UnauthorizedError("Invalid or expired link")
@@ -614,7 +614,7 @@ async def verify_magic_url_2fa(
     if not stored:
         raise UnauthorizedError("Session expired or invalid")
 
-    # Stored as "user_id:ip" — split on first colon (UUID has no colons)
+    # Stored as "user_id:ip" • split on first colon (UUID has no colons)
     first_colon = stored.find(":")
     user_id = stored[:first_colon] if first_colon != -1 else stored
     stored_ip = stored[first_colon + 1:] if first_colon != -1 else ""
@@ -651,7 +651,7 @@ async def verify_magic_url_2fa(
         await RateLimitService.record_failure(user.email, ip)
         raise UnauthorizedError("Invalid 2FA code")
 
-    # Delete partial token only after successful 2FA — allows retry on TOTP failure
+    # Delete partial token only after successful 2FA • allows retry on TOTP failure
     await redis_cb.call(lambda: r.delete(f"partial:{data.partial_token}"))
     await RateLimitService.reset_friction(user.email, ip)
 
@@ -746,7 +746,7 @@ async def verify_magic_2fa(
 # ─── 2FA (TOTP) ───────────────────────────────────────────────────────────────
 
 
-@router.get("/2fa/setup", summary="Start 2FA setup — generate secret + QR URI")
+@router.get("/2fa/setup", summary="Start 2FA setup • generate secret + QR URI")
 async def setup_2fa(request: Request, db: AsyncSession = Depends(get_db)):
     """Generate TOTP secret and provisioning URI. 2FA is pending until confirmed with /2fa/enable."""
     user = await get_current_user(request, db)
@@ -818,7 +818,7 @@ async def enable_2fa(
 async def disable_2fa(
     data: TwoFactorDisableRequest, request: Request, db: AsyncSession = Depends(get_db),
 ):
-    """Disable 2FA — requires correct password AND current TOTP code."""
+    """Disable 2FA • requires correct password AND current TOTP code."""
     user = await get_current_user(request, db)
     ip = _get_client_ip(request)
     ua = request.headers.get("user-agent")
@@ -888,7 +888,7 @@ async def reset_password(data: ResetPasswordRequest, request: Request, db: Async
         from fastapi import HTTPException
         raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rl_result.retry_after)})
 
-    # OTP verification must come BEFORE password strength check —
+    # OTP verification must come BEFORE password strength check •
     # prevents brute-forcing password policy without a valid OTP
     if not await OTPService.verify_code(data.email, _OTP_RESET, data.code):
         await RateLimitService.record_failure(data.email, ip)
@@ -957,7 +957,7 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
         raise UnauthorizedError("Account is inactive")
 
     if not user.is_email_verified:
-        raise ForbiddenError("Email not verified — check your inbox for the verification code")
+        raise ForbiddenError("Email not verified • check your inbox for the verification code")
 
     if not user.password_hash:
         raise UnauthorizedError("No password set for this account. Use magic link login.")
@@ -1133,7 +1133,7 @@ async def change_password(
     user.password_hash = hash_password(data.new_password)
 
     await _blacklist_access_token(request)
-    # Revoke ALL refresh tokens — no keep_token_hash. A stolen pre-change token
+    # Revoke ALL refresh tokens • no keep_token_hash. A stolen pre-change token
     # must not survive a password change. User must re-authenticate fully.
     await _revoke_all_refresh_tokens(db, str(user.id))
     await AuthAuditService.log_password_change(db, str(user.id), ip, ua)
@@ -1178,14 +1178,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     # moment: after refresh_chain_max_seconds from login the session ends and
     # the user has to authenticate again. Without this, each rotation mints a
     # fresh jwt_refresh_expire and a client that keeps refreshing never logs
-    # out — the per-token checks below only bound one token at a time.
+    # out • the per-token checks below only bound one token at a time.
     presented_hash = _hash_refresh_token(refresh_token)
     chain_deadline = await _refresh_chain_deadline(presented_hash)
     if chain_deadline is not None and datetime.now(UTC).timestamp() > chain_deadline:
         await _revoke_chain(
             db, str(token_record.user_id), "Refresh chain exceeded its maximum lifetime"
         )
-        raise UnauthorizedError("Session expired — please sign in again")
+        raise UnauthorizedError("Session expired • please sign in again")
 
     if token_record.expires_at <= datetime.now(UTC):
         token_record.revoked = True
@@ -1199,7 +1199,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     # Belt-and-braces, and DB-only: recover THIS token's issuance time from
     # (expires_at - jwt_refresh_expire) and refuse it once it is older than
     # the chain cap. The previous form compared the issuance time to `now`
-    # (`absolute_expiry <= now`) — true for every token ever issued — so
+    # (`absolute_expiry <= now`) • true for every token ever issued • so
     # /auth/refresh answered 401 on every call and sessions silently died
     # after one access token. Nothing caught it because no test exercised the
     # endpoint; the Redis deadline above is the bound that actually matters.
@@ -1215,11 +1215,11 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if stored_ua != (ua or ""):
         token_record.revoked = True
         await db.commit()
-        raise UnauthorizedError("Device mismatch — please re-authenticate")
+        raise UnauthorizedError("Device mismatch • please re-authenticate")
 
     # Rotate: revoke old token + old session, issue new token + new session
     # bound to the current ip/user-agent. The new token inherits this chain's
-    # deadline — that inheritance is what makes the cap absolute.
+    # deadline • that inheritance is what makes the cap absolute.
     token_record.revoked = True
     if token_record.current_session:
         token_record.current_session.revoked = True

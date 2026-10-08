@@ -10,7 +10,7 @@ type MessageHandler = (data: unknown) => void
 // ─── Per-market subscription state ─────────────────────────────────────────────
 
 interface MarketSub {
-  /** Sequence number — incrementing counter used to discard stale messages */
+  /** Sequence number • incrementing counter used to discard stale messages */
   seq: number
   /** Set of handlers currently subscribed to this market */
   handlers: Set<MessageHandler>
@@ -25,7 +25,7 @@ interface SharedConnection {
   status: WSStatus
   /** Per-market subscription metadata */
   subs: Map<string, MarketSub>
-  /** Per-market mutex — serialises the subscribe frame for one market.
+  /** Per-market mutex • serialises the subscribe frame for one market.
    *  A promise chain, not a boolean: `Map<string, Promise<void>>`. */
   subLocks: Map<string, Promise<void>>
   retries: number
@@ -34,11 +34,11 @@ interface SharedConnection {
   serverSubs: Set<string>
   /** Set of status-change handlers */
   statusHandlers: Set<MessageHandler>
-  /** Market used in WS URL — the most recently active market for reconnect path */
+  /** Market used in WS URL • the most recently active market for reconnect path */
   lastConnectedMarket: string | null
   /** Reconnect loop parked after too many consecutive failures */
   gaveUp: boolean
-  /** The socket being closed on purpose — its `onclose` must not queue a reconnect */
+  /** The socket being closed on purpose • its `onclose` must not queue a reconnect */
   intentionalCloseSocket: WebSocket | null
   /** Deferred "registry is empty, close the socket" timer (see the unsubscribe path) */
   closeTimer: ReturnType<typeof setTimeout> | null
@@ -54,7 +54,7 @@ interface SharedConnection {
  */
 const MAX_RECONNECT_ATTEMPTS = 8
 
-// Module-level singleton — one WebSocket per browser tab
+// Module-level singleton • one WebSocket per browser tab
 let _conn: SharedConnection | null = null
 
 function getConnection(): SharedConnection {
@@ -102,7 +102,7 @@ function sendWs(conn: SharedConnection, data: unknown) {
  * for the whole duration. Chaining onto the previous promise instead costs one
  * microtask turn, never a timer, and cannot starve anything else.
  *
- * Failures must not poison the chain — hence `.catch()` on both the tail and the
+ * Failures must not poison the chain • hence `.catch()` on both the tail and the
  * stored promise, so one throwing caller doesn't deadlock every later one.
  */
 function withMarketLock<T>(conn: SharedConnection, marketId: string, fn: () => T): Promise<T> {
@@ -125,7 +125,7 @@ function withMarketLock<T>(conn: SharedConnection, marketId: string, fn: () => T
  *  same tick from both passing that check.
  *
  *  Note there is deliberately NO `readyState === OPEN` check here. If a second
- *  market is subscribed while the socket is still CONNECTING, `sendWs` no-ops —
+ *  market is subscribed while the socket is still CONNECTING, `sendWs` no-ops •
  *  but we must still record it in `serverSubs`, because `onopen` replays that
  *  set. Returning early here instead would drop that market permanently: the
  *  URL only ever names the *first* market. */
@@ -152,21 +152,21 @@ function wsUnsubscribe(conn: SharedConnection, marketId: string) {
 
 function connect(conn: SharedConnection, firstMarketId: string) {
   if (conn.ws) return  // already open or pending
-  if (conn.gaveUp) return  // reconnect loop parked — cleared by network recovery
+  if (conn.gaveUp) return  // reconnect loop parked • cleared by network recovery
 
   // No auth gate here, deliberately. Market data is public over REST
   // (`/markets/{slug}/orderbook`, `/markets/{slug}/trades`) and this socket pushes
   // exactly that, so the server accepts an anonymous handshake. Gating the client
-  // on a session would deny live prices to logged-out visitors — who can already
+  // on a session would deny live prices to logged-out visitors • who can already
   // read the same numbers over HTTP. The `access_token` cookie rides along
   // automatically when there is a session, which is all the server needs it for.
   //
-  // Clear any pending reconnect timer — prevents duplicate connections on rapid calls
+  // Clear any pending reconnect timer • prevents duplicate connections on rapid calls
   if (conn.reconnectTimer) {
     clearTimeout(conn.reconnectTimer)
     conn.reconnectTimer = null
   }
-  // A pending deferred close is now moot — something asked for a socket.
+  // A pending deferred close is now moot • something asked for a socket.
   if (conn.closeTimer) {
     clearTimeout(conn.closeTimer)
     conn.closeTimer = null
@@ -210,21 +210,21 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     if (!d.market_id) return
 
     const sub = conn.subs.get(d.market_id)
-    if (!sub) return  // no handler registered for this market — discard
+    if (!sub) return  // no handler registered for this market • discard
 
     // Increment seq so any in-flight messages from before an unsubscribe are dropped
     sub.seq++
 
-    // Deliver to all handlers for this market — each in try/catch so one bad
+    // Deliver to all handlers for this market • each in try/catch so one bad
     // handler doesn't break the socket for other handlers or corrupt state
     const currentSeq = sub.seq
     for (const h of sub.handlers) {
       try {
         h(data)
       } catch {
-        /* user handler threw — socket survives */
+        /* user handler threw • socket survives */
       }
-      // If seq changed while iterating, a re-subscribe happened — stop delivering
+      // If seq changed while iterating, a re-subscribe happened • stop delivering
       // stale messages from before the re-subscribe
       if (sub.seq !== currentSeq) break
     }
@@ -234,13 +234,13 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     // A superseded socket must not touch shared state. `close()` is async, so a
     // socket we already replaced fires `onclose` *after* its successor is live;
     // nulling `conn.ws` unconditionally here made the live socket untracked, and
-    // the next subscribe opened a second one — two sockets, both receiving, and
+    // the next subscribe opened a second one • two sockets, both receiving, and
     // the flap repeated on every subscribe/unsubscribe cycle.
     if (conn.ws !== ws) return
     conn.ws = null
     setStatus(conn, "disconnected")
 
-    // Closed on purpose (last subscriber left) — the reconnect loop must stay
+    // Closed on purpose (last subscriber left) • the reconnect loop must stay
     // parked until something actually asks for a socket.
     if (conn.intentionalCloseSocket === ws) {
       conn.intentionalCloseSocket = null
@@ -255,7 +255,7 @@ function connect(conn: SharedConnection, firstMarketId: string) {
 
     const delay = Math.min(1000 * Math.pow(2, conn.retries), 30_000)
     conn.retries++
-    // Reconnect to the market the user is currently viewing — not the first subscribed
+    // Reconnect to the market the user is currently viewing • not the first subscribed
     const market = conn.lastConnectedMarket
       ?? conn.serverSubs.values().next().value
       ?? conn.subs.keys().next().value
@@ -279,8 +279,8 @@ interface MarketSocketCtx {
    * Subscribe to *connection status* changes.
    *
    * Deliberately not the same channel as `subscribe`. Status frames are
-   * synthetic — `setStatus` pushes `{type:"__ws_status__"}` into
-   * `conn.statusHandlers` and the server never sends that type — so a status
+   * synthetic • `setStatus` pushes `{type:"__ws_status__"}` into
+   * `conn.statusHandlers` and the server never sends that type • so a status
    * handler registered through `subscribe` lands in `subs[marketId].handlers`,
    * which is only ever drained by `ws.onmessage`. It would therefore never fire.
    */
@@ -316,7 +316,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
     } else {
       // Update the reconnect target to the most recently active market
       c.lastConnectedMarket = marketId
-      // WS is open — subscribe on the wire if not already
+      // WS is open • subscribe on the wire if not already
       wsSubscribe(c, marketId)
     }
 
@@ -327,13 +327,13 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
 
       currentSub.handlers.delete(handler)
 
-      // Last handler for this market gone — unsubscribe from it on the wire
+      // Last handler for this market gone • unsubscribe from it on the wire
       if (currentSub.handlers.size === 0) {
         c.subs.delete(marketId)
         c.subLocks.delete(marketId)  // ponytail: prevent subLocks Map leak
         wsUnsubscribe(c, marketId)
 
-        // If all markets desubscribed, close the WS — but not synchronously.
+        // If all markets desubscribed, close the WS • but not synchronously.
         // React Strict Mode is on by default with the app router (Next 13.5.1+),
         // so in dev every component unmounts and remounts, and a registry that
         // briefly empties would close the socket and immediately reopen it.
@@ -359,7 +359,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
 
   const getStatus = useCallback(() => conn.current.status, [])
 
-  // Status lives in its own registry — see the `subscribeStatus` doc comment.
+  // Status lives in its own registry • see the `subscribeStatus` doc comment.
   const subscribeStatus = useCallback((handler: MessageHandler) => {
     const c = conn.current
     c.statusHandlers.add(handler)
@@ -383,7 +383,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
   // subtree twice per connect cycle (connecting → connected) was pure cost.
 
   // Recover a parked or sleeping socket when the network comes back. A laptop
-  // resuming from sleep drops the socket silently — `online` and
+  // resuming from sleep drops the socket silently • `online` and
   // `visibilitychange` are the only signals the browser gives us, and without
   // them a parked socket stays parked for the rest of the session.
   useEffect(() => {
@@ -451,7 +451,7 @@ export function useMarketSocket({
     const unsubMsg = ctx.subscribe(marketId, (data) => onMessageRef.current(data))
     // Status via the status registry, NOT `ctx.subscribe`. Going through
     // `subscribe` put this handler in `subs[marketId].handlers`, which only
-    // `ws.onmessage` drains — and the server never sends `__ws_status__`, so the
+    // `ws.onmessage` drains • and the server never sends `__ws_status__`, so the
     // indicator never updated. It sat at whatever `getStatus()` returned on
     // mount, which is exactly the kind of bug that looks fine in a demo because
     // the first state you see is usually correct.
@@ -469,14 +469,14 @@ export function useMarketSocket({
 // ─── Teardown: HMR + page unload ───────────────────────────────────────────────
 //
 // `_conn` is module scope, which is what makes the socket per-tab rather than
-// per-component — but it also means nothing tears it down when the module is
+// per-component • but it also means nothing tears it down when the module is
 // replaced or the page goes away:
 //
 //  - **HMR (dev):** reloading this module creates a *new* `_conn = null` while
 //    the old socket is still open and still referenced by the old module's
 //    closures. The browser keeps the TCP connection and the server keeps the
 //    file descriptor and the per-IP counter slot. A handful of edits and you've
-//    leaked several sockets the app can no longer reference — and the server
+//    leaked several sockets the app can no longer reference • and the server
 //    will eventually refuse new connections for that IP.
 //  - **Unload:** bfcache navigation away and back restores the page, but a
 //    socket closed by the server while hidden is never noticed until the first
@@ -488,7 +488,7 @@ function teardownSocket(reason: "hmr" | "unload"): void {
   const c = _conn
   if (!c) return
 
-  // Clear timers unconditionally — a pending reconnect would otherwise resurrect
+  // Clear timers unconditionally • a pending reconnect would otherwise resurrect
   // the socket after we deliberately closed it.
   if (c.closeTimer) clearTimeout(c.closeTimer)
   if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
@@ -496,7 +496,7 @@ function teardownSocket(reason: "hmr" | "unload"): void {
   // The socket is the only part that must die. Clearing `subs` and
   // `serverSubs` here would strand every mounted consumer: the provider's
   // `useRef` still holds this object, so consumers would keep their handlers
-  // while the socket they route through was gone — silent dead updates. Instead
+  // while the socket they route through was gone • silent dead updates. Instead
   // drop `ws` only; the next `subscribe` sees `!c.ws` and calls `connect()`, so
   // recovery happens through the normal path rather than a second code path.
   const ws = c.ws
@@ -518,7 +518,7 @@ function teardownSocket(reason: "hmr" | "unload"): void {
   // Only null the module singleton on HMR. On `pagehide` we must keep it: the
   // provider captured this exact object in a ref, so replacing the module
   // variable would leave the provider pointing at a dead connection while any
-  // newly-mounted component got a fresh, second one — two connections, one of
+  // newly-mounted component got a fresh, second one • two connections, one of
   // them orphaned, which is the flapping this whole design avoids.
   if (reason === "hmr") _conn = null
 }

@@ -13,7 +13,7 @@ function formatUSD(n: string | number) {
 }
 
 function formatDate(iso: string | null | undefined) {
-  if (!iso) return "—"
+  if (!iso) return "•"
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -88,7 +88,7 @@ export function TransactionsPageClient() {
               </div>
               <div className="text-right">
                 <p className="font-medium">
-                  {/* `amount` is signed — do not infer direction from `type`. */}
+                  {/* `amount` is signed • do not infer direction from `type`. */}
                   {Number(tx.amount) < 0 ? "-" : "+"}
                   {formatUSD(Math.abs(Number(tx.amount)))}
                 </p>

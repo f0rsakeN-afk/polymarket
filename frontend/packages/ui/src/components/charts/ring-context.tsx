@@ -83,7 +83,7 @@ export interface RingStableContextValue {
   endAngle: number;
 
   /**
-   * Studio geometry scrub — skip Motion path morphing and use plain SVG paths.
+   * Studio geometry scrub • skip Motion path morphing and use plain SVG paths.
    * @default false
    */
   geometryScrubbing: boolean;

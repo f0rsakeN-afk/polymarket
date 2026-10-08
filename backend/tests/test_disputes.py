@@ -146,7 +146,7 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
     })
     dispute_id = d_resp.json()["data"]["id"]
 
-    # Adjudicate — uphold (mock Celery delay since no broker is running)
+    # Adjudicate • uphold (mock Celery delay since no broker is running)
     client.cookies.set("access_token", token_for(admin_user.id))
     with patch("app.workers.tasks.resolve_market.delay"):
         resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
@@ -160,7 +160,7 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
 
 @pytest.mark.asyncio
 async def test_adjudicate_dispute_dismissed(client: AsyncClient, admin_user, test_user, test_market, db_session):
-    """Admin dismisses dispute — market status stays dispute_window."""
+    """Admin dismisses dispute • market status stays dispute_window."""
 
     outcome = next(o for o in test_market.outcomes if o.name == "Yes")
 

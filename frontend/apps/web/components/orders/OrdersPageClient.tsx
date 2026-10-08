@@ -42,7 +42,7 @@ function n(v: string | number | null | undefined, fallback = 0): number {
 }
 
 function formatTime(iso: string | null | undefined) {
-  if (!iso) return "—"
+  if (!iso) return "•"
   const d = new Date(iso)
   const now = new Date()
   const diff = (now.getTime() - d.getTime()) / 1000
@@ -213,7 +213,7 @@ export function OrdersPageClient() {
       sortable: true,
       className: "w-[38%] font-medium max-w-xs truncate",
       render: (row) => (
-        <span className="block truncate">{row.market_question ?? "—"}</span>
+        <span className="block truncate">{row.market_question ?? "•"}</span>
       ),
     },
     {

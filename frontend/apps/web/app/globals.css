@@ -1,4 +1,4 @@
-/* Polymarket design overrides — scoped to apps/web only */
+/* PredictX design overrides • scoped to apps/web only */
 @import "@workspace/ui/globals.css";
 
 @keyframes shimmer {
@@ -10,7 +10,7 @@
   }
 }
 
-/* Shimmer utility for skeletons — hue 145 matches theme green */
+/* Shimmer utility for skeletons • hue 145 matches theme green */
 @layer utilities {
   .animate-shimmer {
     background: linear-gradient(
@@ -34,7 +34,7 @@
   }
 }
 
-/* Thin scrollbars for nested panels only — page scroll keeps native scrollbar */
+/* Thin scrollbars for nested panels only • page scroll keeps native scrollbar */
 .nice-scroll {
   scrollbar-width: thin;
 }

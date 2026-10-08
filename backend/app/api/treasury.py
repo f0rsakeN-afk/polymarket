@@ -13,7 +13,7 @@ from app.models.treasury import Treasury, TreasuryLog
 from app.models.user import User
 from app.schemas.treasury import TreasuryLogResponse, TreasuryResponse
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/treasury", tags=["treasury"])
 
 
@@ -23,12 +23,12 @@ async def _get_or_create_treasury(db: AsyncSession) -> Treasury:
     Uses INSERT ... ON CONFLICT DO NOTHING to eliminate the race condition
     between SELECT and INSERT that existed in the previous implementation.
     """
-    # `on_conflict_do_nothing` is PostgreSQL dialect API — importing `insert`
+    # `on_conflict_do_nothing` is PostgreSQL dialect API • importing `insert`
     # from sqlalchemy gives a generic Insert that doesn't have it (AttributeError
     # at runtime, i.e. 500 on the distribute path).
     from sqlalchemy.dialects.postgresql import insert
 
-    # Try INSERT directly — if singleton row already exists, conflict is ignored.
+    # Try INSERT directly • if singleton row already exists, conflict is ignored.
     await db.execute(
         insert(Treasury).values(singleton=True).on_conflict_do_nothing(index_elements=["singleton"])
     )
@@ -47,7 +47,7 @@ async def get_treasury(
     db: AsyncSession = Depends(get_db_replica),
 ):
     # Admin-only: treasury balance and fee totals are operational financial
-    # data — the same privilege boundary as POST /treasury/distribute.
+    # data • the same privilege boundary as POST /treasury/distribute.
     await _get_admin_user(request, db)
 
     # Read must be side-effect free. The singleton row is created by the

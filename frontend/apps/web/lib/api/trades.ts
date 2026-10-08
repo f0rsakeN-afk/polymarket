@@ -4,12 +4,12 @@ import type { TradesResponse } from "@/hooks/api/types/market"
 /**
  * GET /api/v1/trades and GET /api/v1/markets/{slug}/trades.
  *
- * Single implementation for both feed endpoints — they share one response
+ * Single implementation for both feed endpoints • they share one response
  * shape (`TradesResponse`) and accept the same parameters.
  *
  * Backend supports two pagination modes:
  *  - `page`/`page_size` (offset), hard-capped past offset 1000
- *  - `cursor` (opaque keyset token from `next_cursor`) — preferred for
+ *  - `cursor` (opaque keyset token from `next_cursor`) • preferred for
  *    infinite scroll; it overrides `page` and never hits the cap.
  */
 export interface TradeQuery {

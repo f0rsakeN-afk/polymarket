@@ -10,9 +10,9 @@ from app.api.exceptions import AppException
 from app.api.responses import error_response
 from app.config import settings
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
-# Read once at import time — does not change at runtime, only at startup.
+# Read once at import time • does not change at runtime, only at startup.
 # Never use for security decisions; only for information exposure.
 _APP_ENV = settings.app_env
 
@@ -31,7 +31,7 @@ def _sanitise_for_client(message: str) -> str:
 
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"HTTP {exc.status_code}: {exc.detail} | path={request.url.path}")
-    # Extract message — AppException stores dict in detail, plain HTTPException stores string
+    # Extract message • AppException stores dict in detail, plain HTTPException stores string
     detail = exc.detail
     if isinstance(detail, dict):
         message = detail.get("message", str(detail))
@@ -70,7 +70,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def integrity_error_handler(request: Request, exc: IntegrityError):
     # Log the full detail internally (including constraint name, table name)
     logger.error(f"DB integrity error: {exc} | path={request.url.path}")
-    # Client gets a sanitised message — never reveal constraint/key names in prod
+    # Client gets a sanitised message • never reveal constraint/key names in prod
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content=error_response("Resource already exists or constraint violated", "DB_CONSTRAINT_ERROR"),
@@ -99,7 +99,7 @@ async def data_error_handler(request: Request, exc: DataError):
 async def generic_exception_handler(request: Request, exc: Exception):
     # Always log the full stack trace internally
     logger.exception(f"Unhandled exception: {exc} | path={request.url.path}")
-    # In prod: hide exception type and message from client — only show generic text
+    # In prod: hide exception type and message from client • only show generic text
     if _APP_ENV == "production":
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -109,5 +109,5 @@ async def generic_exception_handler(request: Request, exc: Exception):
     hint = _sanitise_for_client(str(exc))
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=error_response("Internal server error — see server logs", "INTERNAL_ERROR", {"hint": hint}),
+        content=error_response("Internal server error • see server logs", "INTERNAL_ERROR", {"hint": hint}),
     )

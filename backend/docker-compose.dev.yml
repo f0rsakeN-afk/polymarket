@@ -1,4 +1,4 @@
-name: polymarket-backend-dev
+name: PredictX-backend-dev
 
 services:
   postgres:
@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+      POSTGRES_DB: ${POSTGRES_DB:-PredictX}
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -15,7 +15,7 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-polymarket}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-PredictX}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -59,7 +59,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
       RATE_LIMIT_ENABLED: "true"
@@ -98,7 +98,7 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
@@ -131,7 +131,7 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
     # Schedule lives on the 1777 tmpfs, not the named volume: named volumes are
@@ -153,11 +153,11 @@ services:
 
 networks:
   backend:
-    name: polymarket-dev-backend
+    name: PredictX-dev-backend
     driver: bridge
 
 volumes:
   pgdata:
-    name: polymarket-dev-pgdata
+    name: PredictX-dev-pgdata
   redisdata:
-    name: polymarket-dev-redisdata
+    name: PredictX-dev-redisdata

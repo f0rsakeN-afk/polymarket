@@ -1,6 +1,6 @@
 export const Y_AXIS_DEFAULT_TICK_COUNT = 5;
 
-/** Minimum valid `numTicks` for `scale.ticks()` — values ≤ 0 yield no ticks. */
+/** Minimum valid `numTicks` for `scale.ticks()` • values ≤ 0 yield no ticks. */
 export const Y_AXIS_MIN_TICK_COUNT = 1;
 
 /**

@@ -85,7 +85,7 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
   if (!isMarketActive) {
     return (
       <div className="py-4 text-center">
-        <p className="text-xs text-muted-foreground">Liquidity disabled — market is {marketStatus}</p>
+        <p className="text-xs text-muted-foreground">Liquidity disabled • market is {marketStatus}</p>
       </div>
     )
   }
@@ -94,7 +94,7 @@ export function AddLiquidityForm({ marketId, marketStatus }: { marketId: string;
     <div className="space-y-4">
       {hasInsufficientBalance && (
         <p role="alert" className="text-xs text-red-700">
-          Insufficient balance — max ${availableBalance.toFixed(2)} available
+          Insufficient balance • max ${availableBalance.toFixed(2)} available
         </p>
       )}
       <div>

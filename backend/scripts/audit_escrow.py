@@ -62,7 +62,7 @@ async def _run(market_id: str | None, as_json: bool) -> int:
             print(f"    {k}: {val}")
         print()
     print("These markets will refuse to settle until the escrow is funded.")
-    print("Nothing was modified — this tool only reports.")
+    print("Nothing was modified • this tool only reports.")
     return 1
 
 

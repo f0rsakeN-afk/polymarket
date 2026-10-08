@@ -253,7 +253,7 @@ async def test_list_orders_pagination(client: AsyncClient, test_user, test_marke
     assert body["has_more"] is True
     assert body["next_cursor"]
 
-    # The cursor returns the *other* order — no overlap with page one.
+    # The cursor returns the *other* order • no overlap with page one.
     resp2 = await client.get("/api/v1/orders/", params={"page_size": 1, "cursor": body["next_cursor"]})
     assert resp2.status_code == 200
     body2 = resp2.json()["data"]
@@ -655,7 +655,7 @@ async def test_book_match_protocol_fee_is_credited(
     seller_wallet_after = (
         await db_session.execute(select(Wallet).where(Wallet.user_id == admin_user.id))
     ).scalar_one()
-    # Seller is credited the match minus the fee — the two sides sum to the
+    # Seller is credited the match minus the fee • the two sides sum to the
     # buyer's debit, so the ledger balances.
     assert seller_wallet_after.balance == balance_before + usdc_value - expected_fee
     assert remaining == Decimal(70)

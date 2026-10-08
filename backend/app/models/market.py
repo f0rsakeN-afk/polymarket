@@ -57,7 +57,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
 
     # Resolution
     status = Column(String(20), default=STATUS_ACTIVE, nullable=False, index=True)
-    # status: see STATUS_* above — active, closed, resolving, resolved,
+    # status: see STATUS_* above • active, closed, resolving, resolved,
     # dispute_window, pending_review, rejected
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     resolution_criteria = Column(String(2000))
@@ -89,7 +89,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
     disputes = relationship("Dispute", back_populates="market", cascade="all, delete-orphan")
     flags = relationship("MarketFlag", back_populates="market", cascade="all, delete-orphan")
 
-    # Constraints and indexes — declared after the columns so the full-text
+    # Constraints and indexes • declared after the columns so the full-text
     # expression index can reference `question` directly.
     __table_args__ = (
         CheckConstraint("total_liquidity >= 0", name="ck_markets_liquidity_nonneg"),
@@ -98,7 +98,7 @@ class Market(Base, UUIDMixin, TimestampMixin):
         # Full-text search index backing `list_markets`:
         #     plainto_tsquery('english', q) @@ to_tsvector('english', question)
         # PostgreSQL has no default GIN opclass for varchar/text, so a plain
-        # GIN index on `question` cannot be created — the index must be on the
+        # GIN index on `question` cannot be created • the index must be on the
         # exact same to_tsvector() expression the query uses ('english' as a
         # literal, not a bind param, so the planner can match it).
         Index(

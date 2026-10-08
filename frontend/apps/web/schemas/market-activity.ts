@@ -3,20 +3,20 @@ import { z } from "zod"
 export const holderSchema = z.object({
   user_id: z.string(),
   username: z.string(),
-  shares_held: z.string(), // ponytail: string — Decimal serialized from backend
-  average_price: z.string(), // ponytail: string — Decimal serialized from backend
-  realized_pnl: z.string(), // ponytail: string — Decimal serialized from backend
+  shares_held: z.string(), // ponytail: string • Decimal serialized from backend
+  average_price: z.string(), // ponytail: string • Decimal serialized from backend
+  realized_pnl: z.string(), // ponytail: string • Decimal serialized from backend
 })
 
 export const marketStatsSchema = z.object({
-  total_volume: z.string(), // ponytail: string — Decimal serialized from backend
-  total_liquidity: z.string(), // ponytail: string — Decimal serialized from backend
-  num_trades: z.string(), // ponytail: string — Decimal serialized from backend
-  yes_price: z.string(), // ponytail: string — Decimal serialized from backend
-  no_price: z.string(), // ponytail: string — Decimal serialized from backend
-  spread: z.string(), // ponytail: string — Decimal serialized from backend
-  yes_liquidity: z.string(), // ponytail: string — Decimal serialized from backend
-  no_liquidity: z.string(), // ponytail: string — Decimal serialized from backend
+  total_volume: z.string(), // ponytail: string • Decimal serialized from backend
+  total_liquidity: z.string(), // ponytail: string • Decimal serialized from backend
+  num_trades: z.string(), // ponytail: string • Decimal serialized from backend
+  yes_price: z.string(), // ponytail: string • Decimal serialized from backend
+  no_price: z.string(), // ponytail: string • Decimal serialized from backend
+  spread: z.string(), // ponytail: string • Decimal serialized from backend
+  yes_liquidity: z.string(), // ponytail: string • Decimal serialized from backend
+  no_liquidity: z.string(), // ponytail: string • Decimal serialized from backend
   status: z.string(),
 })
 
@@ -24,8 +24,8 @@ export const marketTradeSchema = z.object({
   id: z.string(),
   outcome: z.string(),
   side: z.string(),
-  price: z.string(), // ponytail: string — Decimal serialized from backend
-  amount: z.string(), // ponytail: string — Decimal serialized from backend
+  price: z.string(), // ponytail: string • Decimal serialized from backend
+  amount: z.string(), // ponytail: string • Decimal serialized from backend
   executed_at: z.string(),
   username: z.string(),
 })

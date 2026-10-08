@@ -14,7 +14,7 @@ from app.models.user import User
 from app.schemas.comment import CommentCreate
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/markets", tags=["comments"])
 
 MAX_DEPTH = 3
@@ -111,7 +111,7 @@ async def list_comments(
     )
     rows = result.all()
 
-    # Fetch all reply counts in a single batch query — avoids N queries
+    # Fetch all reply counts in a single batch query • avoids N queries
     comment_ids = [c.id for c, _ in rows]
     reply_counts: dict[str, int] = {}
     if comment_ids:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Full E2E API test suite — live backend with workers, real DB, real HTTP + WebSocket.
+Full E2E API test suite • live backend with workers, real DB, real HTTP + WebSocket.
 Tests every meaningful endpoint with real multi-user flows.
 
 Usage:
@@ -198,7 +198,7 @@ async def test_auth(client: httpx.AsyncClient) -> tuple[str, str]:
 async def test_auth_flows(client: httpx.AsyncClient):
     print("\n[ AUTH FLOWS ]")
 
-    # Verify email (needs a user w/out verified email — skip if we can't create one)
+    # Verify email (needs a user w/out verified email • skip if we can't create one)
     # Instead test resend-verification and forgot-password
     uid = uuid.uuid4().hex[:8]
     email = f"authtest_{uid}@test.com"
@@ -241,12 +241,12 @@ async def test_auth_flows(client: httpx.AsyncClient):
     r = await client.post(f"{BASE_URL}/api/v1/auth/refresh", json={}, headers=auth(token2))
     Results.ok("refresh token") if r.status_code == 200 else Results.skip("refresh token", r.text[:50])
 
-    # Magic link — requires verified email, skip for unverified
+    # Magic link • requires verified email, skip for unverified
     r = await client.post(f"{BASE_URL}/api/v1/auth/magic-link", json={"email": email})
     if r.status_code in (200, 429):
         Results.ok("magic link request")
     elif r.status_code == 401:
-        Results.skip("magic link (unverified email — expected)")
+        Results.skip("magic link (unverified email • expected)")
 
 
 # ── MARKETS ─────────────────────────────────────────────────────────────────
@@ -357,7 +357,7 @@ async def test_market_create(client: httpx.AsyncClient, token: str):
 # ── ORDERS ────────────────────────────────────────────────────────────────────
 
 async def test_orders_buy_sell(client: httpx.AsyncClient, token: str, user_id: str, market_id: str):
-    print("\n[ ORDERS — BUY/SELL ]")
+    print("\n[ ORDERS • BUY/SELL ]")
 
     await _fund_wallet(user_id, 5000.0)
     Results.ok("wallet funded (5000 USDC)")
@@ -416,7 +416,7 @@ async def test_orders_buy_sell(client: httpx.AsyncClient, token: str, user_id: s
 
 async def test_two_user_orderbook(client: httpx.AsyncClient):
     """Alice and Bob both buy YES, then Alice sells to close."""
-    print("\n[ ORDERS — TWO-USER FLOW ]")
+    print("\n[ ORDERS • TWO-USER FLOW ]")
 
     alice_token, alice_id = await _create_user(client, "alice")
     bob_token, bob_id = await _create_user(client, "bob")
@@ -464,7 +464,7 @@ async def test_comments(client: httpx.AsyncClient, token: str, slug: str):
     Results.ok("list comments") if r.status_code == 200 else Results.fail("list comments", r.text)
 
     r = await client.post(f"{BASE_URL}/api/v1/markets/{slug}/comments", json={
-        "content": "E2E test comment — please ignore",
+        "content": "E2E test comment • please ignore",
     }, headers=auth(token))
     if r.status_code in (200, 201):
         Results.ok("create comment")
@@ -507,7 +507,7 @@ async def test_wallet(client: httpx.AsyncClient, token: str):
     r = await client.get(f"{BASE_URL}/api/v1/wallet/transactions", headers=auth(token))
     Results.ok("transactions list") if r.status_code == 200 else Results.fail("transactions", r.text)
 
-    # Deposit — requires Stripe (will work but with test mode)
+    # Deposit • requires Stripe (will work but with test mode)
     r = await client.post(f"{BASE_URL}/api/v1/wallet/deposit", json={
         "amount": "10.0",
     }, headers=auth(token))
@@ -516,7 +516,7 @@ async def test_wallet(client: httpx.AsyncClient, token: str):
     else:
         Results.skip("deposit (provider not configured)", r.text[:80])
 
-    # Withdraw — requires balance and Stripe
+    # Withdraw • requires balance and Stripe
     r = await client.post(f"{BASE_URL}/api/v1/wallet/withdraw", json={
         "amount": "1.0",
     }, headers=auth(token))
@@ -669,7 +669,7 @@ async def test_flags(client: httpx.AsyncClient, token: str, market_id: str):
     print("\n[ FLAGS ]")
     r = await client.post(f"{BASE_URL}/api/v1/flags/", json={
         "market_id": market_id,
-        "reason": "E2E test flag — please resolve",
+        "reason": "E2E test flag • please resolve",
     }, headers=auth(token))
     if r.status_code in (200, 201):
         Results.ok("flag market")
@@ -708,10 +708,10 @@ async def test_flags(client: httpx.AsyncClient, token: str, market_id: str):
 
 async def test_disputes(client: httpx.AsyncClient, token: str, market_id: str):
     print("\n[ DISPUTES ]")
-    # Create dispute — only works on resolved/dispute_window markets
+    # Create dispute • only works on resolved/dispute_window markets
     r = await client.post(f"{BASE_URL}/api/v1/disputes/", json={
         "market_id": market_id,
-        "evidence": "E2E test dispute evidence — market appears manipulated.",
+        "evidence": "E2E test dispute evidence • market appears manipulated.",
         "evidence_url": "https://example.com/evidence",
     }, headers=auth(token))
     if r.status_code in (200, 201):
@@ -944,7 +944,7 @@ async def test_ws_freshness(client: httpx.AsyncClient):
             e = events_received["trade:new"]
             Results.ok(f"WS trade:new event (outcome={e.get('outcome')}, price={e.get('price')})")
         else:
-            Results.ok("WS market events received (no trade:new — AMM pricing only)")
+            Results.ok("WS market events received (no trade:new • AMM pricing only)")
 
         if "orderbook:update" in events_received:
             Results.ok("WS orderbook:update event")
@@ -1434,7 +1434,7 @@ async def test_edge_cases(client: httpx.AsyncClient):
     if r.status_code in (400, 422):
         Results.ok("rejected negative limit price")
     elif r.status_code == 200 and r.json().get("data", {}).get("status") == "pending":
-        # Backend may accept but store the price — verify it's clamped to 0
+        # Backend may accept but store the price • verify it's clamped to 0
         stored_price = r.json()["data"].get("price", "0")
         Results.ok(f"negative limit price clamped (stored={stored_price})")
     else:
@@ -1626,7 +1626,7 @@ async def test_trade_filters(client: httpx.AsyncClient):
 
 async def test_partial_fill(client: httpx.AsyncClient):
     """
-    Alice places a large limit sell. Bob buys a small amount — only partial fill.
+    Alice places a large limit sell. Bob buys a small amount • only partial fill.
     Verify order status transitions: pending → partial → filled.
     """
     print("\n[ PARTIAL FILL ]")
@@ -1646,7 +1646,7 @@ async def test_partial_fill(client: httpx.AsyncClient):
         Results.fail("partial fill: alice initial buy failed", r.text)
         return
 
-    # Alice: sell 10 YES at price 0.5 (limit) — she now has shares to sell
+    # Alice: sell 10 YES at price 0.5 (limit) • she now has shares to sell
     r = await client.post(f"{BASE_URL}/api/v1/orders/", json={
         "market_id": market_id, "outcome": "yes", "side": "sell",
         "order_type": "limit", "amount": "10.0", "limit_price": "0.5",
@@ -1655,7 +1655,7 @@ async def test_partial_fill(client: httpx.AsyncClient):
         Results.fail("partial fill: alice sell failed", r.text)
         return
 
-    # Bob: buy 3 YES (smaller than alice's sell) — partial fill
+    # Bob: buy 3 YES (smaller than alice's sell) • partial fill
     r = await client.post(f"{BASE_URL}/api/v1/orders/", json={
         "market_id": market_id, "outcome": "yes", "side": "buy",
         "order_type": "market", "amount": "3.0",
@@ -1664,7 +1664,7 @@ async def test_partial_fill(client: httpx.AsyncClient):
         Results.fail("partial fill: bob buy failed", r.text)
         return
 
-    # Check alice's order status — should be partial
+    # Check alice's order status • should be partial
     r = await client.get(f"{BASE_URL}/api/v1/orders/", headers=auth(alice_tok))
     if r.status_code == 200:
         orders = r.json().get("data", {}).get("orders", r.json().get("data", []))
@@ -1836,7 +1836,7 @@ async def test_orderbook_freshness(client: httpx.AsyncClient):
     if len(bids_after) > len(bids_before):
         Results.ok("orderbook reflects new order immediately")
     else:
-        # Could be matched immediately — check asks
+        # Could be matched immediately • check asks
         asks_after = ob_after.get("asks", [])
         if len(asks_after) > len(asks_before):
             Results.ok("order matched immediately (ask appeared)")

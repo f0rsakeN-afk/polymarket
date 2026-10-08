@@ -13,7 +13,7 @@ interface UseUserSocketOptions {
 
 /**
  * Consecutive reconnect attempts before the loop parks itself. Backoff stretches
- * to 30s, so this is ~2 minutes of trying — enough to ride out a deploy or a
+ * to 30s, so this is ~2 minutes of trying • enough to ride out a deploy or a
  * dropped connection, without hammering the API for the lifetime of the tab when
  * the endpoint stays unreachable (or the session dies and every handshake is
  * refused). `enabled` flipping back to true restarts the loop.
@@ -99,7 +99,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
 
   useEffect(() => {
     if (!enabled) {
-      // enabled flipped to false — close the socket immediately
+      // enabled flipped to false • close the socket immediately
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       wsRef.current?.close()
       wsRef.current = null
@@ -109,7 +109,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
     }
 
     mountedRef.current = true
-    // Re-enabled (or first enabled) — clear the parked state and try again.
+    // Re-enabled (or first enabled) • clear the parked state and try again.
     gaveUpRef.current = false
     retriesRef.current = 0
     connect()

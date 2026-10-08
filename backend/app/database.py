@@ -68,7 +68,7 @@ def _ensure_session_makers():
         _replica_session_maker = _get_replica_session_maker()
 
 
-# Aliases for backward compatibility — call as async_session() like a sessionmaker
+# Aliases for backward compatibility • call as async_session() like a sessionmaker
 def async_session():
     _ensure_session_makers()
     return _async_session_maker()
@@ -89,7 +89,7 @@ async def get_db() -> AsyncSession:
 
 
 async def get_db_replica() -> AsyncSession:
-    """Read-only replica session — use for list/get endpoints that don't modify data."""
+    """Read-only replica session • use for list/get endpoints that don't modify data."""
     _ensure_session_makers()
     async with _replica_session_maker() as session:
         try:

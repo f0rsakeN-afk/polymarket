@@ -13,7 +13,7 @@ export interface SquareColumnLayout {
 export interface SquareColumnInput {
   /** Raw bar length in pixels (baseline − value) */
   barLengthPx: number;
-  /** Square width/height — typically equals bar width */
+  /** Square width/height • typically equals bar width */
   squareSize: number;
   /** Gap between stacked squares in pixels */
   gap: number;

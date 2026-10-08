@@ -71,7 +71,7 @@ export interface ChoroplethStableContextValue {
   features: ChoroplethFeature[];
   featureCollection: FeatureCollection<Geometry, ChoroplethFeatureProperties>;
 
-  /** Precomputed SVG path strings — one per feature index. */
+  /** Precomputed SVG path strings • one per feature index. */
   featurePaths: readonly (string | null)[];
 
   // Projection function (returns path string)

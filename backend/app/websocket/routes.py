@@ -6,10 +6,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services.rate_limit_service import RateLimitService
 from app.websocket.manager import manager, redis_pubsub, user_manager
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(tags=["websocket"])
 
-MAX_WS_PAYLOAD_SIZE = 64 * 1024  # 64 KB per incoming frame — prevents memory exhaustion
+MAX_WS_PAYLOAD_SIZE = 64 * 1024  # 64 KB per incoming frame • prevents memory exhaustion
 
 # Reuse the same trusted-proxy logic as HTTP middleware
 _TRUSTED_PROXY_IPS = [
@@ -31,8 +31,8 @@ def _get_real_client_ip(websocket: WebSocket) -> str:
 async def authenticate_ws_token(token: str | None) -> tuple[str | None, bool]:
     """Resolve an *optional* access token. Returns `(user_id, token_presented)`.
 
-    The market feeds are public — `GET /markets/{slug}/orderbook`, `GET /trades`
-    and `GET /markets/{slug}/trades` all serve the same data with no auth at all —
+    The market feeds are public • `GET /markets/{slug}/orderbook`, `GET /trades`
+    and `GET /markets/{slug}/trades` all serve the same data with no auth at all •
     so requiring a token to watch prices gated public information behind a login.
     Requiring one was collateral from hardening the *validation* of tokens that are
     presented, not a considered product decision.
@@ -40,15 +40,15 @@ async def authenticate_ws_token(token: str | None) -> tuple[str | None, bool]:
     Absent-token and invalid-token are therefore different answers, and callers
     must treat them differently:
 
-    - `(None, False)` — no token. Anonymous; fine for a public feed.
-    - `(user_id, True)` — valid. Full chain checked, exactly as HTTP does.
-    - `(None, True)` — a token *was* presented and it failed. **Reject.** A logged-out
+    - `(None, False)` • no token. Anonymous; fine for a public feed.
+    - `(user_id, True)` • valid. Full chain checked, exactly as HTTP does.
+    - `(None, True)` • a token *was* presented and it failed. **Reject.** A logged-out
       or revoked session must not quietly continue as an anonymous one, or revoking
       a session would stop meaning anything on these sockets.
 
     Validation is `deps.authenticate_token()`, the same chain HTTP uses: signature,
     `type == "access"`, jti blacklist, `user.is_active`, `sid` session binding. Any
-    failure — including a database error — is reported as invalid, so auth fails
+    failure • including a database error • is reported as invalid, so auth fails
     closed rather than open.
     """
     if not token:
@@ -101,23 +101,23 @@ async def market_websocket(websocket: WebSocket, market_id: str):
     Auth: **optional**. A valid `access_token` cookie (or `?token=` when
     `WS_ALLOW_QUERY_TOKEN=true`) is validated in full and used for the
     per-user connection cap; without one the connection is anonymous.
-    This is deliberate — the REST equivalents of everything pushed here
+    This is deliberate • the REST equivalents of everything pushed here
     (`/markets/{slug}/orderbook`, `/markets/{slug}/trades`) are public, and the
     only frames on this channel are public market events. Private frames
     (`notification`, `order:fill`) ride per-user Redis channels and are served
     by `/ws/notifications/{user_id}` alone.
 
-    A token that *is* presented must still be valid — see
+    A token that *is* presented must still be valid • see
     `authenticate_ws_token`.
 
     On connect the client is subscribed to `market_id`.
     The client may then send:
-      - {type: "subscribe", market_id: "..."}  — add a market subscription
-      - {type: "unsubscribe", market_id: "..."} — remove a market subscription
-      - {type: "ping"}                         — server replies {type: "pong"}
+      - {type: "subscribe", market_id: "..."}  • add a market subscription
+      - {type: "unsubscribe", market_id: "..."} • remove a market subscription
+      - {type: "ping"}                         • server replies {type: "pong"}
 
     The server enforces MAX_SUBSCRIPTIONS_PER_SOCKET (50) per connection, and
-    MAX_CONNECTIONS_PER_IP (50) per IP whether or not the caller is signed in —
+    MAX_CONNECTIONS_PER_IP (50) per IP whether or not the caller is signed in •
     which is what bounds an anonymous socket.
     """
     client_ip = _get_real_client_ip(websocket)
@@ -180,7 +180,7 @@ async def market_websocket(websocket: WebSocket, market_id: str):
 
 @router.websocket("/ws/trades")
 async def global_trades_websocket(websocket: WebSocket):
-    """Global trades feed — streams all new trades across the platform.
+    """Global trades feed • streams all new trades across the platform.
 
     Public, like `GET /trades` whose docstring calls itself a *"Public global
     feed"*. Auth is optional; a token that is presented must be valid.
@@ -220,7 +220,7 @@ async def global_trades_websocket(websocket: WebSocket):
 
 @router.websocket("/ws/notifications/{user_id}")
 async def user_notifications_websocket(websocket: WebSocket, user_id: str):
-    """User notification channel — **auth required**, token's uid must match.
+    """User notification channel • **auth required**, token's uid must match.
 
     This is the only private surface: it serves `user:{uid}:notifications` and
     `user:{uid}:fills`, so an anonymous or mismatched caller is refused outright.

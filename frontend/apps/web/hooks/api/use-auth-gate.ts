@@ -6,7 +6,7 @@ import { useCurrentUser } from "@/hooks/use-auth"
  *
  * Auth is cookie-based, so a 401 is the *expected* answer for a logged-out
  * visitor, not a fault worth retrying or logging. Every hook in this folder that
- * fetches private data must gate on this — `trade-form.tsx` sits on the **public**
+ * fetches private data must gate on this • `trade-form.tsx` sits on the **public**
  * market page, so its ungated wallet fetch produced a `No access token provided`
  * on every anonymous page view.
  *

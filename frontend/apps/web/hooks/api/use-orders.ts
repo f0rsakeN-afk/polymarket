@@ -55,7 +55,7 @@ export function usePlaceOrder() {
           sileo.error({ title: "Market closed", description: apiErrorMessage(err, "This market is no longer active for trading.") })
           break
         case "POST_ONLY_WOULD_CROSS":
-          sileo.error({ title: "Post-only order rejected", description: apiErrorMessage(err, "Order would cross the spread — try increasing your limit price.") })
+          sileo.error({ title: "Post-only order rejected", description: apiErrorMessage(err, "Order would cross the spread • try increasing your limit price.") })
           break
         default:
           sileo.error({ title: "Trade failed", description: apiErrorMessage(err, "Your order could not be placed.") })
@@ -68,7 +68,7 @@ export function useCancelOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: cancelOrder,
-    // Single toast owner — callers only manage their local UI state.
+    // Single toast owner • callers only manage their local UI state.
     onSuccess: (res) => {
       sileo.success({ title: res.message ?? "Order cancelled" })
       qc.invalidateQueries({ queryKey: queryKeys.orders() })

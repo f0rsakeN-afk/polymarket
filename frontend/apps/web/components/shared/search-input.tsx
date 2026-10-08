@@ -35,7 +35,7 @@ export function SearchInput({ className }: SearchInputProps) {
     updateURL(v)
   }, [updateURL])
 
-  // Sync with URL when back/forward is pressed — runs on every navigation
+  // Sync with URL when back/forward is pressed • runs on every navigation
   useEffect(() => {
     if (!isUserTypingRef.current) {
       // Extract q from the URL directly
@@ -44,7 +44,7 @@ export function SearchInput({ className }: SearchInputProps) {
       setValue(q)
     }
     isUserTypingRef.current = false
-  }, []) // Only on mount — back/forward is handled via popstate events
+  }, []) // Only on mount • back/forward is handled via popstate events
 
   // Listen for popstate (back/forward browser buttons)
   useEffect(() => {

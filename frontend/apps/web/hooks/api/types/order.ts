@@ -5,7 +5,7 @@
 
 /**
  * POST /api/v1/orders/quote → { success, data: QuoteResponse, message }
- * Built by OrderService.compute_quote — note there is NO `price` field;
+ * Built by OrderService.compute_quote • note there is NO `price` field;
  * the execution estimate is `price_before` → `price_after`.
  */
 export interface QuoteResponse {
@@ -20,12 +20,12 @@ export interface QuoteResponse {
   slippage: string
   yes_price: string
   no_price: string
-  /** Unix seconds (float) — quote TTL is 5s */
+  /** Unix seconds (float) • quote TTL is 5s */
   expires_at: number
 }
 
 /**
- * One row of GET /api/v1/orders/ — keyset-paginated (cursor, not page).
+ * One row of GET /api/v1/orders/ • keyset-paginated (cursor, not page).
  * `market_question` is only present on the list endpoint.
  */
 export interface Order {
@@ -47,7 +47,7 @@ export interface Order {
   executed_at: string | null
 }
 
-/** GET /api/v1/orders/{id} — same row minus `market_question`. */
+/** GET /api/v1/orders/{id} • same row minus `market_question`. */
 export type SingleOrder = Omit<Order, "market_question">
 
 export interface OrdersResponse {

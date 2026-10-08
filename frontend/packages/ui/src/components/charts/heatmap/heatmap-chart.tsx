@@ -62,9 +62,9 @@ import {
 export type HeatmapLayout = "fluid" | "fill";
 
 export interface HeatmapChartProps {
-  /** Column data — one entry per week (or category) with row bins inside. */
+  /** Column data • one entry per week (or category) with row bins inside. */
   data: HeatmapColumn[];
-  /** Visible time range — filters week columns that overlap the domain. */
+  /** Visible time range • filters week columns that overlap the domain. */
   xDomain?: [Date, Date];
   /**
    * Week columns used for cell sizing when `xDomain` is set. Keeps bin height
@@ -72,8 +72,8 @@ export interface HeatmapChartProps {
    */
   sizingColumnCount?: number;
   /**
-   * `fluid` — width drives square cells; chart height hugs the grid (GitHub-style).
-   * `fill` — expands cells to fill the parent.
+   * `fluid` • width drives square cells; chart height hugs the grid (GitHub-style).
+   * `fill` • expands cells to fill the parent.
    */
   layout?: HeatmapLayout;
   /** Chart margins */
@@ -100,7 +100,7 @@ export interface HeatmapChartProps {
   animationDuration?: number;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers enter replay when it changes. */
+  /** Signature of motion URL state • triggers enter replay when it changes. */
   revealSignature?: string;
   /** Scales wave stagger delays (1 = default). */
   enterStaggerScale?: number;
@@ -120,7 +120,7 @@ export interface HeatmapChartProps {
    */
   columnSeparators?: HeatmapSeparatorParsedConfig;
   /**
-   * First row of the grid — `0` = Sunday (GitHub default), `1` = Monday, etc.
+   * First row of the grid • `0` = Sunday (GitHub default), `1` = Monday, etc.
    * Rotates column bins for display without reshaping source data.
    */
   weekStartDay?: HeatmapWeekStartDay;

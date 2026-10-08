@@ -19,7 +19,7 @@ PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5433}"
 PGUSER="${PGUSER:-postgres}"
 PGDATABASE="${PGDATABASE:-mydatabase}"
-BACKUP_DIR="${BACKUP_DIR:-$HOME/backups/polymarket}"
+BACKUP_DIR="${BACKUP_DIR:-$HOME/backups/PredictX}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 
 log() { printf '[backup] %s\n' "$*" >&2; }
@@ -71,7 +71,7 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 out="$BACKUP_DIR/${PGDATABASE}-${stamp}.dump"
 
 # -Fc (custom format): compressed, and pg_restore can take a single table out
-# of it — plain SQL dumps cannot.
+# of it • plain SQL dumps cannot.
 if ! pg_dump -Fc -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -f "$out"; then
   log "pg_dump FAILED"
   rm -f "$out"

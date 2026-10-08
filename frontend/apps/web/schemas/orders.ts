@@ -11,7 +11,7 @@ export const getQuoteSchema = z.object({
 })
 
 /**
- * POST /api/v1/orders/quote payload — mirrors
+ * POST /api/v1/orders/quote payload • mirrors
  * hooks/api/types/order.ts::QuoteResponse (OrderService.compute_quote).
  * Kept in sync manually; there is no `price` field.
  */

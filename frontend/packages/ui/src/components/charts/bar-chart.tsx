@@ -69,7 +69,7 @@ export interface BarChartProps {
   animationEasing?: string;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers enter replay when it changes. */
+  /** Signature of motion URL state • triggers enter replay when it changes. */
   revealSignature?: string;
   /** Aspect ratio as "width / height". Default: "2 / 1" */
   aspectRatio?: string;
@@ -87,7 +87,7 @@ export interface BarChartProps {
   stackGap?: number;
   /** When set, tooltip Y positions snap to the top square center (shape variant). */
   squareSnap?: { squareGap: number; groupGap?: number; fit?: boolean };
-  /** Child components (Bar, Grid, ChartTooltip, etc.). Optional — omit for a
+  /** Child components (Bar, Grid, ChartTooltip, etc.). Optional • omit for a
    * pure `status="loading"` skeleton. */
   children?: ReactNode;
   /** Reports reveal lifecycle for OG screenshots and loading orchestration. */
@@ -110,7 +110,7 @@ function extractBarConfigs(children: ReactNode): LineConfig[] {
       __isBarDepthLayer?: boolean;
     };
     // Bar-depth surface layers (BarDepthBack/Front, BarPulse) carry a
-    // `dataKey` to pair with a Bar but are not series themselves — skip them
+    // `dataKey` to pair with a Bar but are not series themselves • skip them
     // so they don't inflate the series count and shrink the real bars.
     if (childType.__isBarDepthLayer) {
       return;
@@ -368,7 +368,7 @@ const ChartCore = memo(function ChartCore({
     return scale;
   }, [categoryScale, innerWidth, data.length]);
 
-  // Animation timing — replay when motion settings change
+  // Animation timing • replay when motion settings change
   // biome-ignore lint/correctness/useExhaustiveDependencies: revealSignature
   useEffect(() => {
     setRevealEpoch((n) => n + 1);

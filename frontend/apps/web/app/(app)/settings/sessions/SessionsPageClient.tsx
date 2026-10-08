@@ -81,7 +81,7 @@ function SessionRow({ session, onRevoke, isRevoking }: {
         </div>
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
-        {session.ip_address ?? "—"}
+        {session.ip_address ?? "•"}
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
         {formatDate(session.last_active_at)}

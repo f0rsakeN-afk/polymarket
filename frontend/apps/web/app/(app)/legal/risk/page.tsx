@@ -2,7 +2,7 @@ import { LegalLayout } from "@/components/shared/legal-layout"
 
 export const metadata = {
   title: "Risk Disclosure",
-  description: "Risk disclosure for Polymarket prediction markets.",
+  description: "Risk disclosure for PredictX prediction markets.",
 }
 
 const sections = [
@@ -142,7 +142,7 @@ export default function RiskPage() {
             5. No Investment Advice
           </h2>
           <p>
-            Polymarket does not provide investment, legal, or tax advice. Market
+            PredictX does not provide investment, legal, or tax advice. Market
             prices do not constitute recommendations or endorsements. All
             trading decisions are yours alone. You should consult qualified
             professionals before engaging in prediction market trading.
@@ -182,8 +182,8 @@ export default function RiskPage() {
         <section id="acknowledgment">
           <h2 className="mb-3 text-base font-semibold">8. Acknowledgment</h2>
           <p>
-            By using Polymarket, you acknowledge that you have read, understood,
-            and accepted these risks. You agree that Polymarket and its
+            By using PredictX, you acknowledge that you have read, understood,
+            and accepted these risks. You agree that PredictX and its
             affiliates, officers, and employees are not liable for any losses
             you may incur.
           </p>

@@ -175,7 +175,7 @@ async def test_merge(client: AsyncClient, test_user, test_market, db_session):
     await client.post("/api/v1/split-merge/split", json={"market_id": str(test_market.id), "amount": 10.0})
 
     # Merge fails: split deducts 2% fee, so user holds 9.8 YES + 9.8 NO shares
-    # but tries to merge 10.0 — insufficient on both sides
+    # but tries to merge 10.0 • insufficient on both sides
     resp = await client.post("/api/v1/split-merge/merge", json={"market_id": str(test_market.id), "amount": 10.0})
     assert resp.status_code == 422
     assert "Insufficient YES shares" in resp.json()["error"]

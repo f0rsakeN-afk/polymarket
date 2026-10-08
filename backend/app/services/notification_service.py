@@ -10,7 +10,7 @@ from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 NotificationType = Literal[
     "alert_triggered",

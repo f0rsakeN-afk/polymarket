@@ -4,7 +4,7 @@ import logging
 
 from app.redis import get_redis, redis_cb
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 CODE_TTL = 600  # 10 minutes
 RATE_LIMIT_KEY_TTL = 300  # 5-minute verification attempt window
@@ -14,7 +14,7 @@ SEND_RATE_LIMIT = 5  # max OTP codes generated per email+purpose per window
 class OTPService:
     @staticmethod
     def _generate_code() -> str:
-        # 8-digit base32-compatible (A-Z, 0-9) = 2.8 trillion combos — brute-force infeasible
+        # 8-digit base32-compatible (A-Z, 0-9) = 2.8 trillion combos • brute-force infeasible
         import secrets
         return str(secrets.randbelow(10**8)).zfill(8)
 
@@ -33,7 +33,7 @@ class OTPService:
     async def send_code(email: str, purpose: str) -> str:
         """
         Generate an 8-digit code and store hash in Redis.
-        Returns the plain code — email dispatch is handled by the Celery worker.
+        Returns the plain code • email dispatch is handled by the Celery worker.
         Rate-limited to SEND_RATE_LIMIT codes per email+purpose per window.
         """
         r = await get_redis()
@@ -51,14 +51,14 @@ class OTPService:
             from app.api.exceptions import ValidationError
             raise ValidationError("Too many codes sent. Please wait before requesting another.")
         # Note: _RATE_LIMIT_SCRIPT returns -1 when rate limited, otherwise the
-        # positive counter value. It never returns -2 — the TTL is set inside
+        # positive counter value. It never returns -2 • the TTL is set inside
         # the script itself when count == 1, so no extra EXPIRE is needed here.
 
         code = OTPService._generate_code()
         secret = OTPService._get_secret(email, purpose)
         key = f"otp:{purpose}:{email}"
 
-        # Store ONLY the HMAC of the code — the plaintext must never be
+        # Store ONLY the HMAC of the code • the plaintext must never be
         # written to Redis. Verification recomputes the HMAC from the
         # submitted code, so no plaintext is needed at check time either.
         # (Older entries were stored as "<code>:<hash>"; verify_code accepts
@@ -70,7 +70,7 @@ class OTPService:
         logger.info(f"OTP issued for {email}, purpose={purpose}")
         return code
 
-    # Atomic rate-limit: INCR + TTL set + check in one Lua script — no concurrent bypass
+    # Atomic rate-limit: INCR + TTL set + check in one Lua script • no concurrent bypass
     _RATE_LIMIT_SCRIPT = """
     local key = KEYS[1]
     local limit = tonumber(ARGV[1])
@@ -117,7 +117,7 @@ class OTPService:
 
         if ":" in stored:
             # Legacy "<code>:<hash>" format from before OTP storage became
-            # hash-only — accept until its TTL expires, never write it again.
+            # hash-only • accept until its TTL expires, never write it again.
             plain, legacy_hash = stored.split(":", 1)
             if not hmac.compare_digest(OTPService._hash_code(plain, secret), legacy_hash):
                 return False

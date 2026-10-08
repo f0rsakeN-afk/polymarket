@@ -30,7 +30,7 @@ from app.services.cache_service import (
 )
 from app.services.liquidity_service import LiquidityService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -121,7 +121,7 @@ async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
 
 @router.patch("/users/{user_id}/ban", summary="Ban user (admin)")
 async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Ban a user — deactivates the account and revokes all tokens/sessions."""
+    """Ban a user • deactivates the account and revokes all tokens/sessions."""
     admin = await _get_admin_user(request, db)
 
     result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
@@ -157,7 +157,7 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
 
 @router.patch("/users/{user_id}/unban", summary="Unban user (admin)")
 async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Unban a user — sets is_active=True."""
+    """Unban a user • sets is_active=True."""
     admin = await _get_admin_user(request, db)
 
     result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
@@ -280,7 +280,7 @@ async def _set_market_status(db: AsyncSession, market: Market, new_status: str) 
     )
     if result.first() is None:
         await db.rollback()
-        raise ConflictError("Market was changed by another request — reload and retry")
+        raise ConflictError("Market was changed by another request • reload and retry")
     market.status = new_status
     await db.commit()
     # The public list/detail caches would otherwise keep serving the old status.
@@ -347,11 +347,11 @@ async def approve_market(market_id: str, request: Request, db: AsyncSession = De
     await _get_admin_user(request, db)
     market = await _pending_market(db, market_id)
 
-    # An already-expired submission would go straight into the catalogue dead —
+    # An already-expired submission would go straight into the catalogue dead •
     # it can never be traded, and there is no edit endpoint to fix closes_at.
     if market.closes_at <= datetime.now(UTC):
         raise ValidationError(
-            "Market closes_at is in the past — reject it so the author can resubmit",
+            "Market closes_at is in the past • reject it so the author can resubmit",
             error_code="MARKET_ALREADY_CLOSED",
         )
 

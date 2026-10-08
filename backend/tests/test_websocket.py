@@ -76,7 +76,7 @@ def test_global_trades_websocket_connect_and_ping(ws_client, test_user):
 
 
 def test_global_trades_websocket_is_public(ws_client):
-    """The trades feed is public — like `GET /trades`, whose docstring says so.
+    """The trades feed is public • like `GET /trades`, whose docstring says so.
 
     Gating it behind a login meant a logged-out visitor could read recent trades
     over HTTP but got a 403 on the live ones, and the client then re-opened the
@@ -91,7 +91,7 @@ def test_global_trades_websocket_is_public(ws_client):
 
 
 def test_market_websocket_is_public(ws_client, test_market):
-    """`/ws/markets/{id}` is public too — its REST twins need no auth either."""
+    """`/ws/markets/{id}` is public too • its REST twins need no auth either."""
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
         mock_pubsub.unsubscribe_market = AsyncMock()
@@ -131,7 +131,7 @@ def test_user_notifications_websocket_validtoken_for(ws_client, test_user):
 
 
 def test_user_notifications_websocket_rejects_anonymous(ws_client, test_user):
-    """The personal feed stays private — no token at all means no delivery.
+    """The personal feed stays private • no token at all means no delivery.
 
     This is the one surface that must not be public: it serves
     `user:{uid}:notifications` and `user:{uid}:fills`.
@@ -147,7 +147,7 @@ def test_user_notifications_websocket_rejects_anonymous(ws_client, test_user):
 
 
 def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
-    """WS rejects token that doesn't match user_id in path — server closes with 4001."""
+    """WS rejects token that doesn't match user_id in path • server closes with 4001."""
     token = token_for(test_user.id)
     wrong_user_id = str(uuid4())
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
@@ -161,7 +161,7 @@ def test_user_notifications_websocket_wrong_user_id(ws_client, test_user):
 
 
 def test_user_notifications_websocket_invalidtoken_for(ws_client, test_user):
-    """WS rejects invalid token — server closes with 4001."""
+    """WS rejects invalid token • server closes with 4001."""
     invalid_token = "invalid.token.here"
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()
@@ -182,7 +182,7 @@ def test_market_websocket_unknown_message_type(ws_client, test_market, test_user
         mock_pubsub.unsubscribe_market = AsyncMock()
         with ws_client.websocket_connect(f"/ws/markets/{test_market.id}?token={token}") as ws:
             ws.send_json({"type": "unknown_type", "data": "ignored"})
-            # Should not raise — connection stays open
+            # Should not raise • connection stays open
             ws.send_json({"type": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
@@ -210,7 +210,7 @@ def test_user_notifications_websocket_missingtoken_for(ws_client, test_user):
     """WS with no token in query string closes connection."""
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()
-        # Missing token entirely — connection should be closed by server
+        # Missing token entirely • connection should be closed by server
         with pytest.raises(Exception):
             with ws_client.websocket_connect(f"/ws/notifications/{test_user.id}"):
                 pass
@@ -221,7 +221,7 @@ def test_user_notifications_websocket_missingtoken_for(ws_client, test_user):
 # These exist because `_cleanup_dead` shipped as dead code: the docstring said
 # "kept for periodic sweeps only" and nothing ever scheduled a sweep. A
 # half-open socket (closed laptop, NAT timeout, killed container) therefore was
-# never reaped — it kept its file descriptor and its per-IP counter slot, and
+# never reaped • it kept its file descriptor and its per-IP counter slot, and
 # broadcast-failure detection never saw it because a quiet market never
 # broadcasts. The regression to guard is "the sweep is wired up and called".
 
@@ -264,7 +264,7 @@ def test_heartbeat_reaps_a_socket_whose_send_hangs():
 
 
 def test_heartbeat_leaves_a_healthy_socket_alone():
-    """A socket that answers a ping is NOT disconnected — no false positives."""
+    """A socket that answers a ping is NOT disconnected • no false positives."""
     import asyncio
 
     from app.websocket.manager import ConnectionManager
@@ -310,8 +310,8 @@ def test_heartbeat_loop_is_started_by_the_app_lifespan():
 # Two bugs found in the first version of the sweep, both of which the original
 # tests missed:
 #
-#   1. It walked only `_market_subs`, so notification sockets — which live in
-#      `UserConnectionManager` — were never pinged and never reaped. Those are
+#   1. It walked only `_market_subs`, so notification sockets • which live in
+#      `UserConnectionManager` • were never pinged and never reaped. Those are
 #      the long-lived per-user sockets, i.e. exactly the ones most likely to be
 #      half-open after a laptop sleeps.
 #   2. It awaited each socket *sequentially* at SEND_TIMEOUT_S each. Fifty wedged
@@ -373,7 +373,7 @@ def test_heartbeat_once_composes_both_registries():
     mgr = ConnectionManager()
 
     # heartbeat_once does `len(market_dead)`, so return a list of stand-ins
-    # whose length is the reap count — not an int.
+    # whose length is the reap count • not an int.
     async def market_sweep(_sockets):
         return [object(), object()]
 

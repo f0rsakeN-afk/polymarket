@@ -2,7 +2,7 @@ import { LegalLayout } from "@/components/shared/legal-layout"
 
 export const metadata = {
   title: "Terms of Service",
-  description: "Terms of service for Polymarket prediction markets.",
+  description: "Terms of service for PredictX prediction markets.",
 }
 
 const sections = [
@@ -34,7 +34,7 @@ export default function TermsPage() {
             1. Acceptance of Terms
           </h2>
           <p>
-            By accessing or using Polymarket, you agree to be bound by these Terms
+            By accessing or using PredictX, you agree to be bound by these Terms
             of Service (&ldquo;Terms&rdquo;). If you do not agree, you may not
             use the platform.
           </p>
@@ -50,7 +50,7 @@ export default function TermsPage() {
             </li>
             <li>
               You are not a resident of a restricted jurisdiction as determined
-              by Polymarket.
+              by PredictX.
             </li>
             <li>
               Your use of the platform complies with all applicable laws and
@@ -86,7 +86,7 @@ export default function TermsPage() {
               specified at market creation.
             </li>
             <li>
-              Polymarket reserves the right to cancel or void markets in cases of
+              PredictX reserves the right to cancel or void markets in cases of
               manifest error, manipulation, or technical failure.
             </li>
             <li>
@@ -103,7 +103,7 @@ export default function TermsPage() {
         <section id="fees">
           <h2 className="mb-3 text-base font-semibold">5. Fees</h2>
           <p>
-            Polymarket charges a protocol fee on each trade as disclosed on the
+            PredictX charges a protocol fee on each trade as disclosed on the
             platform. Fees are subject to change with reasonable notice. You are
             responsible for any applicable taxes.
           </p>
@@ -114,7 +114,7 @@ export default function TermsPage() {
           <p>
             Markets are resolved by authorized administrators based on the
             resolution criteria. Resolution decisions are final and binding. In
-            the event of a dispute, Polymarket&rsquo;s internal review process
+            the event of a dispute, PredictX&rsquo;s internal review process
             shall be the sole remedy.
           </p>
         </section>
@@ -150,7 +150,7 @@ export default function TermsPage() {
           </h2>
           <p>
             All content on the platform, including but not limited to text,
-            graphics, logos, and software, is the property of Polymarket or its
+            graphics, logos, and software, is the property of PredictX or its
             licensors and is protected by intellectual property laws.
           </p>
         </section>
@@ -160,7 +160,7 @@ export default function TermsPage() {
             9. Limitation of Liability
           </h2>
           <p>
-            Polymarket and its affiliates shall not be liable for any indirect,
+            PredictX and its affiliates shall not be liable for any indirect,
             incidental, special, consequential, or punitive damages arising from
             your use of the platform. The platform is provided &ldquo;as
             is&rdquo; without warranties of any kind, either express or implied.

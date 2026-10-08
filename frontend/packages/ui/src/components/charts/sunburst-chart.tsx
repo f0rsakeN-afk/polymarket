@@ -92,7 +92,7 @@ export interface SunburstChartProps {
   focusId?: string;
   /** Called when focus changes via segment click or breadcrumb. */
   onFocusChange?: (focusId: string) => void;
-  /** Controlled hover — arc index in the arcs array. */
+  /** Controlled hover • arc index in the arcs array. */
   hoveredIndex?: number | null;
   onHoverChange?: (index: number | null) => void;
   hoverPop?: number;

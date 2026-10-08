@@ -1,7 +1,7 @@
 import logging
 import time
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX = 100  # max emails per window per purpose
@@ -24,7 +24,7 @@ def _check_rate_limit(purpose: str) -> bool:
 
 
 def _send_email_sync(to_email: str, subject: str, body: str):
-    """Send email synchronously. Used as Celery fallback — mirrors tasks.send_email logic."""
+    """Send email synchronously. Used as Celery fallback • mirrors tasks.send_email logic."""
     try:
         import smtplib
         from email.message import EmailMessage
@@ -76,23 +76,23 @@ class EmailService:
     ):
         # Build email content
         if purpose == "verify":
-            subject = f"Your Polymarket verification code: {code}"
+            subject = f"Your PredictX verification code: {code}"
             body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "magic" and magic_url:
-            subject = "Your Polymarket login link"
+            subject = "Your PredictX login link"
             body = f"Click this link to sign in: {magic_url}\n\nThis link expires in 15 minutes."
         elif purpose == "magic":
-            subject = f"Your Polymarket login code: {code}"
+            subject = f"Your PredictX login code: {code}"
             body = f"Your login code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "resetpwd":
-            subject = f"Your Polymarket password reset code: {code}"
+            subject = f"Your PredictX password reset code: {code}"
             body = f"Your password reset code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "exists":
             # Sent when someone tries to register an address that already has
             # a verified account. The HTTP response stays byte-identical to a
-            # fresh registration (no account enumeration) — this email is the
+            # fresh registration (no account enumeration) • this email is the
             # only thing that tells the owner what happened.
-            subject = "You already have a Polymarket account"
+            subject = "You already have a PredictX account"
             body = (
                 "Someone tried to register with this email address, but an "
                 "account already exists.\n\n"
@@ -101,11 +101,11 @@ class EmailService:
                 "- your account and password are unchanged."
             )
         else:
-            subject = f"Your Polymarket code: {code}"
+            subject = f"Your PredictX code: {code}"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
         # Try Celery first, fall back to direct sync send
-        # C7 fix: removed daemon thread — fire-and-forget thread is lost on gunicorn restart
+        # C7 fix: removed daemon thread • fire-and-forget thread is lost on gunicorn restart
         # and bursts create unbounded threads. Celery delay is non-blocking (Redis push).
         if not _check_rate_limit(purpose):
             logger.warning(f"[EMAIL] Rate limit exceeded for purpose={purpose}, queuing for retry")

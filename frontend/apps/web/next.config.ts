@@ -19,7 +19,7 @@ const isDev = process.env.NODE_ENV !== "production"
 /**
  * `connect-src` must list EVERY origin the browser talks to, or fetch/WS are
  * silently blocked in production (localhost-only values are a dev fallback).
- * `script-src 'unsafe-eval'` is dropped in production — Next does not need it
+ * `script-src 'unsafe-eval'` is dropped in production • Next does not need it
  * to hydrate; it is only ever needed by dev-mode tooling.
  */
 const csp = [
@@ -54,7 +54,7 @@ const nextConfig: NextConfig = {
           { key: "X-XSS-Protection", value: "1; mode=block" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()" },
-          // Only meaningful over TLS — ignore in local dev.
+          // Only meaningful over TLS • ignore in local dev.
           ...(siteOrigin.startsWith("https://")
             ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
             : []),

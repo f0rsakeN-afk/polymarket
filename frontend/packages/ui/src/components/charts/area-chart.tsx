@@ -39,13 +39,13 @@ export interface AreaChartProps {
   animationEasing?: string;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers reveal replay when it changes. */
+  /** Signature of motion URL state • triggers reveal replay when it changes. */
   revealSignature?: string;
   /** Aspect ratio as "width / height". Default: "2 / 1" */
   aspectRatio?: string;
   /** Additional class name for the container */
   className?: string;
-  /** Loading vs ready — drives chart phase and loading chrome. Default: `"ready"`. */
+  /** Loading vs ready • drives chart phase and loading chrome. Default: `"ready"`. */
   status?: ChartStatus;
   /** Centered shimmer label while loading. */
   loadingLabel?: string;

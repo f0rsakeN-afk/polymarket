@@ -1,5 +1,5 @@
 """
-Locust load test for Polymarket backend.
+Locust load test for PredictX backend.
 Tests ALL API endpoints + WebSocket.
 
 Usage:
@@ -35,7 +35,7 @@ _auth_lock = None  # threading.Lock set lazily
 
 
 def _ensure_auth(client):
-    """Register (ignore 422) + login. Cached after first success — no stomping."""
+    """Register (ignore 422) + login. Cached after first success • no stomping."""
     global _cached_token, _cached_user_id, _auth_lock
     import threading
     if _auth_lock is None:
@@ -89,7 +89,7 @@ class APIBase(FastHttpUser):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FULL API TEST USER — tests every endpoint
+# FULL API TEST USER • tests every endpoint
 # ══════════════════════════════════════════════════════════════════════════════
 
 class RestAPIUser(APIBase):
@@ -99,12 +99,12 @@ class RestAPIUser(APIBase):
 
     @task(8)
     def list_markets(self):
-        """GET /markets — paginated market list, most common endpoint."""
+        """GET /markets • paginated market list, most common endpoint."""
         self.client.get("/api/v1/markets?page=1&page_size=20")
 
     @task(5)
     def list_markets_filtered(self):
-        """GET /markets with filters — tests different query combos."""
+        """GET /markets with filters • tests different query combos."""
         filters = [
             "status=active",
             "status=closed",
@@ -118,7 +118,7 @@ class RestAPIUser(APIBase):
 
     @task(4)
     def get_market_detail(self):
-        """GET /markets/{slug} — market detail page."""
+        """GET /markets/{slug} • market detail page."""
         m = _get_active_market(self.client)
         if m:
             self.client.get(f"/api/v1/markets/{m['slug']}")
@@ -132,7 +132,7 @@ class RestAPIUser(APIBase):
 
     @task(3)
     def get_trades(self):
-        """GET /markets/{slug}/trades — public trade feed."""
+        """GET /markets/{slug}/trades • public trade feed."""
         m = _get_active_market(self.client)
         if m:
             self.client.get(f"/api/v1/markets/{m['slug']}/trades")
@@ -163,24 +163,24 @@ class RestAPIUser(APIBase):
 
     @task(1)
     def get_global_trades(self):
-        """GET /trades — global trade feed."""
+        """GET /trades • global trade feed."""
         self.client.get("/api/v1/trades?page=1&page_size=20")
 
     # ── Authenticated endpoints ───────────────────────────────────────────────
 
     @task(3)
     def get_positions(self):
-        """GET /positions — portfolio view."""
+        """GET /positions • portfolio view."""
         self.client.get("/api/v1/positions", headers=self.headers())
 
     @task(2)
     def get_orders(self):
-        """GET /orders — user's order history."""
+        """GET /orders • user's order history."""
         self.client.get("/api/v1/orders?page=1&page_size=20", headers=self.headers())
 
     @task(2)
     def get_wallet(self):
-        """GET /wallet — balance check."""
+        """GET /wallet • balance check."""
         self.client.get("/api/v1/wallet", headers=self.headers())
 
     @task(1)
@@ -206,7 +206,7 @@ class RestAPIUser(APIBase):
 
     @task(1)
     def place_order(self):
-        """POST /orders — market order (will 400 without wallet balance, but tests the path)."""
+        """POST /orders • market order (will 400 without wallet balance, but tests the path)."""
         m = _get_active_market(self.client)
         if not m:
             return
@@ -228,7 +228,7 @@ class RestAPIUser(APIBase):
 
     @task(1)
     def place_limit_order(self):
-        """POST /orders — limit order."""
+        """POST /orders • limit order."""
         m = _get_active_market(self.client)
         if not m:
             return
@@ -251,7 +251,7 @@ class RestAPIUser(APIBase):
 
     @task(1)
     def create_alert(self):
-        """POST /alerts — price alert."""
+        """POST /alerts • price alert."""
         m = _get_active_market(self.client)
         if not m:
             return
@@ -285,12 +285,12 @@ class RestAPIUser(APIBase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WEB SOCKET USER — holds persistent connections
+# WEB SOCKET USER • holds persistent connections
 # ══════════════════════════════════════════════════════════════════════════════
 
 class WebSocketUser(HttpUser):
     """
-    WebSocket load tester — each user maintains a long-lived WS connection.
+    WebSocket load tester • each user maintains a long-lived WS connection.
     Tests real-time event delivery at scale.
     """
     abstract = True
@@ -322,7 +322,7 @@ class MarketWSUser(WebSocketUser):
             # Stay connected and receive updates for a few seconds
             for _ in range(random.randint(5, 15)):
                 try:
-                    ws.recv()  # drain frames — proves the feed actually delivers
+                    ws.recv()  # drain frames • proves the feed actually delivers
                 except Exception:
                     break
             ws.close()

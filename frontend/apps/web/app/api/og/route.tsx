@@ -49,7 +49,7 @@ export async function GET() {
             marginBottom: 8,
           }}
         >
-          Polymarket
+          PredictX
         </div>
 
         <div

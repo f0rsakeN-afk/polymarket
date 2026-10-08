@@ -30,12 +30,12 @@ export interface Session {
 
 // ─── Shared payload shapes ─────────────────────────────────────────────────────
 
-/** `{ status: "..." }` — logout, refresh, revoke, 2FA and password operations. */
+/** `{ status: "..." }` • logout, refresh, revoke, 2FA and password operations. */
 export interface StatusResponse {
   status: string;
 }
 
-/** `{ message: "..." }` — fire-and-forget notifications (send/resend/reset). */
+/** `{ message: "..." }` • fire-and-forget notifications (send/resend/reset). */
 export interface MessageResponse {
   message: string;
 }
@@ -217,7 +217,7 @@ export const accountApi = {
 
 export interface TwoFactorSetup {
   uri: string;
-  /** Set when the account already has 2FA on — `uri` is then absent. */
+  /** Set when the account already has 2FA on • `uri` is then absent. */
   already_enabled?: boolean;
 }
 

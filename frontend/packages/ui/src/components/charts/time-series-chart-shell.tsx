@@ -135,7 +135,7 @@ export interface TimeSeriesChartInnerProps {
   animationDuration: number;
   animationEasing?: string;
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers reveal replay when it changes. */
+  /** Signature of motion URL state • triggers reveal replay when it changes. */
   revealSignature?: string;
   children: ReactNode;
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -153,7 +153,7 @@ export interface TimeSeriesChartInnerProps {
   composedStackGap?: number;
   /** When set, drives the y-axis max instead of scanning `lines` (e.g. stacked bar totals). */
   yScaleDomainMax?: number;
-  /** Loading vs ready — drives chart phase until transition orchestration lands. */
+  /** Loading vs ready • drives chart phase until transition orchestration lands. */
   chartStatus?: ChartStatus;
   loadingLabel?: string;
   /** Animate y-domain on status / data transitions. Default: true */
@@ -288,7 +288,7 @@ const TimeSeriesChartCore = memo(function TimeSeriesChartCore({
     let maxTime = xDomain
       ? xDomain[1].getTime()
       : (extent(plotData, (d) => xAccessor(d).getTime())[1] ?? minTime);
-    // Brush defines the viewport — projection horizon is included via brush
+    // Brush defines the viewport • projection horizon is included via brush
     // track extent, not by extending past the selection on the main chart.
     if (!xDomain) {
       maxTime = mergeProjectionXDomainMax(maxTime, projectionConfigs);

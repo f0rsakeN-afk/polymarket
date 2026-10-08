@@ -2,7 +2,7 @@ import { LegalLayout } from "@/components/shared/legal-layout"
 
 export const metadata = {
   title: "Privacy Policy",
-  description: "Privacy policy for Polymarket prediction markets.",
+  description: "Privacy policy for PredictX prediction markets.",
 }
 
 const sections = [

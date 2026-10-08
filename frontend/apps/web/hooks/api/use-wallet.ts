@@ -21,7 +21,7 @@ export function useWallet() {
 export function useTransactions() {
   const { enabled } = useAuthGate()
   // GET /api/v1/wallet/transactions is offset-paginated only (no
-  // `next_cursor`/`has_more`) — a full page is the only "more" signal.
+  // `next_cursor`/`has_more`) • a full page is the only "more" signal.
   const PAGE_SIZE = 20
   return useInfiniteQuery({
     queryKey: queryKeys.transactions(),

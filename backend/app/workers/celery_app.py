@@ -4,7 +4,7 @@ from celery.schedules import crontab
 from app.config import settings
 
 celery_app = Celery(
-    "polymarket",
+    "PredictX",
     broker=settings.celery_broker_url,
     include=["app.workers.tasks"],
 )
@@ -32,11 +32,11 @@ celery_app.conf.update(
     # Declare the DLX so RabbitMQ creates it automatically
     broker_transport_options={
         "master_name": "rabbitmq-master",
-        "visibility_timeout": 7200,  # 2h — must exceed max task duration
+        "visibility_timeout": 7200,  # 2h • must exceed max task duration
         # (resolve_market lock uses ex=3600; tasks with long-running
         # settlement need room for retry + completion without re-delivery)
     },
-    # Fallback: Redis broker doesn't support DLX natively — this is a no-op there,
+    # Fallback: Redis broker doesn't support DLX natively • this is a no-op there,
     # but docker-compose / production should use RabbitMQ with the dlx arguments above.
     worker_send_task_events=True,
     task_send_sent_event=True,

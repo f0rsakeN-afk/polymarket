@@ -18,7 +18,7 @@ export type PieCenterShellProps = Omit<PieCenterProps, "children"> & {
   centerValue: number;
   /** Square reference size for pie context (matches `PieChart` `size`) */
   contextSize: number;
-  /** Inner radius in px — must be > 0 so `PieCenter` renders */
+  /** Inner radius in px • must be > 0 so `PieCenter` renders */
   innerRadiusPx: number;
   /**
    * When true (default), the first paint uses `0` then updates to `centerValue`

@@ -1,4 +1,4 @@
-# Defence Runbook — Rehearsing the Live Demo
+# Defence Runbook • Rehearsing the Live Demo
 
 Everything needed to *run* the project and demo it under pressure: what to start, in what order,
 what to show, what to say while showing it, and what to do when something breaks in front of a panel.
@@ -22,7 +22,7 @@ Keep this visible during the demo. Everything else in this document is detail.
 | **2. It trades** | Place a market buy, watch the price move | "The AMM prices from share reserves, so your own trade moves the price." |
 | **3. It's real money** | Wallet balance changes; transaction row appears | "Every balance change is an append-only ledger row with the balance after it." |
 | **4. It's live** | Second tab on the same market; trade appears | "One WebSocket per tab, fed by Redis pub/sub, so any of the 8 workers can push." |
-| **5. It's safe** | Two accounts order simultaneously | "One serialisation point with a fixed lock order — that's the answer to the hard question." |
+| **5. It's safe** | Two accounts order simultaneously | "One serialisation point with a fixed lock order • that's the answer to the hard question." |
 | **6. It's correct** | `pytest -q` output | "387 tests, DB rebuilt from migrations every run." |
 | **7. It's honest** | The gap list | "Here's what I know is wrong, and here's what I'd fix first." |
 
@@ -41,7 +41,7 @@ Keep this visible during the demo. Everything else in this document is detail.
 | Bun | 1.3.x | `bun --version` |
 | Python | 3.13+ (3.14 in CI) | `python3 --version` |
 
-### 1.2 Backend — one time
+### 1.2 Backend • one time
 
 ```bash
 cd backend
@@ -54,7 +54,7 @@ python3 -c "import base64,hashlib;print('TOTP_ENCRYPTION_KEY='+base64.b64encode(
 ```
 
 > **Why the app refuses to boot:** `app/app.py:107-121` raises `RuntimeError` if any of
-> `JWT_SECRET`, `SECRET_KEY` or `TOTP_ENCRYPTION_KEY` is still `change-me-in-production`. Mention it —
+> `JWT_SECRET`, `SECRET_KEY` or `TOTP_ENCRYPTION_KEY` is still `change-me-in-production`. Mention it •
 > "it refuses to start with a known-public secret" is a sentence that lands.
 
 ### 1.3 Start everything
@@ -86,7 +86,7 @@ curl -s localhost:8000/metrics | head  # Prometheus counters exist
 **Do this at least 30 minutes before the defence.** Every failure mode below is cheaper to fix in
 advance than to debug live.
 
-### 1.4 Seed data — strongly recommended
+### 1.4 Seed data • strongly recommended
 
 A fresh database is empty, and an empty prediction market is a bad demo.
 
@@ -100,47 +100,47 @@ comments, disputes, alerts, notifications, referrals, transactions, flags, treas
 history, then prints a row count per table. Seed password is `SEED_PASSWORD` (default
 `testpass123`).
 
-This matters because it means the trade tape, charts, comments and holders list all have content —
+This matters because it means the trade tape, charts, comments and holders list all have content •
 which is what phase 1 and 3 depend on.
 
 ---
 
 ## 2. The demo, phase by phase
 
-### Phase 1 — the product (2 min)
+### Phase 1 • the product (2 min)
 
 Show the markets list, then one market detail page.
 
 **Say:** *"This is a prediction market. A YES share pays $1 if the event happens and $0 if it doesn't.
 When a share costs $0.70, the crowd is saying there's about a 70% chance. You can buy, sell or hold at
-any time at a public price — that's what separates it from a bet."*
+any time at a public price • that's what separates it from a bet."*
 
 **Point at, deliberately:** the two prices, the order book, the volume, the holders list.
 
 **Don't** read the page out. Name three things and move on.
 
-### Phase 2 — it trades (2 min)
+### Phase 2 • it trades (2 min)
 
 Buy some shares. Watch the price move against you.
 
 **Say:** *"The pool is priced by share ratio, not a constant-product curve. Price is YES shares over
-total shares. So when I buy, I take YES shares out of the pool and push the ratio — and I'm paying the
+total shares. So when I buy, I take YES shares out of the pool and push the ratio • and I'm paying the
 post-trade price, which is why a buy-then-sell round trip can only ever return the fees, never more."*
 
-That last clause is the answer to *"isn't this an exploit?"* — say it before you're asked.
+That last clause is the answer to *"isn't this an exploit?"* • say it before you're asked.
 
 If you want to show a **resting limit order**, place one priced away from the market and show it in
 the orders list with funds visibly locked. That demonstrates the money side of order placement, which
 is the part most demos skip.
 
-### Phase 3 — real money (1 min)
+### Phase 3 • real money (1 min)
 
 Show the wallet before and after, then the transactions table.
 
 **Say:** *"Every balance change is an append-only ledger row that stores the balance after it. So the
-ledger is self-auditing — I can replay it and check it sums. It's the same pattern as a bank."*
+ledger is self-auditing • I can replay it and check it sums. It's the same pattern as a bank."*
 
-### Phase 4 — it's live (2 min)
+### Phase 4 • it's live (2 min)
 
 Open a second browser tab on the same market. Trade in one.
 
@@ -148,17 +148,17 @@ Open a second browser tab on the same market. Trade in one.
 every one of the eight workers has its own listener, and each pushes only to its own sockets. So it
 doesn't matter which worker handled the order."*
 
-Then reconnect deliberately — kill your network or stop the API — and show it recovering. *"Exponential
+Then reconnect deliberately • kill your network or stop the API • and show it recovering. *"Exponential
 backoff capped at eight attempts, about two minutes. Without a cap it would retry for the lifetime of
 the tab."*
 
-### Phase 5 — it's safe (2–3 min) ← the important one
+### Phase 5 • it's safe (2–3 min) ← the important one
 
 This is the phase that answers *"two users buy at the same instant"*.
 
 Open two private windows (or two accounts), place orders on the same market at the same time.
 
-**Say:** *"There's exactly one serialisation point — the order service takes row locks on the market,
+**Say:** *"There's exactly one serialisation point • the order service takes row locks on the market,
 the pool and the wallets, always in that order. Then the matching engine re-checks that a seller
 actually has the shares before it mutates anything. And because the order is fixed, two transactions
 can't deadlock."*
@@ -173,7 +173,7 @@ cd backend && .venv/bin/pytest tests/test_concurrency.py -q
 > and asserts the invariants hold. A green concurrency suite is the most convincing 3 seconds of a
 > demo you can produce.
 
-### Phase 6 — it's correct (1 min)
+### Phase 6 • it's correct (1 min)
 
 ```bash
 cd backend && .venv/bin/pytest -q
@@ -182,12 +182,12 @@ cd backend && .venv/bin/pytest -q
 **Say:** *"387 tests across 22 files. The test database is dropped and rebuilt from the Alembic
 migrations on every single run, so a stale schema can never make a failing test pass."*
 
-### Phase 7 — it's honest (2 min) ← do not skip
+### Phase 7 • it's honest (2 min) ← do not skip
 
 Open `docs/README.md` → "Known gaps we admit rather than hide".
 
 **Say:** *"These are the things I know are wrong. There's no frontend test suite at all. The escrow
-audit only logs — nothing alerts on it. Five CHECK constraints are in my models but missing from my
+audit only logs • nothing alerts on it. Five CHECK constraints are in my models but missing from my
 migrations. I have no kill switch. I'd fix the audit alerting first, because it protects the money."*
 
 Naming gaps unprompted scores more than being asked and conceding.
@@ -225,12 +225,12 @@ This section is the reason to read this document. Have the fallback ready.
 | Cause | Fix |
 |---|---|
 | Placeholder secret still in `.env` | Generate all three (see §1.2). The app refuses to boot on purpose. |
-| Postgres not up | `docker ps` — then `docker compose -f docker-compose.dev.yml up -d` |
+| Postgres not up | `docker ps` • then `docker compose -f docker-compose.dev.yml up -d` |
 | Migration not run | `uv run alembic upgrade head` |
 | Port 8000 taken | `lsof -i :8000` → `backend/stop.sh` |
 
 The startup code **waits up to 60 seconds** for Postgres and Redis before giving up
-(`app/app.py:151-186`) — so if it fails, the dependency genuinely isn't there.
+(`app/app.py:151-186`) • so if it fails, the dependency genuinely isn't there.
 
 ### 4.2 Prices don't move live
 
@@ -244,7 +244,7 @@ docker logs -f <redis-container>      # Redis up?
 ```
 
 Remember the design: **Redis pub/sub failing never breaks a trade.** If orders fill but nothing
-pushes, it's Redis fan-out, not the money path — which is itself a good thing to say out loud.
+pushes, it's Redis fan-out, not the money path • which is itself a good thing to say out loud.
 
 ### 4.3 Frontend shows stale/empty data
 
@@ -253,7 +253,7 @@ Most likely cause: the API base URL. It's baked in at **build** time from
 
 Second most likely: `credentials: "include"` isn't reaching the backend because of a cookie domain
 mismatch between `localhost:3000` and `localhost:8000`. Cookies are host-scoped and **ignore ports**,
-so a host-only cookie from `:8000` is sent to `:8000` just fine — if you're seeing this, something
+so a host-only cookie from `:8000` is sent to `:8000` just fine • if you're seeing this, something
 has reintroduced a `Domain=` attribute.
 
 ### 4.4 Tests fail on a clean machine
@@ -261,7 +261,7 @@ has reintroduced a `Domain=` attribute.
 | Cause | Fix |
 |---|---|
 | Test infra not up | `docker start pm-postgres pm-redis` (ports 5433 / 6380) |
-| Stale test DB | It's dropped and recreated automatically — if it still fails, check Postgres is actually reachable |
+| Stale test DB | It's dropped and recreated automatically • if it still fails, check Postgres is actually reachable |
 | `DATABASE_URL` drift | `conftest.py` forces the DB name to `mydatabase_test`; don't override it |
 
 ### 4.5 The nuclear option
@@ -284,8 +284,8 @@ Practise saying the *short* answer first, then offer the long one.
 | "What's the hardest part?" | Order execution under concurrency → `trading-engine.md` §2, `docker-concurrency-realtime.md` §B |
 | "Why these technologies?" | `viva-questions.md` §A2–A4 |
 | "What would you do differently?" | `viva-questions.md` §M |
-| "Is this legal / is it gambling?" | `trading-engine.md` §7 — have the caveat ready, don't waffle |
-| "How do you know it's correct?" | Phase 5/6 — run the tests |
+| "Is this legal / is it gambling?" | `trading-engine.md` §7 • have the caveat ready, don't waffle |
+| "How do you know it's correct?" | Phase 5/6 • run the tests |
 
 **If you don't know**, say so precisely and say what you'd check:
 
@@ -301,7 +301,7 @@ admitted gap.
 
 **The night before**
 - [ ] `.env` has three real secrets
-- [ ] `pytest -q` is green — note the count
+- [ ] `pytest -q` is green • note the count
 - [ ] `bun run lint` and `bun run typecheck` clean
 - [ ] Seed the database
 - [ ] Read `docs/README.md` gap list out loud once
@@ -326,7 +326,7 @@ Have a real answer. The strongest roadmap, in order:
 
 1. **Alert on the escrow audit violations.** The detection already works and logs structured events;
    nothing watches them. Cheapest fix with the highest value.
-2. **Frontend tests for the two subtle files** — the API client's refresh state machine and the
+2. **Frontend tests for the two subtle files** • the API client's refresh state machine and the
    WebSocket reconnect logic. Turn the explanatory comments into tests.
 3. **A kill switch.** A prediction market with no way to halt trading during an incident is a real
    operational gap.
@@ -334,5 +334,5 @@ Have a real answer. The strongest roadmap, in order:
 5. **A real admin audit trail.** Right now the only admin action recorded is ban/unban, and the actor
    isn't recoverable from the API.
 
-Each of these is concrete, scoped, and justified by something already written down — which is exactly
+Each of these is concrete, scoped, and justified by something already written down • which is exactly
 what "what's next" should sound like.

@@ -43,7 +43,7 @@ type SearchParams = { tag?: string; q?: string }
 /**
  * Server-rendered homepage shell. The three content queries run ON THE
  * SERVER in parallel (one fast backend hop, no client waterfall) and seed
- * React Query via initialData — first paint already contains real markets,
+ * React Query via initialData • first paint already contains real markets,
  * which is what LCP measures. If the backend is unreachable, seeds are
  * undefined and the client hooks fetch as before (graceful degradation).
  */

@@ -7,7 +7,7 @@ from redis.asyncio.sentinel import Sentinel
 
 from app.config import settings
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 # ─── Shared Redis client (one connection pool per worker process) ────────────
 # Sentinel-backed: if REDIS_SENTINEL_URLS is set, clients connect via Sentinel
@@ -125,7 +125,7 @@ class RedisCircuitBreaker:
                 half_open_acquired = True
 
         if half_open_acquired:
-            # We already hold the semaphore — if we return/raise early the finally
+            # We already hold the semaphore • if we return/raise early the finally
             # releases it.  No need to track half_open_acquired separately for that case.
             pass
 

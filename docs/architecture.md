@@ -1,4 +1,4 @@
-# Polymarket Clone — Architecture
+# PredictX Clone • Architecture
 
 **Stack**: FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery
 **Target**: 50k users, prod-grade, scalable
@@ -7,22 +7,22 @@
 
 ## Project Structure
 
-The real tree — verified against the filesystem. (An earlier version of this section listed
+The real tree • verified against the filesystem. (An earlier version of this section listed
 `app/main.py`, `app/api/users.py`, `app/models/outcome.py`, `app/models/transaction.py`,
 `app/services/{auth,trading,settlement}.py`, `app/amm/lp.py`, `app/orderbook/` and a legacy
 `config/` directory. **None of those exist**; the entry point is `app/app.py`, outcomes live in
 `app/models/market.py`, transactions in `app/models/wallet.py, and the order book is
-`app/services/matching_engine.py` — there is no `app/orderbook/` package.)
+`app/services/matching_engine.py` • there is no `app/orderbook/` package.)
 
 ```
 backend/
 ├── app/
 │   ├── app.py                 # FastAPI app factory, lifespan, middleware, router mounts
-│   ├── config.py              # Pydantic settings — every env var (see background-jobs.md)
+│   ├── config.py              # Pydantic settings • every env var (see background-jobs.md)
 │   ├── database.py            # engines, pools, session factories, get_db / get_db_replica
 │   ├── deps.py                # auth dependency, session validation, cookie flags, role checks
 │   ├── redis.py               # async + sync clients, Sentinel, RedisCircuitBreaker
-│   ├── api/                   # REST routers  (all mounted under /api/v1 — see §API Endpoints)
+│   ├── api/                   # REST routers  (all mounted under /api/v1 • see §API Endpoints)
 │   │   ├── app-agnostic: exceptions.py, handlers.py, responses.py, middleware.py
 │   │   ├── trading:  markets.py, orders.py, liquidity.py, split_merge.py, positions.py,
 │   │   │             trades.py, market_activity.py
@@ -30,7 +30,7 @@ backend/
 │   │   ├── money:    wallet.py, webhooks.py
 │   │   ├── platform: comments.py, alerts.py, notifications.py, referrals.py,
 │   │   │             flags.py, disputes.py, treasury.py, admin.py
-│   ├── models/                # 24 SQLAlchemy tables — full reference in data-model.md
+│   ├── models/                # 24 SQLAlchemy tables • full reference in data-model.md
 │   │   ├── base.py            # Base, TimestampMixin, UUIDMixin
 │   │   ├── user.py            # users, refresh_tokens, sessions
 │   │   ├── market.py          # markets, outcomes
@@ -53,7 +53,7 @@ backend/
 │   │   └── otp_service.py, totp_service.py, password_strength_service.py,
 │   │       market_service.py, wallet_service.py
 │   ├── amm/
-│   │   └── engine.py          # BinaryAMM — share-ratio pricing, NOT x·y = k
+│   │   └── engine.py          # BinaryAMM • share-ratio pricing, NOT x·y = k
 │   ├── middleware/
 │   │   ├── metrics.py         # Prometheus counters + histogram
 │   │   └── request_id.py      # validated X-Request-ID propagation
@@ -193,7 +193,7 @@ idx_markets_slug           ON markets(slug) UNIQUE
 
 ## AMM Engine (`app/amm/engine.py`)
 
-### Price model — share-ratio, not x·y = k
+### Price model • share-ratio, not x·y = k
 
 ```
 price(YES) = yes_shares / (yes_shares + no_shares)
@@ -201,7 +201,7 @@ price(NO)  = no_shares  / (yes_shares + no_shares)   # the two always sum to 1
 ```
 
 Prices are a **ratio of the pool's two share reserves**, so `p(YES) + p(NO) = 1` by
-construction — which is exactly what the split/merge primitives need, since 1 USDC mints one
+construction • which is exactly what the split/merge primitives need, since 1 USDC mints one
 YES + one NO pair. There is deliberately **no `x*y = k` invariant**: a buy only ever grows one
 side, so for `k` to be preserved the other side would have to shrink, which the operation never
 does. `yes_shares * no_shares` rises on a buy and falls on a sell. The invariant the engine
@@ -217,7 +217,7 @@ C_net          = C - fee
 shares_out     = (C_net - R + sqrt((R - C_net)^2 + 4 * C_net * T)) / 2     # positive root
 R             += shares_out
 ```
-Shares are solved so the buyer pays the **post-trade price on every share** — i.e. price impact
+Shares are solved so the buyer pays the **post-trade price on every share** • i.e. price impact
 is charged, not ignored. Charge the pre-trade spot price instead (the old behaviour) and a
 buy→sell loop returns *more* than it cost: anyone could drain the pool.
 
@@ -230,7 +230,7 @@ R             -= S
 
 **Invariant:** because buys are charged at the post-trade price and sells are credited at the
 pre-trade price (both the adverse side for the trader), any round trip returns exactly
-`(1 - f)^2` of the input. At the default 2% fee that is 96.04% — the fee is the only thing a
+`(1 - f)^2` of the input. At the default 2% fee that is 96.04% • the fee is the only thing a
 round trip can cost, and profit from it is impossible. Enforced by
 `tests/test_amm.py::test_round_trip_returns_only_fees`.
 
@@ -242,7 +242,7 @@ round trip can cost, and profit from it is impossible. Enforced by
 - Fees accrue to `pool.protocol_fees` and are swept to the treasury at settlement.
 
 ### Atomic execution
-AMM state updates are **not** Redis-Lua — they are ordinary `Decimal` mutations performed inside
+AMM state updates are **not** Redis-Lua • they are ordinary `Decimal` mutations performed inside
 the same database transaction as the rest of the order, under the market → pool → wallet →
 position lock order (`order_service.py`). Concurrency safety comes from those row locks plus
 `SKIP LOCKED` on the book, not from Redis.
@@ -261,14 +261,14 @@ Related flags: `post_only` (reject rather than cross the spread) and `max_slippa
 AMM leg if the effective price is worse than expected by more than the tolerance, 0–10%).
 
 **Units** (this is the single most misread part of the code): `amount` is a **USDC budget for a
-BUY** and a **share count for a SELL**. `Order.remaining_amount` follows the same convention —
+BUY** and a **share count for a SELL**. `Order.remaining_amount` follows the same convention •
 USDC left for buys, shares left for sells. Every comparison in the engine converts accordingly.
 
 ### Market order flow (`order_service.execute_order`)
 1. Lock **market → pool → wallet** in that fixed order (deadlock-free serialization point).
 2. `client_order_id` idempotency check inside the lock (plus a UNIQUE index as backstop).
 3. Balance/holding guard: buys need `amount` free USDC, sells need `amount` shares held.
-4. `MatchingEngine.match_order_against_book()` — price-time priority, `SKIP LOCKED`, maker price.
+4. `MatchingEngine.match_order_against_book()` • price-time priority, `SKIP LOCKED`, maker price.
 5. Compute the remainder and take it from the AMM at the current pool price (impact-aware).
 6. Slippage / `post_only` / FOK checks, then persist order + positions + **trades** (book legs
    and the AMM leg both write `Trade` rows) + wallet + market volume in **one transaction**.
@@ -287,10 +287,10 @@ USDC left for buys, shares left for sells. Every comparison in the engine conver
 
 ### Endpoints
 ```
-POST /auth/register     — create account
-POST /auth/login        — set access + refresh HTTP-only cookies
-POST /auth/refresh      — rotate access token
-POST /auth/logout       — revoke refresh token, clear cookies
+POST /auth/register     • create account
+POST /auth/login        • set access + refresh HTTP-only cookies
+POST /auth/refresh      • rotate access token
+POST /auth/logout       • revoke refresh token, clear cookies
 POST /auth/forgot-password
 POST /auth/reset-password
 ```
@@ -375,9 +375,9 @@ POST /webhooks/stripe               # idempotent deposit processing
 
 ### Endpoints
 ```
-WS /ws/markets/{market_id}   public   — prices, order book, trades, comments
-WS /ws/trades                public   — every trade across the platform
-WS /ws/notifications/{uid}   private  — that user's notifications and fills
+WS /ws/markets/{market_id}   public   • prices, order book, trades, comments
+WS /ws/trades                public   • every trade across the platform
+WS /ws/notifications/{uid}   private  • that user's notifications and fills
 ```
 
 Market data is public because the REST equivalents (`GET /markets/{slug}/orderbook`,
@@ -396,7 +396,7 @@ channels and requires the token's uid to match the path.
 ```
 
 Private frames (`order:fill`, `notification`, `alert:triggered`) are **not** on the market
-channel — they are published to `user:{uid}:fills` / `user:{uid}:notifications` and reach
+channel • they are published to `user:{uid}:fills` / `user:{uid}:notifications` and reach
 the client only over `/ws/notifications/{uid}`.
 
 ### Multi-Server Sync
@@ -465,14 +465,14 @@ Server → Wallet.lock() immediately, confirm after Stripe webhook
 | User session | 15min | Access token cache |
 | Rate limit | sliding | Per-user request limiting |
 | Order lock | 30s | Prevent double-execution |
-| Celery broker | — | Task queue |
-| Pub/Sub | — | WS cross-server sync |
+| Celery broker | • | Task queue |
+| Pub/Sub | • | WS cross-server sync |
 
 ---
 
 ## Frontend Integration
 
-The frontend is **built** — a Next.js 16 / React 19 app in a Bun + Turborepo monorepo under
+The frontend is **built** • a Next.js 16 / React 19 app in a Bun + Turborepo monorepo under
 [`frontend/`](frontend.md). The plan described here is what was actually implemented:
 
 - REST for CRUD, wallet operations and all reads

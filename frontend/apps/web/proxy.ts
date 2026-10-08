@@ -1,16 +1,16 @@
 /**
- * Proxy (Next 16's middleware) — validates session cookies on protected pages,
+ * Proxy (Next 16's middleware) • validates session cookies on protected pages,
  * redirects unauthenticated users to login, rotates expired sessions.
  *
  * Runs on the Node.js runtime (Next 16: the `edge` runtime is not supported
- * here), so a plain `fetch` to the API is fine — but its cookies are NOT the
+ * here), so a plain `fetch` to the API is fine • but its cookies are NOT the
  * browser's. Every call must forward the incoming cookie explicitly and every
  * `Set-Cookie` the API returns must be replayed onto our own response, or the
  * rotated tokens never reach the browser.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-// `config` is reserved below for Next's matcher — alias the app config.
+// `config` is reserved below for Next's matcher • alias the app config.
 import { config as appConfig } from "@/lib/config";
 
 const API_BASE = appConfig.apiUrl;
@@ -46,7 +46,7 @@ function readSetCookies(res: Response): string[] {
   return raw ? [raw] : [];
 }
 
-/** `Set-Cookie` must be appended one at a time — a single set overwrites. */
+/** `Set-Cookie` must be appended one at a time • a single set overwrites. */
 function applySetCookies(response: NextResponse, setCookies: string[]) {
   for (const cookie of setCookies) response.headers.append("set-cookie", cookie);
 }
@@ -68,7 +68,7 @@ async function validateSession(request: NextRequest): Promise<SessionCheck> {
       const user = await fetchMe(`${ACCESS_COOKIE}=${accessToken}`);
       if (user) return { user, setCookies: [] };
     } catch {
-      // network error — fall through to refresh, then to "not logged in"
+      // network error • fall through to refresh, then to "not logged in"
     }
   }
 
@@ -126,7 +126,7 @@ function isProtected(pathname: string): boolean {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Protected pages — checked BEFORE the public/static fast-path so that a
+  // Protected pages • checked BEFORE the public/static fast-path so that a
   // lookalike URL (e.g. `/settings/report.json`) can never skip authentication.
   if (isProtected(pathname)) {
     const { user, setCookies } = await validateSession(request);
@@ -137,7 +137,7 @@ export async function proxy(request: NextRequest) {
       applySetCookies(redirect, setCookies);
       return redirect;
     }
-    // Validate before setting — never trust a malformed backend payload.
+    // Validate before setting • never trust a malformed backend payload.
     const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
     const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email);
     if (!isValidUuid || !isValidEmail) {
@@ -148,7 +148,7 @@ export async function proxy(request: NextRequest) {
     return nextResponse(setCookies);
   }
 
-  // Auth pages — redirect to the target if already logged in
+  // Auth pages • redirect to the target if already logged in
   if (AUTH_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     const { user, setCookies } = await validateSession(request);
     if (user) {
@@ -164,7 +164,7 @@ export async function proxy(request: NextRequest) {
     return nextResponse(setCookies);
   }
 
-  // Static / public paths — no auth needed
+  // Static / public paths • no auth needed
   if (
     PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ||
     pathname.startsWith("/_next") ||
@@ -174,7 +174,7 @@ export async function proxy(request: NextRequest) {
     return nextResponse();
   }
 
-  // Everything else — apply security headers only.
+  // Everything else • apply security headers only.
   return nextResponse();
 }
 

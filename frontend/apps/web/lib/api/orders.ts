@@ -15,7 +15,7 @@ export type { OrdersResponse, PlaceOrderResponse, QuoteResponse }
 export type PlaceOrderPayload = z.infer<typeof placeOrderSchema>
 
 /**
- * GET /api/v1/orders/ — keyset pagination. Pass the previous page's
+ * GET /api/v1/orders/ • keyset pagination. Pass the previous page's
  * `next_cursor` back as `cursor`; there is no `page` parameter.
  */
 export function listOrders(params?: {

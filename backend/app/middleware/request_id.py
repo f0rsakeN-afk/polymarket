@@ -6,7 +6,7 @@ from collections.abc import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 # Inbound IDs are echoed into responses and logs: accept only a safe charset
 # and length so callers can't inject log lines or oversized values.

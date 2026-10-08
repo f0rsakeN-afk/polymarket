@@ -52,7 +52,7 @@ export interface CandlestickChartProps {
   animationDuration?: number;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers enter replay when it changes. */
+  /** Signature of motion URL state • triggers enter replay when it changes. */
   revealSignature?: string;
   /** Aspect ratio as "width / height". Default: "2 / 1" */
   aspectRatio?: string;

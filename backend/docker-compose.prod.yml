@@ -1,4 +1,4 @@
-name: polymarket-backend
+name: PredictX-backend
 
 services:
   postgres:
@@ -7,13 +7,13 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+      POSTGRES_DB: ${POSTGRES_DB:-PredictX}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-polymarket}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-PredictX}"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -84,7 +84,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
       # Per-worker prometheus files live on the container tmpfs
@@ -127,7 +127,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
@@ -166,7 +166,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polymarket}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-PredictX}
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/1
     command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info", "-s", "/var/beatdata/celerybeat-schedule"]
@@ -193,14 +193,14 @@ services:
 
 networks:
   backend:
-    name: polymarket-backend
+    name: PredictX-backend
     driver: bridge
 
 volumes:
   pgdata:
-    name: polymarket-pgdata
+    name: PredictX-pgdata
   redisdata:
-    name: polymarket-redisdata
+    name: PredictX-redisdata
   beatdata:
-    name: polymarket-beatdata
+    name: PredictX-beatdata
   nginx-logs:

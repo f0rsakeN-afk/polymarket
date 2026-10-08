@@ -21,7 +21,7 @@ from prometheus_client import (
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 REQUESTS_TOTAL = Counter(
     "http_requests_total",
@@ -41,7 +41,7 @@ REQUEST_DURATION = Histogram(
 # are set from ConnectionManager (in-process state, so `.inc()/.dec()` on
 # connect/disconnect is exact); the counters are monotonic event totals.
 #
-# `ws_connections` is PER PROCESS — the connection caps are per process too (see
+# `ws_connections` is PER PROCESS • the connection caps are per process too (see
 # `ConnectionManager` docstring), so fleet-wide totals are the sum across workers.
 WS_CONNECTIONS = Gauge(
     "ws_connections",
@@ -75,7 +75,7 @@ WS_MESSAGES_FANNED_OUT = Counter(
 
 def _route_template(request: Request) -> str:
     # scope["route"] is populated by the router downstream; read AFTER call_next.
-    # Fall back to the raw path (may carry IDs — acceptable for unmapped paths).
+    # Fall back to the raw path (may carry IDs • acceptable for unmapped paths).
     route = request.scope.get("route")
     template = getattr(route, "path", None)
     return template or request.url.path

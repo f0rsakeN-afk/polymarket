@@ -55,7 +55,7 @@ function MarketCard({ className }: { className?: string }) {
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         {/*<span className="text-[10px] font-bold tracking-widest text-muted-foreground">
-          POLYMARKET
+          PredictX
         </span>*/}
         <div className="flex rounded-md border border-border p-0.5">
           {(["shares", "bought", "activity"] as Tab[]).map((tab) => (

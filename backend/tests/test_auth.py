@@ -60,7 +60,7 @@ async def test_register_duplicate_email_is_not_enumerable(client: AsyncClient, t
     indistinguishable from registering a new one.
 
     It used to answer 409 "An account with this email already exists. Please
-    sign in." — a free oracle for "does this person have an account here?",
+    sign in." • a free oracle for "does this person have an account here?",
     which is exactly what login brute-force tooling wants. The owner is told
     by email instead; the HTTP response never changes shape.
     """
@@ -80,7 +80,7 @@ async def test_register_duplicate_email_is_not_enumerable(client: AsyncClient, t
 
     a, b = existing.json(), fresh.json()
     assert a["success"] is True and b["success"] is True
-    # Same message, same data keys, same status — only the echoed email differs.
+    # Same message, same data keys, same status • only the echoed email differs.
     assert a["message"] == b["message"]
     assert set(a["data"]) == set(b["data"]) == {"email", "status"}
     assert a["data"]["status"] == b["data"]["status"] == "pending_verification"
@@ -343,7 +343,7 @@ def _cookie_value(resp, name: str) -> str:
 
     The auth cookies are scoped to Domain=localhost, and httpx's jar drops a
     cookie whose domain does not match the request host (tests hit
-    `testserver`) — so read the header directly instead of the jar.
+    `testserver`) • so read the header directly instead of the jar.
     """
     prefix = f"{name}="
     for header in resp.headers.get_list("set-cookie"):
@@ -367,7 +367,7 @@ async def _login(client: AsyncClient, user) -> str:
 
 @pytest.mark.asyncio
 async def test_refresh_rotation_inherits_the_chain_deadline(client: AsyncClient, test_user):
-    """A rotated token must keep the original chain deadline — renewing the
+    """A rotated token must keep the original chain deadline • renewing the
     session cannot buy it more time than the login granted."""
     from app.api.auth import _hash_refresh_token, _refresh_chain_deadline
 
@@ -394,7 +394,7 @@ async def test_refresh_chain_stops_at_the_absolute_deadline(
     client: AsyncClient, test_user, db_session
 ):
     """Past the chain deadline the refresh is refused AND the whole chain is
-    revoked — not just the presented token."""
+    revoked • not just the presented token."""
     from sqlalchemy import select
 
     from app.api.auth import _chain_key, _hash_refresh_token

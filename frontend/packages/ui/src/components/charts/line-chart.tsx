@@ -43,7 +43,7 @@ export interface LineChartProps {
   aspectRatio?: string;
   /** Additional class name for the container */
   className?: string;
-  /** Loading vs ready — drives chart phase and loading chrome. Default: `"ready"`. */
+  /** Loading vs ready • drives chart phase and loading chrome. Default: `"ready"`. */
   status?: ChartStatus;
   /** Centered shimmer label while loading. */
   loadingLabel?: string;

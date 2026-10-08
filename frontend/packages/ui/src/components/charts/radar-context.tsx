@@ -67,7 +67,7 @@ export interface RadarStableContextValue {
   staggerScale: number;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Changes when motion settings change — replays enter animations. */
+  /** Changes when motion settings change • replays enter animations. */
   motionReplayKey: string;
 
   // Computed helpers
