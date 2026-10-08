@@ -20,7 +20,7 @@ is usually the document.
 | [`background-jobs.md`](background-jobs.md) | Celery config + the **8-task beat schedule**, the idempotency guard on every task, the **nightly escrow audit**, cache-aside with tag sets, the rate limiter (sliding window in Lua, progressive friction), Redis Sentinel + circuit breaker, Prometheus metrics, health probes, and the **middleware ordering** | Asked "what runs in the background?", "how do you know it works?", "how do you monitor it?" |
 | [`frontend.md`](frontend.md) | Next.js 16 / React 19 / Turborepo / Bun: routing and route groups, server vs client components, the three-layer data client, React Query tuning, the **WebSocket singleton**, cookie-only auth, the chart system, bundle splitting, and an honest list of dead code and content bugs | Asked anything about the client |
 | [`architecture.md`](architecture.md) | System shape, request/response envelope, endpoint groups, order flows, Celery and WebSocket overview, Stripe, Decimal rules | You need the 5-minute map |
-| [`testing-and-ci.md`](testing-and-ci.md) | **387 tests and what each file proves**, the fixtures that make them trustworthy, the 3 tests worth demoing live, the CI pipeline and its coverage gaps, the Locust harness, and the honest limits | Asked "how do you know it works?", or you're running the demo |
+| [`testing-and-ci.md`](testing-and-ci.md) | **511 tests and what each file proves**, the fixtures that make them trustworthy, the 3 tests worth demoing live, the CI pipeline and its coverage gaps, the Locust harness, and the honest limits | Asked "how do you know it works?", or you're running the demo |
 | [`deployment.md`](deployment.md) | Production checklist: env vars, Alembic migration strategy, compose stack, health checks, Redis Sentinel, trusted proxies, beat schedule, log shipping | You're deploying or operating it |
 | [`demo-script.md`](demo-script.md) | **The runbook for the live demo** • start-up order, a 7-phase demo script with what to say, live-code targets, what to do when it breaks, and the final checklist | The day of the defence |
 | [`viva-questions.md`](viva-questions.md) | **322 questions across A–R, each with a full spoken-word answer** a non-programmer can deliver, plus a glossary and a numbers cheat sheet | Rehearsing • this is the drill sheet |
@@ -98,11 +98,12 @@ chain, the `?token=` WebSocket handshake, CI moved to the repository root
 
 ### Related tests
 
-Backend: **22 files, 387 test functions**, in `backend/tests/`. Run with:
+Backend: **30 files, 511 tests**, in `backend/tests/`. Frontend: **11 files, 118 tests**, in
+`frontend/apps/web/__tests__/`. Run with:
 
 ```bash
 docker start pm-postgres pm-redis     # test infra (ports 5433 / 6380)
-cd backend && .venv/bin/pytest -q
+cd backend && uv run pytest -q
 ```
 
 The DB is **dropped and rebuilt from migrations on every run** (`conftest.py:80-135`) • a stale schema
