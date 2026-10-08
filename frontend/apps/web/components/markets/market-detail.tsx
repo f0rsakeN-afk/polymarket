@@ -31,6 +31,7 @@ import {
   type MarketPriceCache,
 } from "@/lib/live-price"
 import { apiErrorMessage } from "@/lib/api/client"
+import { outcomeColor, plottedOutcomeColors } from "@/lib/outcome-colors"
 
 // visx/d3 chart code splits into its own chunk and never SSR-renders •
 // the detail page paints text/orderbook first, charts hydrate after.
@@ -316,11 +317,6 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     [market]
   )
 
-  const chartColors = useMemo(
-    () => ["var(--chart-1)", "var(--chart-5)", "var(--chart-3)", "var(--chart-4)", "var(--chart-2)", "var(--chart-6)", "var(--chart-7)", "var(--chart-8)"],
-    []
-  )
-
   const stats = useMemo(() => activity ? [
     { label: "Volume", value: `$${(Number(activity.market_stats.total_volume) / 1e6).toFixed(1)}M` },
     { label: "Liquidity", value: `$${(Number(activity.market_stats.total_liquidity) / 1e6).toFixed(1)}M` },
@@ -447,7 +443,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 : outcomeList.slice(0, 4).map((outcome, i) => (
                     <div key={outcome.id} className="flex items-center gap-2">
                       <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
-                      <div className="text-lg font-bold tabular-nums" style={{ color: chartColors[i % chartColors.length] }}>
+                      <div className="text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
                         {Math.round(priceFor(outcome.name, 0) * 100)}¢
                       </div>
                     </div>
@@ -508,9 +504,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                   <LiveLine key="No" dataKey="No" stroke="var(--destructive)" fill />
                 </>
               ) : (
-                // Multi-outcome: one line per outcome, capped at 4 to avoid visual overload
-                outcomeNames.slice(0, 4).map((name, i) => (
-                  <LiveLine key={name} dataKey={name} stroke={chartColors[i % chartColors.length]} fill />
+                // Multi-outcome: one line per outcome, capped for legibility.
+                // plottedOutcomeColors pairs each name with its own colour so the
+                // two cannot drift apart.
+                plottedOutcomeColors(outcomeNames).map(({ name, color }) => (
+                  <LiveLine key={name} dataKey={name} stroke={color} fill />
                 ))
               )}
             </LiveLineChart>

@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react"
 import Link from "next/link"
 import type { MarketResponse } from "@/hooks/api/types/market"
+import { outcomeColor } from "@/lib/outcome-colors"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -99,18 +100,6 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
 
 // ─── Multi-outcome layout: compact 2-column grid ───────────────────────────────
 
-// Semantic chart tokens • adapts to light/dark automatically
-const MULTI_COLORS = [
-  "var(--chart-1)",
-  "var(--destructive)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-  "var(--primary)",
-  "var(--ring)",
-]
-
 function MultiOutcomeCell({
   outcome,
   color,
@@ -164,7 +153,7 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
         <MultiOutcomeCell
           key={o.id ?? o.outcome_index}
           outcome={o}
-          color={MULTI_COLORS[i % MULTI_COLORS.length]!}
+          color={outcomeColor(i)}
           marketSlug={marketSlug}
         />
       ))}
