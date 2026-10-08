@@ -794,11 +794,41 @@ started in the app lifespan and cancelled on shutdown. Three details that matter
 3. **Pinging is a *send*, so it's bounded by `SEND_TIMEOUT_S` like everything else** — one wedged
    socket costs 2 s of one sweep pass, not the loop.
 
-`heartbeat_once()` returns how many it reaped, so a spike is visible in the log rather than
-silent. `test_websocket.py` pins all three behaviours: a hanging send is reaped with cause
-`heartbeat`, a responsive socket is **not** reaped (no false positives), and — the regression that
-mattered — the lifespan actually *schedules* the loop. That last assertion was verified by
-temporarily reverting the wiring and confirming the test fails.
+`heartbeat_once()` returns how many it reaped, so a spike is visible in the log rather than silent.
+
+### Three bugs in the first version of the sweep
+
+Wiring up a working-but-unused method is not the same as shipping a working sweep. The first version
+had three defects, each of which the obvious tests missed:
+
+1. **It only swept market sockets.** Notification sockets live in a separate
+   `UserConnectionManager`, so `all_sockets()` — which walks `_market_subs` — never saw them. Those
+   are the long-lived per-user sockets, i.e. exactly the ones most likely to be half-open after a
+   laptop sleeps, so the leak persisted for precisely the case the heartbeat was added to fix.
+   `heartbeat_once()` now composes both registries.
+2. **It pinged sequentially.** `for ws in sockets: await wait_for(send)` at `SEND_TIMEOUT_S = 2.0`
+   means fifty wedged sockets take **100 s** against a 30 s interval — sweeps pile up, and fifty
+   thousand *healthy* sockets would take minutes. Both managers now ping under a bounded semaphore
+   with `asyncio.gather`, matching what `_bounded_send` already did correctly for real frames.
+3. **A test that passed for the wrong reason.** Calling `user_manager.heartbeat_once()` directly
+   proves the *user* sweep works, but says nothing about whether the *composition* invokes it —
+   delete that line and the test still passes. The regression is the dropped line, so that is what
+   is now asserted.
+
+Both fixes are pinned by tests that were each verified by **sabotage**, not assumption:
+
+| Sabotage | Test that caught it |
+|---|---|
+| Notification sweep removed from the composition | `test_heartbeat_once_composes_both_registries` |
+| `SEND_CONCURRENCY` forced to 1 (sequential) | `test_heartbeat_is_concurrent_not_sequential` |
+| `heartbeat_loop()` call replaced with a no-op | `test_heartbeat_loop_is_started_by_the_app_lifespan` |
+
+Plus two behavioural tests — a hanging send is reaped with cause `heartbeat`, and a responsive socket
+is **not** (a reaper that reaps everything is worse than none).
+
+> The lesson worth stating in a defence: all three bugs were found by *asking what the code does
+> when it runs*, not by reading it. A method that works, is covered by tests, and is never called is
+> the failure mode unit tests are worst at catching — the tests pass, and the feature is absent.
 
 ### Metrics: the realtime layer was invisible
 

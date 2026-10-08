@@ -6,7 +6,7 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 > Written from `backend/tests/`, `backend/pytest.ini`, `.github/workflows/ci.yml`,
 > `backend/scripts/{locustfile.py,audit_escrow.py,backup_db.sh}`.
 >
-> **Current state: 384 tests across 22 files. Zero frontend tests.** See `frontend.md` §10.
+> **Current state: 387 tests across 22 files. Zero frontend tests.** See `frontend.md` §10.
 
 ---
 
@@ -14,7 +14,7 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 
 | | Count | Worth quoting? |
 |---|---|---|
-| Backend tests | **384** across **22** files | Yes — with the *why*, see below |
+| Backend tests | **387** across **22** files | Yes — with the *why*, see below |
 | Test files | 22 | Yes, if asked what's covered |
 | Frontend tests | **0** | **Yes — volunteer it** |
 
@@ -24,7 +24,7 @@ invariant, `test_concurrency.py` fires parallel orders at one market, `test_escr
 every invariant *and* that a healthy pool reports zero violations, and `test_task_integration.py`
 drives the Celery tasks with no broker at all.
 
-That's a defence. "384 tests" is a number.
+That's a defence. "387 tests" is a number.
 
 ---
 
@@ -88,7 +88,7 @@ Two details that show the tests are written carefully:
 | `test_auth.py` | 25 | Registration guards, **duplicate email not enumerable**, login variants, 2FA setup/wrong code, `/me`, sessions, logout-all (+ token actually revoked), change-password, and the **two refresh-chain tests** |
 | `test_admin.py` | 21 | User listing, search, **banning an admin is forbidden**, audit-event listing, protocol-fee distribution admin-only + the empty case |
 | `test_disputes.py` | 12 | Full dispute lifecycle: resolved-market-only, active rejected, admin-only proposal/adjudication, upheld/dismissed, invalid ruling |
-| `test_websocket.py` | 17 | Connect/ping/pong, reconnect subscribes a different market, **market and trades feeds are public**, invalid token still rejected, notification socket rejects anonymous/wrong user/invalid token, **plus the heartbeat sweep: a hanging send is reaped with cause `heartbeat`, a responsive socket is not, and the lifespan actually schedules the loop** |
+| `test_websocket.py` | 20 | Connect/ping/pong, reconnect subscribes a different market, **market and trades feeds are public**, invalid token still rejected, notification socket rejects anonymous/wrong user/invalid token, **plus the heartbeat sweep: a hanging send is reaped with cause `heartbeat`, a responsive socket is not, and the lifespan actually schedules the loop** |
 | `test_webhooks.py` | 14 | **Stripe signature verification as the primary subject**: invalid signature, missing header, **stale timestamp**, tampered payload, **unconfigured secret fails closed**, invalid JSON; plus idempotent delivery |
 | `test_task_integration.py` | 14 | Runs Celery task bodies via `asyncio.to_thread(task.run)` — **no broker needed**. Sweeper fills a resting buy once the price crosses, leaves unreachable orders alone, expires and frees funds, no-ops when nothing moved, only touches marked markets, **falls back to a full scan when Redis is gone**. Also the fee sweep including the **shortfall carried forward** case. |
 | `test_security_fixes.py` | 12 | Regression suite for **nine named historical breaks** (the header lists all nine): revoked-session/blacklisted-token WS rejection, `?token=` gated off, XFF ignored without a trusted proxy, **OTP plaintext never in Redis**, origin allowlist outside production, refresh has its own bucket, cookies accepted by a standard jar, dummy bcrypt hash cached, AMM buy writes a Trade row |
@@ -308,7 +308,7 @@ Today it isn't; that's a gap.
 
 ## 11. One-paragraph summary, for reading aloud
 
-> Correctness is demonstrated with 384 tests across 22 files, and the design decision behind them is
+> Correctness is demonstrated with 387 tests across 22 files, and the design decision behind them is
 > that the test database is dropped and rebuilt from the Alembic migrations before every run — so a
 > stale schema can never make a failing test pass, and the migrations are exercised on every run too.
 > The tests authenticate through the real refresh-token and session-binding path rather than a test

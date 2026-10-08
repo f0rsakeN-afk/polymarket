@@ -359,6 +359,38 @@ class ConnectionManager:
             except Exception:
                 pass
 
+    async def _ping_many(self, sockets: list[WebSocket]) -> list[WebSocket]:
+        """Ping sockets concurrently under a bounded semaphore; return the dead.
+
+        Concurrent and bounded on purpose. The obvious sequential loop is a
+        scalability bug: at `SEND_TIMEOUT_S = 2.0`, fifty wedged sockets take
+        100s — three times the 30s sweep interval, so sweeps pile up. Fifty
+        thousand healthy sockets would take minutes. `_bounded_send` already
+        had this right for frames; the sweep now does the same for pings.
+        """
+        if not sockets:
+            return []
+
+        sem = asyncio.Semaphore(self.SEND_CONCURRENCY)
+        dead: list[WebSocket] = []
+
+        async def ping(ws: WebSocket) -> None:
+            try:
+                async with sem:
+                    await asyncio.wait_for(
+                        ws.send_json({"type": "ping"}), timeout=self.SEND_TIMEOUT_S
+                    )
+                WS_SENDS_TOTAL.labels("ok").inc()
+            except TimeoutError:
+                WS_SENDS_TOTAL.labels("timeout").inc()
+                dead.append(ws)
+            except Exception:
+                WS_SENDS_TOTAL.labels("failed").inc()
+                dead.append(ws)
+
+        await asyncio.gather(*(ping(ws) for ws in sockets), return_exceptions=True)
+        return dead
+
     async def _cleanup_dead(self, sockets: list[WebSocket]):
         """Probe sockets and disconnect the unresponsive ones.
 
@@ -366,37 +398,38 @@ class ConnectionManager:
         market never receives a broadcast, so broadcast-failure detection alone
         never reaps it. This was dead code until the sweep was wired up.
         """
-        dead: list[WebSocket] = []
-        for ws in sockets:
-            # Skip if already disconnected
-            if ws not in self._ws_subscriptions:
-                continue
-            try:
-                await asyncio.wait_for(ws.send_json({"type": "ping"}), timeout=self.SEND_TIMEOUT_S)
-            except Exception:
-                dead.append(ws)
+        live = [ws for ws in sockets if ws in self._ws_subscriptions]
+        dead = await self._ping_many(live)
         if dead:
             # `_disconnect_many` labels the metric, so the cause stays accurate.
             await self._disconnect_many(dead, cause="heartbeat")
         return dead
 
     def all_sockets(self) -> list[WebSocket]:
-        """Every socket this worker currently holds (no locks — a concurrent
-        unsubscribe may be missed for one pass; the next sweep catches it)."""
+        """Every *market* socket this worker currently holds (no locks — a
+        concurrent unsubscribe may be missed for one pass; the next sweep
+        catches it). Notification sockets are a separate registry and are swept
+        by `heartbeat_once`, not here."""
         out: list[WebSocket] = []
         for socks in self._market_subs.values():
             out.extend(socks)
         return out
 
     async def heartbeat_once(self) -> int:
-        """One ping sweep over every local socket. Returns how many were reaped."""
-        sockets = self.all_sockets()
-        if not sockets:
-            return 0
-        dead = await self._cleanup_dead(sockets)
-        if dead:
-            logger.warning(f"WS heartbeat reaped {len(dead)} unresponsive socket(s)")
-        return len(dead)
+        """One ping sweep over every local socket, market *and* notification.
+
+        Returns how many were reaped. Both registries have to be swept: the
+        notification sockets live in `UserConnectionManager`, so a sweep that
+        only walked `_market_subs` would leave every logged-in user's socket
+        unreaped — precisely the long-lived ones most likely to be half-open.
+        """
+        reaped = 0
+        market_dead = await self._cleanup_dead(self.all_sockets())
+        reaped += len(market_dead)
+        reaped += await user_manager.heartbeat_once()
+        if reaped:
+            logger.warning(f"WS heartbeat reaped {reaped} unresponsive socket(s)")
+        return reaped
 
     async def heartbeat_loop(self, interval_s: float = 30.0) -> None:
         """Periodically probe every socket so a half-open one cannot leak.
@@ -457,6 +490,10 @@ class UserConnectionManager:
     """Per-user notification WS connections. Per-user locks, fire-and-forget sends."""
 
     SEND_TIMEOUT_S = 2.0
+    # Bound concurrent heartbeat pings for the same reason as the market
+    # manager's sweep: unbounded concurrency on a large fan-out would
+    # materialise one task per socket per tick.
+    SEND_CONCURRENCY = 1000
 
     def __init__(self):
         self._user_socks: dict[str, set[WebSocket]] = defaultdict(set)
@@ -495,11 +532,17 @@ class UserConnectionManager:
         if not sockets:
             return
 
+        # Unbounded `asyncio.gather` over a fan-out is the same hazard the
+        # market manager avoids with `_bounded_send`: one task per socket per
+        # tick. These sockets are per-user so the fan-out is naturally small,
+        # but the bound costs nothing and keeps the two paths symmetrical.
+        sem = asyncio.Semaphore(self.SEND_CONCURRENCY)
         dead: list[WebSocket] = []
 
         async def safe_send(ws: WebSocket):
             try:
-                await asyncio.wait_for(ws.send_json(event), timeout=self.SEND_TIMEOUT_S)
+                async with sem:
+                    await asyncio.wait_for(ws.send_json(event), timeout=self.SEND_TIMEOUT_S)
                 WS_SENDS_TOTAL.labels("ok").inc()
             except TimeoutError:
                 WS_SENDS_TOTAL.labels("timeout").inc()
@@ -516,14 +559,53 @@ class UserConnectionManager:
             except Exception:
                 pass
 
-    async def _cleanup_dead_user(self, user_id: str, sockets: list[WebSocket]):
-        for ws in sockets:
-            if ws not in self._ws_to_user:
-                continue
+    def all_sockets(self) -> list[WebSocket]:
+        """Every notification socket this worker holds."""
+        return list(self._ws_to_user.keys())
+
+    async def _ping_many(self, sockets: list[WebSocket]) -> list[WebSocket]:
+        """Bounded-concurrency ping sweep — see ConnectionManager._ping_many.
+
+        Sequential here would be just as wrong as it was there: these are the
+        long-lived per-user sockets, so a page left open overnight is exactly
+        the half-open case, and N wedged sockets would serialise to N × 2s.
+        """
+        if not sockets:
+            return []
+        sem = asyncio.Semaphore(self.SEND_CONCURRENCY)
+        dead: list[WebSocket] = []
+
+        async def ping(ws: WebSocket) -> None:
             try:
-                await ws.send_json({"type": "ping"})
+                async with sem:
+                    await asyncio.wait_for(
+                        ws.send_json({"type": "ping"}), timeout=self.SEND_TIMEOUT_S
+                    )
+                WS_SENDS_TOTAL.labels("ok").inc()
+            except TimeoutError:
+                WS_SENDS_TOTAL.labels("timeout").inc()
+                dead.append(ws)
             except Exception:
-                await self.disconnect(ws, user_id, cause="heartbeat")
+                WS_SENDS_TOTAL.labels("failed").inc()
+                dead.append(ws)
+
+        await asyncio.gather(*(ping(ws) for ws in sockets), return_exceptions=True)
+        return dead
+
+    async def heartbeat_once(self) -> int:
+        """Reap unresponsive notification sockets. Called from the single
+        heartbeat loop so there is exactly one timer, not one per manager."""
+        live = [ws for ws in self.all_sockets() if ws in self._ws_to_user]
+        dead = await self._ping_many(live)
+        for ws in dead:
+            try:
+                await self.disconnect(ws, self._ws_to_user.get(ws, "unknown"), cause="heartbeat")
+            except Exception:
+                pass
+        return len(dead)
+
+    async def _cleanup_dead_user(self, user_id: str, sockets: list[WebSocket]):
+        await self._ping_many([ws for ws in sockets if ws in self._ws_to_user])
 
 
 user_manager = UserConnectionManager()

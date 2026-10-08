@@ -440,8 +440,23 @@ per-tab* — but it also means a hot reload creates a new `_conn = null` while t
 open and still referenced by the old module's closures. The browser keeps the TCP connection; the
 server keeps the file descriptor and the slot in that IP's counter. A handful of edits and you have
 leaked sockets the app can no longer reference. Fixed with a `hot.dispose` hook and a `pagehide`
-listener, both of which close explicitly (`teardownSocket`) rather than trusting TCP teardown, and
-both nulling `_conn` first so nothing new can attach to a dying socket.
+listener, both of which close explicitly (`teardownSocket`) rather than trusting TCP teardown.
+
+**Three bugs found while writing that fix, all worth recording:**
+
+1. *Nulling the module variable on `pagehide` was wrong.* The provider captures the connection
+   object in a `useRef` at mount, so replacing the module variable leaves the provider pointing at a
+   dead connection while any newly-mounted component gets a **second, fresh** one — two connections,
+   one orphaned, which is exactly the flapping this design exists to prevent. `teardownSocket` now
+   nulls `_conn` **only on HMR**, where the whole module is being replaced anyway.
+2. *Clearing `subs` would have been wrong too.* Consumers hold handlers in `subs`; emptying it would
+   strand every mounted component — handlers registered, but the socket they route through gone,
+   giving silent dead updates. Only `ws` is cleared, so the next `subscribe` takes the normal
+   `if (!c.ws) connect()` path and recovery needs no second code path.
+3. *The reconnect timer had to be cleared before anything else*, or a pending reconnect would
+   resurrect the socket deliberately closed a moment earlier.
+
+Full reference: `use-market-socket.tsx` (`teardownSocket`, near the end of the file).
 
 > **A regression caught while making this change, worth remembering:** the obvious "improvement" of
 > adding a `readyState === OPEN` guard to `wsSubscribe` would have been a **new bug**. If a second
@@ -731,7 +746,7 @@ than being caught out.
 have caught. That is a good, honest framing: *"the comments are archaeology from bugs; the fix is to
 turn each comment into a test."*
 
-The backend, by contrast, has **22 test files / 384 test functions** — so the correct framing is
+The backend, by contrast, has **22 test files / 387 test functions** — so the correct framing is
 *"coverage is deep on the money and concurrency paths, and absent on the client"*, not "we don't test".
 
 ---

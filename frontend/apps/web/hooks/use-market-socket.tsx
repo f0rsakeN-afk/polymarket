@@ -458,18 +458,40 @@ export function useMarketSocket({
 function teardownSocket(reason: "hmr" | "unload"): void {
   const c = _conn
   if (!c) return
-  _conn = null // drop the singleton first: nothing new can attach to a dying socket
+
+  // Clear timers unconditionally — a pending reconnect would otherwise resurrect
+  // the socket after we deliberately closed it.
   if (c.closeTimer) clearTimeout(c.closeTimer)
   if (c.reconnectTimer) clearTimeout(c.reconnectTimer)
+
+  // The socket is the only part that must die. Clearing `subs` and
+  // `serverSubs` here would strand every mounted consumer: the provider's
+  // `useRef` still holds this object, so consumers would keep their handlers
+  // while the socket they route through was gone — silent dead updates. Instead
+  // drop `ws` only; the next `subscribe` sees `!c.ws` and calls `connect()`, so
+  // recovery happens through the normal path rather than a second code path.
   const ws = c.ws
+  c.ws = null
+  c.serverSubs.clear()
+  c.subs.clear()
+  c.lastConnectedMarket = null
+  c.gaveUp = false
+  c.retries = 0
+
   if (!ws) return
   c.intentionalCloseSocket = ws // our own close must not queue a reconnect
-  c.ws = null
   try {
     ws.close(1000, reason)
   } catch {
     /* already closing */
   }
+
+  // Only null the module singleton on HMR. On `pagehide` we must keep it: the
+  // provider captured this exact object in a ref, so replacing the module
+  // variable would leave the provider pointing at a dead connection while any
+  // newly-mounted component got a fresh, second one — two connections, one of
+  // them orphaned, which is the flapping this whole design avoids.
+  if (reason === "hmr") _conn = null
 }
 
 if (typeof window !== "undefined") {

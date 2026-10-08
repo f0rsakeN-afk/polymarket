@@ -770,6 +770,30 @@ all, because a negative gauge reads as "we have headroom" when the opposite is t
 captured before the registry is popped for exactly that reason.
 → `docs/docker-concurrency-realtime.md` §D10.
 
+**★ F25. You said the heartbeat reaps dead sockets. Did you check it actually does?**
+**Answer:** Yes — and checking found three bugs in my own fix, which is the honest way to answer it.
+The first version swept only market sockets, so notification sockets were never pinged; those live
+in a separate manager, and they're the long-lived per-user ones, so it leaked for exactly the case
+the heartbeat was meant to cover. The second version pinged sockets *sequentially*, which at a
+two-second timeout means fifty wedged sockets take a hundred seconds against a thirty-second
+interval — the sweep would take longer than its own period and pile up. And the third was a test
+that passed for the wrong reason: calling the user sweep directly proves that sweep works, but says
+nothing about whether the combined sweep calls it, so deleting that line left the test green.
+
+All three are now pinned by tests I verified by sabotage — I made each defect deliberately, watched
+the specific test fail, then restored the file and diffed to confirm nothing was left behind. That's
+how I'd want anyone to check my work, and it's the only reason I'm confident these three are the
+last three.
+
+**★ F26. So what's the lesson from that?**
+**Answer:** The bugs were all found by asking what the code does *when it runs*, not by reading it
+closely. The method I found first — a working, tested function that nothing called — is precisely
+the failure mode unit tests are worst at catching: every test passes and the feature is simply
+absent. A green suite tells you the parts that are exercised behave correctly; it says nothing about
+whether anything exercises them, or whether the thing you wired up covers every registry. That's
+also why I now include one test that asserts the *wiring* — that the lifespan schedules the sweep —
+because that assertion is the one that would have caught the original dead code.
+
 **★ F24. What's a bug you'd call subtle, and how did you find it?**
 **Answer:** The one I'd pick is in the client mutex. The original per-market lock was a spin-wait —
 "while locked, sleep five milliseconds and check again". It worked, which is why it survived: it only
@@ -2179,7 +2203,7 @@ when lifecycle events can arrive out of order, compare identity rather than trus
 
 **★ Q8. Do you have frontend tests?**
 **Answer:** No, and that's the honest headline. Zero test files, no test runner in any package manifest,
-no test script, and no test task in the Turbo pipeline. The backend has 384 tests; the client has none.
+no test script, and no test task in the Turbo pipeline. The backend has 387 tests; the client has none.
 The two highest-risk files here are the API client, with its refresh state machine, and the WebSocket
 hook, with its reconnect and single-flight logic — and both are defended by dense comments explaining the
 exact bug each section prevents, which is a reasonable substitute for tests but genuinely isn't
@@ -2493,7 +2517,7 @@ pre-checking, which would itself race.
 | Frontend routing | 27 pages in 3 route groups; middleware renamed to `proxy.ts` in Next 16 |
 | WS client | 1 socket per tab, capped at 8 reconnect attempts, 30 s max backoff |
 | Frontend tests | **0** — the honest headline |
-| Test suite | **384** tests across 22 files; DB rebuilt from Alembic `head` every run |
+| Test suite | **387** tests across 22 files; DB rebuilt from Alembic `head` every run |
 | WS heartbeat | 30 s ping sweep, reaps on `SEND_TIMEOUT_S` (2 s); `cause="heartbeat"` |
 | WS metrics | `ws_connections`, `ws_subscriptions` (per-worker gauges) + 4 counters |
 | Test infra | `pm-postgres` on 5433, `pm-redis` on 6380 — `docker start pm-postgres pm-redis` |

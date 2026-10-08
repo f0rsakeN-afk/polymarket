@@ -64,7 +64,7 @@ backend/
 │       ├── manager.py         # ConnectionManager + Redis pub/sub fan-out
 │       └── routes.py          # /ws/markets/{id}, /ws/trades, /ws/notifications/{uid}
 ├── migrations/versions/       # 5 Alembic revisions, linear chain
-├── tests/                     # 22 files, 384 test functions
+├── tests/                     # 22 files, 387 test functions
 ├── deploy/nginx/              # reverse proxy config
 ├── scripts/                   # ops helpers (backup_db.sh, seed.py, …)
 ├── tests, pytest.ini, pyproject.toml, .env

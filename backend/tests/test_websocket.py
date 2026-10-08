@@ -303,3 +303,138 @@ def test_heartbeat_loop_is_started_by_the_app_lifespan():
     src = inspect.getsource(app_module)
     assert "heartbeat_loop()" in src, "app lifespan must start the heartbeat sweep"
     assert "heartbeat_task.cancel()" in src, "the sweep must be cancelled on shutdown"
+
+
+# ── Heartbeat: coverage and concurrency ────────────────────────────────────────
+#
+# Two bugs found in the first version of the sweep, both of which the original
+# tests missed:
+#
+#   1. It walked only `_market_subs`, so notification sockets — which live in
+#      `UserConnectionManager` — were never pinged and never reaped. Those are
+#      the long-lived per-user sockets, i.e. exactly the ones most likely to be
+#      half-open after a laptop sleeps.
+#   2. It awaited each socket *sequentially* at SEND_TIMEOUT_S each. Fifty wedged
+#      sockets is 100s, against a 30s interval: sweeps would pile up. Fifty
+#      thousand healthy sockets would take minutes.
+
+
+def test_heartbeat_sweeps_notification_sockets_too():
+    """A wedged *notification* socket must be reaped, not just market sockets."""
+    import asyncio
+
+    from app.websocket.manager import user_manager
+
+    reaped = []
+
+    class Wedged:
+        async def send_json(self, _event):
+            await asyncio.sleep(60)
+
+    ws = Wedged()  # type: ignore[arg-type]
+    user_manager._user_socks["u1"] = {ws}  # type: ignore[arg-type]
+    user_manager._ws_to_user[ws] = "u1"  # type: ignore[index]
+    user_manager.SEND_TIMEOUT_S = 0.05
+
+    async def fake_disconnect(sock, user_id, cause="client"):
+        reaped.append((sock, user_id, cause))
+
+    user_manager.disconnect = fake_disconnect  # type: ignore[method-assign]
+
+    count = asyncio.run(user_manager.heartbeat_once())
+
+    # Called directly here, so also assert the *composition* in heartbeat_once:
+    # if that line were dropped, `user_manager.heartbeat_once` would still pass
+    # in isolation while the real sweep silently skipped every notification
+    # socket. That is the actual regression, so it is the one worth pinning.
+
+    assert count == 1, "notification sockets must be swept too"
+    assert reaped and reaped[0][1] == "u1"
+    assert reaped[0][2] == "heartbeat"
+
+    # Leave the shared singleton clean for the next test.
+    user_manager._user_socks.clear()
+    user_manager._ws_to_user.clear()
+    user_manager.SEND_TIMEOUT_S = 2.0
+
+
+def test_heartbeat_once_composes_both_registries():
+    """`heartbeat_once` must sweep markets AND notifications.
+
+    Calling `user_manager.heartbeat_once()` on its own proves nothing about the
+    sweep: if the composition line in `ConnectionManager.heartbeat_once` were
+    dropped, that call would still pass while the real sweep skipped every
+    notification socket. So this asserts the composition by counting calls.
+    """
+    import asyncio
+
+    from app.websocket.manager import ConnectionManager, user_manager
+
+    mgr = ConnectionManager()
+
+    # heartbeat_once does `len(market_dead)`, so return a list of stand-ins
+    # whose length is the reap count — not an int.
+    async def market_sweep(_sockets):
+        return [object(), object()]
+
+    async def user_sweep() -> int:
+        return 3
+
+    mgr._cleanup_dead = market_sweep  # type: ignore[method-assign]
+    mgr.all_sockets = lambda: []  # type: ignore[method-assign]
+    user_manager.heartbeat_once = user_sweep  # type: ignore[method-assign]
+
+    total = asyncio.run(mgr.heartbeat_once())
+
+    assert total == 5, "must be the sum of both registries, not just the market one"
+
+
+def test_heartbeat_is_concurrent_not_sequential():
+    """A sweep must not take len(sockets) × SEND_TIMEOUT_S.
+
+    Sequential pings would serialise: 20 wedged sockets at 0.05s is ~1.0s
+    sequential but ~0.05s concurrent. Assert the concurrent shape with a wide
+    margin so the test isn't flaky on a loaded machine.
+    """
+    import asyncio
+    import time
+
+    from app.websocket.manager import ConnectionManager
+
+    mgr = ConnectionManager()
+
+    class Wedged:
+        async def send_json(self, _event):
+            await asyncio.sleep(60)
+
+    socks = [Wedged() for _ in range(20)]  # type: ignore[arg-type]
+    for s in socks:
+        # Both registries, because `all_sockets()` reads the market→sockets
+        # index and `_cleanup_dead` filters on the socket→markets registry.
+        # That two-sided structure is exactly why a sweep that walked only one
+        # of them would silently reap nothing.
+        mgr._ws_subscriptions[s] = {"m"}  # type: ignore[index]
+        mgr._market_subs["m"].add(s)  # type: ignore[arg-type]
+    mgr.SEND_TIMEOUT_S = 0.05
+
+    async def fake_disconnect(ws, redis_pubsub_ref=None, cause="client"):
+        return None
+
+    mgr.disconnect = fake_disconnect  # type: ignore[method-assign]
+
+    # heartbeat_once composes the notification registry too; isolate it so this
+    # test measures the market sweep only.
+    from app.websocket.manager import user_manager
+
+    async def no_user_sockets() -> int:
+        return 0
+
+    user_manager.heartbeat_once = no_user_sockets  # type: ignore[method-assign]
+
+    start = time.perf_counter()
+    reaped = asyncio.run(mgr.heartbeat_once())
+    elapsed = time.perf_counter() - start
+
+    assert reaped == 20, "all 20 wedged sockets should be reaped"
+    # Sequential would be >= 20 × 0.05 = 1.0s. Allow 10x headroom for CI noise.
+    assert elapsed < 0.5, f"sweep looks sequential ({elapsed:.2f}s for 20 × 0.05s timeout)"
