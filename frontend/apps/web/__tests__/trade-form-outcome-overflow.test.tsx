@@ -69,8 +69,11 @@ function outcomes(names: string[]): Outcome[] {
 function renderForm(names: string[]) {
   return render(
     <TradeForm
+      // `marketId` only. An earlier version of this test also passed
+      // `slug="multi"`, which `TradeFormProps` never declared - the component
+      // resolves everything from `marketId`, so the prop was inert. It type-checked
+      // as an excess-property error and broke `tsc --noEmit` for the whole app.
       marketId="m1"
-      slug="multi"
       currentYesPrice={0.5}
       currentNoPrice={0.5}
       outcomePrices={Object.fromEntries(names.map((n) => [n.toLowerCase(), 0.2]))}

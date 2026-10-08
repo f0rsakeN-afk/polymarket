@@ -136,10 +136,20 @@ const OutcomeButton = memo(function OutcomeButton({
       )}
     >
       {/* Wraps rather than truncates: this is a selector, and an outcome the
-          user cannot read is an outcome they cannot pick. `break-words` handles
-          the single-token case, `hyphens-auto` stops long names hyphenating
-          oddly at the edges. */}
-      <div className="line-clamp-2 text-sm leading-tight font-bold break-all hyphens-auto">
+          user cannot read is an outcome they cannot pick.
+
+          `break-words` (overflow-wrap) rather than `break-all`: it only breaks a
+          word when it genuinely cannot fit the track, so "Golden State Warriors"
+          wraps at its spaces. `break-all` breaks mid-character at any width,
+          which renders the same label as "Go|lden St|ate Wa|rriors" and reads as
+          corrupted. The single-token case that `break-all` was really covering -
+          one unbreakable string wider than the column - is handled by `break-words`
+          too, and by `min-w-0` on this button, which is what actually lets the
+          grid track shrink below the content width.
+
+          `hyphens-auto` breaks long names at real hyphenation points at the edge
+          rather than overflowing. */}
+      <div className="line-clamp-2 text-sm leading-tight font-bold break-words hyphens-auto">
         {label}
       </div>
       <div className="text-xs tabular-nums">${price.toFixed(2)}</div>

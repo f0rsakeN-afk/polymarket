@@ -35,7 +35,7 @@ from app.models.liquidity import EscrowShortfallError
 from app.services.liquidity_service import LiquidityService
 from app.services.market_service import MarketService
 from app.services.matching_engine import MatchingEngine
-from app.services.order_service import OrderService
+from app.services.order_service import OrderService, _push_orderbook
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("PredictX")
@@ -519,6 +519,16 @@ def check_limit_order_execution(self):
                         if re_locked_order.status in ("filled", "partial"):
                             await db.commit()
 
+                            # Fill, partial fill, expiry and cancellation all
+                            # change the resting book - a maker level was consumed
+                            # or removed - so push it on every one of them.
+                            # Previously only the sweep's own cache invalidate ran,
+                            # which fixed the next REST read and left every
+                            # already-open orderbook stale. `expire` in particular
+                            # silently dropped the order from the book with no
+                            # push at all.
+                            await _push_orderbook(str(market.id))
+
                             if re_locked_order.status == "filled":
                                 if parimutuel:
                                     # A binary yes/no pair says nothing about any
@@ -592,20 +602,13 @@ def check_limit_order_execution(self):
                         continue
 
                     if market_fills:
-                        # Rebuild + push the book once per market with fills,
-                        # same contract as the placement path (cache + event).
-                        try:
-                            from app.services.cache_service import (
-                                build_orderbook,
-                                cache_set_orderbook,
-                            )
-                            book = await build_orderbook(db, market_id)
-                            await cache_set_orderbook(market_id, book, ttl=60)
-                            await redis_pubsub.publish_market_event(
-                                market_id, "orderbook:update", book
-                            )
-                        except Exception:
-                            pass
+                        # Per-fill pushes above already went out inside the loop,
+                        # once per order actually filled. This final pass is the
+                        # catch-all for book changes the loop did not itself make
+                        # - notably the partial-fill remainder, where the order
+                        # stays pending with a smaller size and no single fill
+                        # loop iteration covers it.
+                        await _push_orderbook(market_id)
 
                         # These fills moved the price again, so an order the
                         # current sweep already passed over may now be

@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
@@ -120,13 +120,47 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
+  // Held in a ref so the WS handler can stamp a fallback market_id without taking
+  // `market` as a dependency - which would re-subscribe the socket on every load.
+  const marketIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    marketIdRef.current = market?.id
+  }, [market?.id])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
-    if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
+    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; volume?: number; winning_outcome_name?: string; id?: string; market_id?: string; market_slug?: string; market_question?: string; outcome?: string; side?: string; price?: string | number; amount?: string | number; executed_at?: string | null; username?: string }
+
+    if (msg.type === "trade:new") {
+      // The backend now sends one frame per persisted Trade row with the same
+      // fields as the REST feed, so use them verbatim.
+      //
+      // Two bugs are fixed here. The old handler required `msg.price && msg.amount
+      // && msg.username` to be truthy, so a legitimate fill at price 0 or a trade
+      // with no username attached was silently dropped; and it minted a synthetic
+      // `ws-${Date.now()}` id, which collided with itself for two trades inside
+      // the same millisecond and matched no database row - so the live row could
+      // never be deduped against the one the next REST refetch returned.
+      const price = Number(msg.price)
+      const amount = Number(msg.amount)
+      if (!msg.outcome || !msg.side || !msg.id) return
+      if (!Number.isFinite(price) || !Number.isFinite(amount)) return
+
+      const trade: Trade = {
+        id: msg.id,
+        market_id: msg.market_id ?? marketIdRef.current ?? "",
+        market_slug: msg.market_slug ?? slug,
+        market_question: msg.market_question ?? "",
+        outcome: msg.outcome,
+        side: msg.side,
+        price: String(msg.price),
+        amount: String(msg.amount),
+        executed_at: msg.executed_at ?? null,
+        username: msg.username ?? "Unknown",
+      }
+
       setRealtimeTrades((prev) => {
-        const next = [{ id: `ws-${Date.now()}`, market_id: "", market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: String(msg.price!), amount: String(msg.amount!), executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
-        return next.slice(0, 200)
+        if (prev.some((t) => t.id === trade.id)) return prev
+        return [trade, ...prev].slice(0, 200)
       })
       return
     }

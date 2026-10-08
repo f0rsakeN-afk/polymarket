@@ -211,6 +211,11 @@ function connect(conn: SharedConnection, firstMarketId: string) {
 
     const sub = conn.subs.get(d.market_id)
     if (!sub) return  // no handler registered for this market • discard
+    // `__ws_status__` is synthetic and pushed through the status registry, never
+    // the message path, so it can never arrive here. Guarding on it keeps that
+    // invariant from silently rotting into a real dispatch if the registries are
+    // ever unified.
+    if (d.type === "__ws_status__") return
 
     // Increment seq so any in-flight messages from before an unsubscribe are dropped
     sub.seq++

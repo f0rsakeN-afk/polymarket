@@ -35,6 +35,16 @@ from app.redis import get_redis, redis_cb
 # Bound concurrent broadcast tasks to avoid OOM at 5k msg/s (H9 fix)
 _broadcast_sem = asyncio.Semaphore(200)
 
+# Registry key for sockets that asked for the platform-wide trade feed
+# (`/ws/trades`). Not a real market id - `disconnect` already skips `__`-prefixed
+# keys when unsubscribing from Redis, which is why the sentinel is namespaced.
+GLOBAL_TRADES_KEY = "__global_trades__"
+
+# Exact Redis channel carrying the platform-wide trade feed.
+# Matched as a whole string, never by prefix: it splits into two `:`-separated
+# parts, so prefix routing ("global" matches no known prefix) dropped it.
+GLOBAL_TRADES_CHANNEL = "global:trades"
+
 
 async def _bounded_broadcast(coro):
     async with _broadcast_sem:
@@ -455,20 +465,38 @@ class ConnectionManager:
                 logger.error(f"WS heartbeat sweep failed: {e}")
 
     async def broadcast_global(self, event: dict):
-        """Broadcast to all connected sockets regardless of subscription."""
-        # Snapshot the current market -> sockets mapping without holding any lock.
-        # A concurrent modification may miss some sockets in one iteration • acceptable
-        # for periodic pings; the next broadcast will catch them.
-        all_sockets: list[WebSocket] = []
-        for socks in self._market_subs.values():
-            all_sockets.extend(socks)
+        """Push a platform-wide frame to the sockets that asked for it.
 
-        if not all_sockets:
+        Scoped to `GLOBAL_TRADES_KEY` subscribers rather than "every socket this
+        node holds". Fanning a global trade out to market sockets leaks other
+        markets' trades into every open market page, and charges each of those
+        sockets a send for a frame it will discard.
+
+        Same lock/snapshot shape as `broadcast_to_market`: the registry is read
+        under the market lock, then the sends happen outside it, so a slow
+        subscriber can never stall the listener loop.
+        """
+        lock = await _market_locks._get_lock(GLOBAL_TRADES_KEY)
+        async with lock:
+            raw_sockets = list(self._market_subs.get(GLOBAL_TRADES_KEY, set()))
+
+        # Mirror `broadcast_to_market`'s server-side filter: only deliver to a
+        # socket that is genuinely still subscribed. A socket mid-teardown can
+        # linger in the market set after its subscription row is gone.
+        sockets = [
+            ws
+            for ws in raw_sockets
+            if GLOBAL_TRADES_KEY in (self._ws_subscriptions.get(ws) or set())
+        ]
+        if not sockets:
             return
 
-        WS_MESSAGES_FANNED_OUT.labels("global").inc(len(all_sockets))
-        dead = await self._bounded_send(all_sockets, event)
+        WS_MESSAGES_FANNED_OUT.labels("global").inc(len(sockets))
+        dead = await self._bounded_send(sockets, event)
         if dead:
+            # Tracked for shutdown like every other broadcast path - these
+            # sockets belong to the notification-style registry and are the ones
+            # most likely to be long-idle.
             task = asyncio.create_task(self._disconnect_many(dead))
             self._pending_cleanups.add(task)
             task.add_done_callback(self._pending_cleanups.discard)
@@ -621,13 +649,18 @@ class RedisPubSub:
         self._listener_task: asyncio.Task | None = None
         self._connected = False
         self._subscribed: set[str] = set()
+        # Loop exit condition for `listen()`. Without it the task has to be killed
+        # by cancellation alone, and a restart would be indistinguishable from a
+        # completed run.
+        self._closed = False
 
     async def connect(self):
-        if self._connected:
+        if self._connected and self._pubsub is not None:
             return
         self._redis = await get_redis()
         self._pubsub = self._redis.pubsub()
         self._connected = True
+        self._closed = False
 
     async def publish_price_update(
         self,
@@ -762,45 +795,167 @@ class RedisPubSub:
     async def subscribe_global_trades(self):
         if not self._pubsub:
             return
-        if "global:trades" not in self._subscribed:
-            await self._pubsub.subscribe("global:trades")
-            self._subscribed.add("global:trades")
+        if GLOBAL_TRADES_CHANNEL not in self._subscribed:
+            await self._pubsub.subscribe(GLOBAL_TRADES_CHANNEL)
+            self._subscribed.add(GLOBAL_TRADES_CHANNEL)
 
     async def listen(self):
-        if not self._pubsub:
-            return
-        try:
-            async for message in self._pubsub.listen():
-                if message["type"] != "message":
+        """Consume every channel this process is subscribed to, until shutdown.
+
+        Drives `get_message()` in a loop rather than iterating `listen()`.
+
+        This is the single most important thing in the whole pub/sub path.
+        redis-py's `listen()` is literally `while self.subscribed:`, and
+        `subscribed` is `bool(self.channels or ...)`. The app starts this listener
+        at startup, when *nothing* is subscribed yet - subscriptions only happen
+        later, when the first WebSocket connects. So the generator's loop
+        condition was false on entry, it returned immediately, and the task
+        completed. Later `subscribe_market()` calls still registered the channels
+        (which is why `PUBSUB CHANNELS` shows them while nothing is delivered):
+        Redis accepted the SUBSCRIBE, but there was no consumer left to read the
+        messages. Every price frame, trade and orderbook push was published into
+        a channel nobody was listening to, and live updates were dead in every
+        environment - including tests, which passed only because they subscribed
+        *before* starting the listener, the opposite order to production.
+
+        `get_message()` has no such precondition: it blocks for `timeout` and
+        returns None on timeout, so the loop survives having zero subscriptions
+        and picks up later ones with no restart.
+
+        A dropped Redis connection is also recovered from in-loop. Previously any
+        exception ended the task for good, and nothing ever restarted it -
+        `start_listener()` is only called during lifespan startup - so one blip
+        meant permanent silence for the rest of the process's life.
+        """
+        backoff = 0.5
+        while not self._closed:
+            if self._pubsub is None:
+                if not await self._reconnect():
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 10.0)
                     continue
-                try:
-                    data = json.loads(message["data"])
-                    channel = message["channel"]
-                    if isinstance(channel, bytes):
-                        channel = channel.decode()
+                backoff = 0.5
+
+            if not self._pubsub.subscribed:
+                # Idle, not dead. `parse_response` raises "pubsub connection not
+                # set" until at least one SUBSCRIBE has run, and subscriptions
+                # only arrive later, when the first WebSocket connects. This is
+                # the state the app starts in, so the loop must simply wait here
+                # and pick up as soon as `subscribe_market` sets the first
+                # channel. Polling is on a short interval rather than blocking,
+                # because there is no connection to block on yet.
+                await asyncio.sleep(0.05)
+                continue
+
+            try:
+                message = await self._pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Connection lost. Drop the dead client so the next iteration
+                # rebuilds it and re-subscribes everything we were tracking.
+                logger.warning("Redis pubsub connection lost • reconnecting", exc_info=True)
+                await self._drop_pubsub()
+                continue
+
+            if message is None:
+                continue  # idle tick
+
+            if message["type"] != "message":
+                continue
+
+            try:
+                data = json.loads(message["data"])
+                channel = message["channel"]
+                if isinstance(channel, bytes):
+                    channel = channel.decode()
+
+                if channel == GLOBAL_TRADES_CHANNEL:
+                    # Matched on the whole channel string BEFORE the prefix split
+                    # below. `global:trades` splits into two parts, so it always
+                    # entered the `len(parts) >= 2` branch, matched neither
+                    # "market" nor "user", and fell out of the loop silently -
+                    # making the entire global trade feed dead code, and
+                    # `broadcast_global` unreachable.
+                    asyncio.create_task(
+                        _bounded_broadcast(manager.broadcast_global(data))
+                    )
+                else:
                     parts = channel.split(":")
                     if len(parts) >= 2:
                         prefix, target = parts[0], parts[1]
                         if prefix == "market":
-                            asyncio.create_task(_bounded_broadcast(manager.broadcast_to_market(target, data)))
+                            asyncio.create_task(
+                                _bounded_broadcast(
+                                    manager.broadcast_to_market(target, data)
+                                )
+                            )
                         elif prefix == "user":
-                            asyncio.create_task(_bounded_broadcast(user_manager.broadcast_to_user(target, data)))
-                    elif channel == "global:trades":
-                        asyncio.create_task(_bounded_broadcast(manager.broadcast_global(data)))
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON from Redis: {message['data'][:100]}")
-                except Exception:
-                    logger.exception("Error broadcasting Redis message")
-        except asyncio.CancelledError:
-            raise
+                            asyncio.create_task(
+                                _bounded_broadcast(
+                                    user_manager.broadcast_to_user(target, data)
+                                )
+                            )
+                        else:
+                            logger.debug("Ignoring unroutable Redis channel %s", channel)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON from Redis: {str(message['data'])[:100]}")
+            except Exception:
+                logger.exception("Error broadcasting Redis message")
+
+    async def _drop_pubsub(self) -> None:
+        """Discard a broken pubsub client, keeping the tracked channel list."""
+        self._pubsub = None
+        # `_subscribed` deliberately survives: it is the record of what we want to
+        # be listening to, and `_reconnect` replays it against the new client.
+        try:
+            self._connected = False
         except Exception:
-            logger.exception("Redis pubsub listener died")
+            pass
+
+    async def _reconnect(self) -> bool:
+        """Rebuild the pubsub client and replay every tracked subscription.
+
+        Returns False when Redis is still unreachable, so the caller can back off
+        rather than spinning on a failing connect.
+        """
+        try:
+            await self.connect()
+        except Exception:
+            logger.warning("Redis pubsub reconnect failed", exc_info=True)
+            return False
+
+        if not self._pubsub:
+            return False
+
+        wanted = sorted(self._subscribed)
+        if not wanted:
+            return True
+        try:
+            await self._pubsub.subscribe(*wanted)
+        except Exception:
+            logger.warning("Redis pubsub re-subscribe failed", exc_info=True)
+            return False
+
+        logger.info("Redis pubsub resubscribed to %d channel(s)", len(wanted))
+        return True
 
     async def start_listener(self):
+        # `listen()` is restartable: it returns normally on close(), and any
+        # earlier exit (including the pre-fix one where redis-py's `listen()`
+        # returned instantly because nothing was subscribed yet) leaves the task
+        # done. Re-creating it here makes the call idempotent and recoverable
+        # rather than start-once-and-never-again.
         if self._listener_task is None or self._listener_task.done():
+            self._closed = False
             self._listener_task = asyncio.create_task(self.listen())
 
     async def close(self):
+        # Set before cancelling so an in-flight `get_message` returns promptly and
+        # the loop exits on its own condition rather than only via CancelledError.
+        self._closed = True
         if self._listener_task:
             self._listener_task.cancel()
             try:

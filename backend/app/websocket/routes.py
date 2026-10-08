@@ -4,7 +4,7 @@ import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.rate_limit_service import RateLimitService
-from app.websocket.manager import manager, redis_pubsub, user_manager
+from app.websocket.manager import GLOBAL_TRADES_KEY, manager, redis_pubsub, user_manager
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(tags=["websocket"])
@@ -193,7 +193,7 @@ async def global_trades_websocket(websocket: WebSocket):
         return
 
     accepted = await manager.connect(
-        websocket, "__global_trades__", client_ip=client_ip, user_id=user_id
+        websocket, GLOBAL_TRADES_KEY, client_ip=client_ip, user_id=user_id
     )
     if not accepted:
         await websocket.close(code=1008, reason="Connection limit exceeded")
