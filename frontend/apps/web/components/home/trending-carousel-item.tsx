@@ -7,6 +7,7 @@ import { useMarketSocket } from "@/hooks/use-market-socket"
 import { usePriceHistory } from "@/hooks/api/use-markets"
 import { priceHistoryToPoints, buildLivePricePoint } from "@/lib/live-price"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
+import { plottedOutcomeColors } from "@/lib/outcome-colors"
 import type { MarketResponse } from "@/hooks/api/types/market"
 
 // visx/d3 chart code splits into its own chunk and never SSR-renders •
@@ -24,14 +25,6 @@ const LiveLine = dynamic(
   { ssr: false }
 )
 
-/** Series palette, matching the market page so a colour means the same thing. */
-const CHART_COLORS = [
-  "var(--chart-1)",
-  "var(--chart-5)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-2)",
-]
 
 interface TrendingCarouselItemProps {
   market: MarketResponse
@@ -283,14 +276,20 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
             price and the NO line is already implied by its complement.
           */}
           {isMultiOutcome ? (
-            outcomes.slice(0, 5).map((outcome, i) => (
-              <LiveLine
-                key={outcome.name}
-                dataKey={outcome.name}
-                stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                fill={i === 0}
-              />
-            ))
+            /* Same palette and same cap as the market page, so an outcome keeps
+             * one colour across the card and the chart it links to. The old
+             * local CHART_COLORS duplicated the market page's list, and drew up
+             * to five lines from five lightnesses of one green. */
+            plottedOutcomeColors(outcomes.map((o) => o.name)).map(
+              ({ name, color }, i) => (
+                <LiveLine
+                  key={name}
+                  dataKey={name}
+                  stroke={color}
+                  fill={i === 0}
+                />
+              )
+            )
           ) : (
             <LiveLine dataKey="value" stroke="var(--primary)" fill />
           )}
