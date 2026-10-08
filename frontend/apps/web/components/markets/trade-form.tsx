@@ -9,7 +9,12 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Label } from "@workspace/ui/components/label"
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  SelectGroup,
 } from "@workspace/ui/components/select"
 import {
   Field,
@@ -19,7 +24,11 @@ import {
 } from "@workspace/ui/components/field"
 
 import { cn } from "@workspace/ui/lib/utils"
-import { placeOrderSchema, type PlaceOrderInput, z } from "@/lib/schemas/trading"
+import {
+  placeOrderSchema,
+  type PlaceOrderInput,
+  z,
+} from "@/lib/schemas/trading"
 import { getQuote } from "@/lib/api/orders"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useWallet } from "@/hooks/api/use-wallet"
@@ -46,17 +55,20 @@ const BLOCKED_STATUS = "resolved"
 
 function NotLoggedIn() {
   return (
-    <div className="py-6 text-center space-y-2">
+    <div className="space-y-2 py-6 text-center">
       <p className="text-sm text-muted-foreground">Sign in to start trading</p>
       <Link
         href="/login"
-        className="block w-full rounded-md border border-primary bg-primary px-4 py-2 text-sm font-medium text-center text-primary-foreground hover:bg-primary/90 transition-colors"
+        className="block w-full rounded-md border border-primary bg-primary px-4 py-2 text-center text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
       >
         Sign In
       </Link>
       <p className="text-xs text-muted-foreground">
         New here?{" "}
-        <Link href="/signup" className="underline underline-offset-2 hover:text-foreground">
+        <Link
+          href="/signup"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
           Create account
         </Link>
       </p>
@@ -66,15 +78,22 @@ function NotLoggedIn() {
 
 function MarketClosedBanner({ status }: { status: string }) {
   return (
-    <div role="alert" className="rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700">
-      Market is <span className="font-medium">{status}</span> • trading is disabled
+    <div
+      role="alert"
+      className="rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700"
+    >
+      Market is <span className="font-medium">{status}</span> • trading is
+      disabled
     </div>
   )
 }
 
 function InsufficientBalanceBanner({ balance }: { balance: number }) {
   return (
-    <div role="alert" className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600">
+    <div
+      role="alert"
+      className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600"
+    >
       Insufficient balance • you have{" "}
       <span className="font-medium">${balance.toFixed(2)}</span> available
     </div>
@@ -99,8 +118,16 @@ const OutcomeButton = memo(function OutcomeButton({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
+      // The full name on hover, because the visible label is capped at two
+      // lines. Without this a clipped "Los Angeles…" gives no way to read the
+      // rest without opening the market.
+      title={label}
       className={cn(
-        "min-h-11 rounded-xl border p-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        // `min-w-0` is load-bearing: a grid item defaults to `min-width: auto`,
+        // so one long outcome name sets the track's minimum width and pushes the
+        // whole row wider than the card. That is what made an eight-way market
+        // overflow on a phone.
+        "flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border p-2.5 text-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         selected
           ? color === "green"
             ? "border-green-600/50 bg-green-600/10 text-green-700 dark:text-green-400"
@@ -108,7 +135,13 @@ const OutcomeButton = memo(function OutcomeButton({
           : "border-border bg-card text-muted-foreground hover:bg-muted"
       )}
     >
-      <div className="text-sm font-bold">{label}</div>
+      {/* Wraps rather than truncates: this is a selector, and an outcome the
+          user cannot read is an outcome they cannot pick. `break-words` handles
+          the single-token case, `hyphens-auto` stops long names hyphenating
+          oddly at the edges. */}
+      <div className="line-clamp-2 text-sm leading-tight font-bold break-all hyphens-auto">
+        {label}
+      </div>
       <div className="text-xs tabular-nums">${price.toFixed(2)}</div>
     </button>
   )
@@ -129,7 +162,7 @@ const SideButton = memo(function SideButton({
       onClick={onClick}
       aria-pressed={side === current}
       className={cn(
-        "min-h-9 rounded-xl border py-1.5 text-xs font-semibold uppercase transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "min-h-9 rounded-xl border py-1.5 text-xs font-semibold uppercase transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         side === current
           ? side === "buy"
             ? "border-green-600/50 bg-green-600/10 text-green-700 dark:text-green-400"
@@ -169,7 +202,12 @@ function TradeForm({
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
   // Params the cached quote was fetched for • render gates on match so a
   // stale quote never shows for different inputs (no sync clear in effect).
-  const [quoteMeta, setQuoteMeta] = useState<{ marketId: string; outcome: string; side: "buy" | "sell"; amount: number } | null>(null)
+  const [quoteMeta, setQuoteMeta] = useState<{
+    marketId: string
+    outcome: string
+    side: "buy" | "sell"
+    amount: number
+  } | null>(null)
   const [quoteLoading, setQuoteLoading] = useState(false)
   const quoteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -181,10 +219,13 @@ function TradeForm({
   useEffect(() => {
     if (!quote) return
     const ttlMs = Number(quote.expires_at) * 1000 - Date.now()
-    const timer = setTimeout(() => {
-      setQuote(null)
-      setQuoteMeta(null)
-    }, Math.max(ttlMs, 0))
+    const timer = setTimeout(
+      () => {
+        setQuote(null)
+        setQuoteMeta(null)
+      },
+      Math.max(ttlMs, 0)
+    )
     return () => clearTimeout(timer)
   }, [quote])
 
@@ -220,12 +261,12 @@ function TradeForm({
   // supplies a per-outcome map. Falling back to 0 here showed the user a
   // zero price and let them submit against it; falling back to the binary price
   // would be a different-but-still-wrong quote. Show nothing instead.
-  const namedOutcomePrice = outcomePrices?.[outcome];
+  const namedOutcomePrice = outcomePrices?.[outcome]
   const effectivePrice = isMultiOutcome
     ? (namedOutcomePrice ?? 0)
     : outcome === "yes"
-    ? currentYesPrice
-    : currentNoPrice
+      ? currentYesPrice
+      : currentNoPrice
 
   // Only use the cached quote when it matches current inputs (and is still within TTL)
   const quoteMatchesInputs =
@@ -240,13 +281,14 @@ function TradeForm({
 
   const displayPrice =
     orderType === "limit"
-      ? price ?? effectivePrice
+      ? (price ?? effectivePrice)
       : // Backend quote has no flat `price` • `price_after` is the post-slippage estimate.
         quoteVisible && quote
         ? quote.price_after
         : effectivePrice
 
-  const total = amount && displayPrice ? Number(amount) * Number(displayPrice) : 0
+  const total =
+    amount && displayPrice ? Number(amount) * Number(displayPrice) : 0
 
   const isMarketOpen = marketStatus !== BLOCKED_STATUS
   const availableBalance = Number(wallet?.available_balance ?? 0)
@@ -268,7 +310,12 @@ function TradeForm({
     const timeoutId = setTimeout(async () => {
       setQuoteLoading(true)
       try {
-        const res = await getQuote({ market_id: marketId, outcome, side, amount })
+        const res = await getQuote({
+          market_id: marketId,
+          outcome,
+          side,
+          amount,
+        })
         setQuote(res.data)
         setQuoteMeta({ marketId, outcome, side, amount: Number(amount) })
       } catch {
@@ -295,7 +342,10 @@ function TradeForm({
   )
 
   // Stable curried handlers • avoid creating new fn per render in lists
-  const makeOutcomeHandler = useCallback((name: string) => () => handleOutcomeClick(name), [handleOutcomeClick])
+  const makeOutcomeHandler = useCallback(
+    (name: string) => () => handleOutcomeClick(name),
+    [handleOutcomeClick]
+  )
 
   const handleSideClick = useCallback(
     (s: "buy" | "sell") => {
@@ -305,7 +355,10 @@ function TradeForm({
     [setValue]
   )
 
-  const makeSideHandler = useCallback((s: "buy" | "sell") => () => handleSideClick(s), [handleSideClick])
+  const makeSideHandler = useCallback(
+    (s: "buy" | "sell") => () => handleSideClick(s),
+    [handleSideClick]
+  )
 
   const onValid = useCallback(
     async (data: PlaceOrderInput) => {
@@ -321,12 +374,15 @@ function TradeForm({
     [onSubmit, clientOrderId, quote, quoteVisible]
   )
 
-  const handleOrderTypeChange = useCallback((v: string | null) => {
-    if (v) {
-      setValue("order_type", v as "market" | "limit" | "fill_or_kill")
-      if (v !== "limit") setValue("post_only", false)
-    }
-  }, [setValue])
+  const handleOrderTypeChange = useCallback(
+    (v: string | null) => {
+      if (v) {
+        setValue("order_type", v as "market" | "limit" | "fill_or_kill")
+        if (v !== "limit") setValue("post_only", false)
+      }
+    },
+    [setValue]
+  )
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
@@ -343,7 +399,10 @@ function TradeForm({
 
       <form onSubmit={handleSubmit(onValid)} className="space-y-4">
         {isMultiOutcome ? (
-          <div className="grid grid-cols-3 gap-2">
+          // Two columns on a phone, three once there is room. A fixed three
+          // leaves ~90px per cell at 360px, which is not enough for
+          // "Golden State Warriors" even wrapped.
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {outcomes!.map((o, i) => (
               <OutcomeButton
                 key={o.id}
@@ -375,8 +434,13 @@ function TradeForm({
         )}
 
         <div className="grid grid-cols-2 gap-2">
-          {((["buy", "sell"]) as const).map((s) => (
-            <SideButton key={s} side={s} current={side} onClick={makeSideHandler(s)} />
+          {(["buy", "sell"] as const).map((s) => (
+            <SideButton
+              key={s}
+              side={s}
+              current={side}
+              onClick={makeSideHandler(s)}
+            />
           ))}
         </div>
 
@@ -392,7 +456,9 @@ function TradeForm({
               {...register("amount", { valueAsNumber: true })}
             />
           </FieldContent>
-          {errors.amount && <FieldError errors={[{ message: errors.amount.message }]} />}
+          {errors.amount && (
+            <FieldError errors={[{ message: errors.amount.message }]} />
+          )}
         </Field>
 
         <Field>
@@ -418,7 +484,8 @@ function TradeForm({
 
         <Field>
           <FieldLabel htmlFor="max_slippage">
-            Slippage Tolerance • {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
+            Slippage Tolerance •{" "}
+            {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
           </FieldLabel>
           <FieldContent>
             <Input
@@ -429,7 +496,7 @@ function TradeForm({
               step="0.001"
               {...register("max_slippage", { valueAsNumber: true })}
             />
-            <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
               <span>0.1%</span>
               <span className="font-medium text-foreground">
                 {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
@@ -457,7 +524,9 @@ function TradeForm({
                   {...register("price", { valueAsNumber: true })}
                 />
               </FieldContent>
-              {errors.price && <FieldError errors={[{ message: errors.price.message }]} />}
+              {errors.price && (
+                <FieldError errors={[{ message: errors.price.message }]} />
+              )}
             </Field>
 
             {orderType === "limit" && (
@@ -470,16 +539,22 @@ function TradeForm({
                   />
                   <Label
                     htmlFor="post_only"
-                    className="text-xs text-muted-foreground cursor-pointer select-none"
+                    className="cursor-pointer text-xs text-muted-foreground select-none"
                   >
                     Post-only (never executes immediately)
                   </Label>
                 </div>
 
                 <Field>
-                  <FieldLabel htmlFor="expires_at">Expiry (optional)</FieldLabel>
+                  <FieldLabel htmlFor="expires_at">
+                    Expiry (optional)
+                  </FieldLabel>
                   <FieldContent>
-                    <Input id="expires_at" type="datetime-local" {...register("expires_at")} />
+                    <Input
+                      id="expires_at"
+                      type="datetime-local"
+                      {...register("expires_at")}
+                    />
                   </FieldContent>
                 </Field>
               </>
@@ -488,7 +563,11 @@ function TradeForm({
         )}
 
         {Number(amount) > 0 && (
-          <div aria-live="polite" aria-atomic="true" className="rounded-md bg-muted/50 p-3 text-xs space-y-2">
+          <div
+            aria-live="polite"
+            aria-atomic="true"
+            className="space-y-2 rounded-md bg-muted/50 p-3 text-xs"
+          >
             <div className="flex justify-between">
               <span className="text-muted-foreground">Price</span>
               <span>${Number(displayPrice).toFixed(4)}</span>
@@ -499,7 +578,9 @@ function TradeForm({
                 <span
                   className={cn(
                     "font-medium",
-                    Number(quote.slippage) > 0.01 ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"
+                    Number(quote.slippage) > 0.01
+                      ? "text-yellow-700 dark:text-yellow-400"
+                      : "text-green-700 dark:text-green-400"
                   )}
                 >
                   {(Number(quote.slippage) * 100).toFixed(2)}%
@@ -526,7 +607,9 @@ function TradeForm({
             </div>
             <div className="flex justify-between border-t border-border pt-2">
               <span className="text-muted-foreground">Total Fees</span>
-              <span className="font-medium">${(total * 0.03).toFixed(2)} (3%)</span>
+              <span className="font-medium">
+                ${(total * 0.03).toFixed(2)} (3%)
+              </span>
             </div>
           </div>
         )}

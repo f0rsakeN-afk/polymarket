@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image";
 import Link from "next/link"
 
 interface LinkGroup {
@@ -91,7 +92,8 @@ export default function Footer() {
           {/* Brand column */}
           <div className="col-span-2 sm:col-span-1">
             <Link href="/" className="flex items-center gap-2 font-bold tracking-wide mb-3">
-              <PolygonIcon />
+              {/* <PolygonIcon /> */}
+                 <Image src={'/logo.png'} alt="predictx logo" height={20} width={50} className="dark:invert"/>
               <span>PredictX</span>
             </Link>
             <p className="text-xs text-muted-foreground leading-relaxed max-w-xs">

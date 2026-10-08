@@ -13,18 +13,28 @@ import type { MarketResponse } from "@/hooks/api/types/market"
 // visx/d3 chart code splits into its own chunk and never SSR-renders •
 // the carousel ships without it and hydrates charts after first paint.
 function ChartFallback() {
-  return <div className="h-24 animate-pulse rounded-md bg-muted/60" aria-hidden="true" />
+  return (
+    <div
+      className="h-24 animate-pulse rounded-md bg-muted/60"
+      aria-hidden="true"
+    />
+  )
 }
 
 const LiveLineChart = dynamic(
-  () => import("@workspace/ui/components/charts/live-line-chart").then((m) => ({ default: m.LiveLineChart })),
+  () =>
+    import("@workspace/ui/components/charts/live-line-chart").then((m) => ({
+      default: m.LiveLineChart,
+    })),
   { ssr: false, loading: ChartFallback }
 )
 const LiveLine = dynamic(
-  () => import("@workspace/ui/components/charts/live-line").then((m) => ({ default: m.LiveLine })),
+  () =>
+    import("@workspace/ui/components/charts/live-line").then((m) => ({
+      default: m.LiveLine,
+    })),
   { ssr: false }
 )
-
 
 interface TrendingCarouselItemProps {
   market: MarketResponse
@@ -40,9 +50,9 @@ interface TrendingCarouselItemProps {
  * so the caller can fall back to an even split.
  */
 function parseYesPrice(raw: string | number | null | undefined): number | null {
-  if (raw === null || raw === undefined || raw === "") return null;
-  const parsed = typeof raw === "number" ? raw : Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (raw === null || raw === undefined || raw === "") return null
+  const parsed = typeof raw === "number" ? raw : Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
@@ -100,7 +110,11 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
   }, [historyPoints, livePoints, market.yes_price, seedTime])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number; outcome_prices?: Record<string, number> }
+    const msg = data as {
+      type?: string
+      yes_price?: number
+      outcome_prices?: Record<string, number>
+    }
     if (msg.type !== "market:price_update") return
 
     /*
@@ -117,7 +131,9 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
 
     if (Number.isFinite(msg.yes_price)) setLivePrice(msg.yes_price as number)
     // buildLivePricePoint always sets `value`; the cast mirrors the history one.
-    setLivePoints((prev) => [...prev, point as unknown as LiveLinePoint].slice(-60))
+    setLivePoints((prev) =>
+      [...prev, point as unknown as LiveLinePoint].slice(-60)
+    )
   }, [])
 
   const { status } = useMarketSocket({
@@ -223,9 +239,9 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
     >
       {/* Header row */}
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
+        {/* <span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
           PredictX
-        </span>
+        </span> */}
         {market.category && (
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {market.category}
@@ -244,7 +260,11 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
             aria-label={`WebSocket ${status}`}
           />
           <span className="text-[10px] font-medium text-muted-foreground">
-            {status === "connected" ? "Live" : status === "connecting" ? "Sync" : "Off"}
+            {status === "connected"
+              ? "Live"
+              : status === "connecting"
+                ? "Sync"
+                : "Off"}
           </span>
         </span>
       </div>
@@ -312,7 +332,7 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
                   <span className="max-w-[6rem] truncate text-[10px] tracking-wider text-muted-foreground uppercase">
                     {outcome.name}
                   </span>
-                  <span className="text-xs font-bold tabular-nums text-foreground">
+                  <span className="text-xs font-bold text-foreground tabular-nums">
                     {/* "—" not 0% for an outcome the book cannot price. */}
                     {outcome.pct === null ? "—" : `${outcome.pct}%`}
                   </span>

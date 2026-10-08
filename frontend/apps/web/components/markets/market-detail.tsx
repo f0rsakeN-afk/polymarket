@@ -400,7 +400,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 {market.category}
               </span>
             )}
-            <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
+            {/* <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span> */}
           </div>
           {/*
             Fluid type rather than one fixed size. A prediction-market question
@@ -441,9 +441,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                   </>
                 )
                 : outcomeList.slice(0, 4).map((outcome, i) => (
-                    <div key={outcome.id} className="flex items-center gap-2">
-                      <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
-                      <div className="text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
+                    <div key={outcome.id} className="flex min-w-0 items-center gap-2">
+                      {/* Wraps rather than truncates: this strip is how a user
+                          matches a line on the chart to its name, so a clipped
+                          name breaks the pairing. */}
+                      <div className="min-w-0 break-words text-xs uppercase tracking-wider text-muted-foreground">
+                        {outcome.name}
+                      </div>
+                      <div className="shrink-0 text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
                         {Math.round(priceFor(outcome.name, 0) * 100)}¢
                       </div>
                     </div>
