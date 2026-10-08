@@ -78,6 +78,16 @@ describe("buildLivePricePoint", () => {
     });
   });
 
+  it("prefers outcome_prices over the binary yes/no shape", () => {
+    // On a 3+ outcome market the binary fields describe a pool that cannot
+    // represent the outcomes, so they must not overwrite the per-outcome keys.
+    const point = buildLivePricePoint(
+      { outcome_prices: { Yes: 0.7, No: 0.2 }, yes_price: 0.5, no_price: 0.5 },
+      NOW
+    );
+    expect(point).toMatchObject({ Yes: 0.7, No: 0.2, value: 0.7 });
+  });
+
   it("drops an empty outcome_prices map rather than reading prices[0] as 0", () => {
     // `Object.values({})[0] ?? 0` used to yield a literal 0 here.
     expect(buildLivePricePoint({ outcome_prices: {} }, NOW)).toBeNull();

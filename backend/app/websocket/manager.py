@@ -41,14 +41,14 @@ async def _bounded_broadcast(coro):
         return await coro
 
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 # ── Per-market locks ────────────────────────────────────────────────────────────
 
 
 class MarketLockTable:
     """
-    Per-market locks — avoids global lock contention.
+    Per-market locks • avoids global lock contention.
     Lazily creates locks as markets gain subscribers.
     """
 
@@ -56,7 +56,7 @@ class MarketLockTable:
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def _get_lock(self, market_id: str) -> asyncio.Lock:
-        # setdefault is atomic for the specific key — no global lock needed.
+        # setdefault is atomic for the specific key • no global lock needed.
         # Each market_id gets its own asyncio.Lock, created exactly once.
         return self._locks.setdefault(market_id, asyncio.Lock())
 
@@ -72,30 +72,30 @@ class ConnectionManager:
     Per-market WebSocket subscription manager.
 
     Scales to 50k+ connections by:
-    1. Per-market locks — broadcasts to market A never block market B
-    2. Per-socket locks — concurrent subscribe/unsubscribe on same socket are safe
-    3. Fire-and-forget send — each socket gets its own asyncio task
-    4. Connection limits — prevents file-descriptor exhaustion per IP/user
-    5. Per-socket subscription cap — prevents memory exhaustion attacks
-    6. Per-socket subscription registry — server-side filter so a client only
+    1. Per-market locks • broadcasts to market A never block market B
+    2. Per-socket locks • concurrent subscribe/unsubscribe on same socket are safe
+    3. Fire-and-forget send • each socket gets its own asyncio task
+    4. Connection limits • prevents file-descriptor exhaustion per IP/user
+    5. Per-socket subscription cap • prevents memory exhaustion attacks
+    6. Per-socket subscription registry • server-side filter so a client only
        receives updates for markets it explicitly subscribed to
-    7. Async dead-socket cleanup — doesn't block active broadcasts
+    7. Async dead-socket cleanup • doesn't block active broadcasts
     """
 
-    # These caps are PER PROCESS, not global — with N API nodes the real limit
+    # These caps are PER PROCESS, not global • with N API nodes the real limit
     # is N × the number below. That is deliberate, not an oversight: each node
     # caps the sockets and memory it is actually holding, which is what
     # protects it, and it costs nothing on the connect path. A global cap
     # would need a Redis round-trip per connect *and* per disconnect, and a
     # counter that leaks when a node dies would take the user's quota with it
-    # — trading a small precision gain for a new way to lock people out.
+    # • trading a small precision gain for a new way to lock people out.
     #
     # What *is* per-process-only and worth knowing: message fan-out. It is NOT
     # affected by this, because publishers write to Redis pub/sub and every node
     # runs its own `RedisPubSub.listen()` loop that fans messages out to its own
     # local sockets. Cross-node delivery is proven end-to-end in
     # `tests/test_websocket_multinode.py`.
-    MAX_CONNECTIONS_PER_IP = 50  # raised from 10 — NAT users share IPs
+    MAX_CONNECTIONS_PER_IP = 50  # raised from 10 • NAT users share IPs
     MAX_CONNECTIONS_PER_USER = 5
     MAX_SUBSCRIPTIONS_PER_SOCKET = 50  # cap per connection to prevent abuse
     # Slow-client protection: a socket that can't accept a frame within this
@@ -103,7 +103,7 @@ class ConnectionManager:
     # one wedged socket stalls the gather() for EVERY subscriber on that market.
     SEND_TIMEOUT_S = 2.0
     # Bound concurrent sends so a 50k-subscriber tick doesn't materialize 50k
-    # tasks at once — memory spike per price update.
+    # tasks at once • memory spike per price update.
     SEND_CONCURRENCY = 1000
 
     def __init__(self):
@@ -167,7 +167,7 @@ class ConnectionManager:
     ):
         """
         Add a market subscription without removing existing ones.
-        Idempotent — calling twice is safe.
+        Idempotent • calling twice is safe.
         Returns True if subscribed, False if rejected (cap reached or already subscribed).
         """
         ws_lock = self._ws_locks[websocket]
@@ -228,13 +228,13 @@ class ConnectionManager:
     async def disconnect(self, websocket: WebSocket, redis_pubsub_ref=None, cause: str = "client"):
         """Remove a WS connection and clean up all its subscriptions.
 
-        `cause` only labels the metric — cleanup is identical either way, and
+        `cause` only labels the metric • cleanup is identical either way, and
         running the same path from every exit point is what keeps the
         connection counters and gauges honest.
         """
         # Capture registration BEFORE popping: a socket can reach here that was
         # never counted (rejected before `accept()`, or already reaped), and
-        # decrementing a gauge for it would drive the metric negative — worse
+        # decrementing a gauge for it would drive the metric negative • worse
         # than having no metric at all.
         was_registered = websocket in self._ws_subscriptions or websocket in self._ws_ip
         n_subs = len(self._ws_subscriptions.get(websocket, ()))
@@ -251,7 +251,7 @@ class ConnectionManager:
         # rejected, and *delete* the entry at zero rather than leaving it there.
         # Zeroed-but-retained keys meant two things, both bad:
         #   - the dict grew by one entry per distinct client IP the node ever
-        #     saw, for the life of the process — an unbounded leak;
+        #     saw, for the life of the process • an unbounded leak;
         #   - a socket that died without a clean disconnect (killed worker,
         #     dropped TCP, abrupt close) left its count permanently elevated,
         #     so that user slowly locked themselves out of websockets at 5 with
@@ -280,8 +280,8 @@ class ConnectionManager:
                     del self._market_subs[market_id]
 
         # Gauges are decremented only for sockets this worker actually counted.
-        # A socket can reach here that never was — rejected before `accept()`,
-        # or already reaped by the heartbeat — and decrementing for it would
+        # A socket can reach here that never was • rejected before `accept()`,
+        # or already reaped by the heartbeat • and decrementing for it would
         # drive the metric negative, which is worse than having no metric.
         if was_registered:
             WS_CONNECTIONS.dec()
@@ -290,7 +290,7 @@ class ConnectionManager:
 
         # Unsubscribe from all Redis channels this socket was listening to.
         # __global_trades__ and __notifications__ prefixes are not real market IDs
-        # and were subscribed via subscribe_global_trades / subscribe_user — skip them.
+        # and were subscribed via subscribe_global_trades / subscribe_user • skip them.
         if redis_pubsub_ref:
             for market_id in market_ids:
                 if not market_id.startswith("__"):
@@ -364,7 +364,7 @@ class ConnectionManager:
 
         Concurrent and bounded on purpose. The obvious sequential loop is a
         scalability bug: at `SEND_TIMEOUT_S = 2.0`, fifty wedged sockets take
-        100s — three times the 30s sweep interval, so sweeps pile up. Fifty
+        100s • three times the 30s sweep interval, so sweeps pile up. Fifty
         thousand healthy sockets would take minutes. `_bounded_send` already
         had this right for frames; the sweep now does the same for pings.
         """
@@ -406,7 +406,7 @@ class ConnectionManager:
         return dead
 
     def all_sockets(self) -> list[WebSocket]:
-        """Every *market* socket this worker currently holds (no locks — a
+        """Every *market* socket this worker currently holds (no locks • a
         concurrent unsubscribe may be missed for one pass; the next sweep
         catches it). Notification sockets are a separate registry and are swept
         by `heartbeat_once`, not here."""
@@ -421,7 +421,7 @@ class ConnectionManager:
         Returns how many were reaped. Both registries have to be swept: the
         notification sockets live in `UserConnectionManager`, so a sweep that
         only walked `_market_subs` would leave every logged-in user's socket
-        unreaped — precisely the long-lived ones most likely to be half-open.
+        unreaped • precisely the long-lived ones most likely to be half-open.
         """
         reaped = 0
         market_dead = await self._cleanup_dead(self.all_sockets())
@@ -437,7 +437,7 @@ class ConnectionManager:
         Why this has to exist: a TCP connection can die without a FIN reaching
         us (laptop lid closed, NAT timeout, killed container). The socket then
         looks open forever, keeps its file descriptor, its per-IP counter slot,
-        and — worse — looks healthy to every future send, because `send_json`
+        and • worse • looks healthy to every future send, because `send_json`
         only fails once the kernel buffer finally overflows. Broadcast-failure
         detection catches that, but only for markets that actually trade.
 
@@ -457,7 +457,7 @@ class ConnectionManager:
     async def broadcast_global(self, event: dict):
         """Broadcast to all connected sockets regardless of subscription."""
         # Snapshot the current market -> sockets mapping without holding any lock.
-        # A concurrent modification may miss some sockets in one iteration — acceptable
+        # A concurrent modification may miss some sockets in one iteration • acceptable
         # for periodic pings; the next broadcast will catch them.
         all_sockets: list[WebSocket] = []
         for socks in self._market_subs.values():
@@ -564,7 +564,7 @@ class UserConnectionManager:
         return list(self._ws_to_user.keys())
 
     async def _ping_many(self, sockets: list[WebSocket]) -> list[WebSocket]:
-        """Bounded-concurrency ping sweep — see ConnectionManager._ping_many.
+        """Bounded-concurrency ping sweep • see ConnectionManager._ping_many.
 
         Sequential here would be just as wrong as it was there: these are the
         long-lived per-user sockets, so a page left open overnight is exactly
@@ -629,7 +629,25 @@ class RedisPubSub:
         self._pubsub = self._redis.pubsub()
         self._connected = True
 
-    async def publish_price_update(self, market_id: str, yes_price: float, no_price: float, volume: float):
+    async def publish_price_update(
+        self,
+        market_id: str,
+        yes_price: float,
+        no_price: float,
+        volume: float,
+        outcome_prices: dict[str, float] | None = None,
+    ):
+        """Broadcast a price frame.
+
+        `outcome_prices` maps outcome name -> price. It is required for markets
+        with 3+ outcomes, where the single binary book cannot express a price per
+        outcome and the front end has nothing to draw a per-outcome line from
+        without it. Omitted for binary markets, where yes/no already say
+        everything; the front end's `outcome_prices` branch is simply skipped.
+
+        Keys are the outcome names exactly as the API reports them ("Yes", not
+        "yes") so the consumer can match them against the outcome list.
+        """
         if not self._redis:
             return
 
@@ -640,6 +658,8 @@ class RedisPubSub:
             "no_price": no_price,
             "volume": volume,
         }
+        if outcome_prices:
+            msg["outcome_prices"] = outcome_prices
 
         async def _op():
             pipe = self._redis.pipeline()

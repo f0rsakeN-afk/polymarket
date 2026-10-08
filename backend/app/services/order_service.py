@@ -62,6 +62,21 @@ async def _enqueue_limit_sweep_now() -> None:
         check_limit_order_execution.delay()
 
 
+def _is_finite(value) -> bool:
+    """True only for a finite number.
+
+    Book levels arrive as Decimal, float or str depending on the writer, and
+    None for a missing price. NaN and infinities must not become a price.
+    """
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    return parsed == parsed and parsed not in (float("inf"), float("-inf"))
+
+
 @dataclass
 class OrderResult:
     order_id: str
@@ -93,6 +108,51 @@ class OrderService:
         if total == 0:
             return 0.5, 0.5
         return float(pool.yes_shares) / total, float(pool.no_shares) / total
+
+    @staticmethod
+    def outcome_prices_from_book(
+        book: dict,
+        outcomes,
+    ) -> dict[str, float]:
+        """Per-outcome mid prices from the order book, keyed by outcome name.
+
+        This is the price source for markets with 3+ outcomes: one binary pool
+        cannot price mutually exclusive outcomes, but the book is already
+        per-outcome. Mid of best bid/ask, or the single side when only one is
+        present.
+
+        Outcome names are matched case-insensitively because the book keys are
+        lower-cased, and returned with the canonical casing from the outcome
+        list so the front end can match them directly.
+
+        An outcome with no usable side is omitted rather than defaulted to 0:
+        a fabricated zero is a wrong price, and the front end treats a missing
+        key as a gap.
+        """
+        prices: dict[str, float] = {}
+        books = (book or {}).get("outcomes") or {}
+
+        for outcome in outcomes:
+            name = getattr(outcome, "name", None)
+            if not name:
+                continue
+            entry = books.get(name.lower())
+            if not entry:
+                continue
+
+            bids = [float(b.price) for b in (entry.get("bids") or []) if _is_finite(b.price)]
+            asks = [float(a.price) for a in (entry.get("asks") or []) if _is_finite(a.price)]
+            best_bid = max(bids) if bids else None
+            best_ask = min(asks) if asks else None
+
+            if best_bid is not None and best_ask is not None:
+                prices[name] = (best_bid + best_ask) / 2
+            elif best_ask is not None:
+                prices[name] = best_ask
+            elif best_bid is not None:
+                prices[name] = best_bid
+
+        return prices
 
     @staticmethod
     async def compute_quote(
@@ -758,8 +818,24 @@ class OrderService:
 
         try:
             yes_price, no_price = OrderService._get_market_prices(pool)
+            # For 3+ outcome markets the binary book cannot express a per-outcome
+            # price, so attach the book-derived mids. Without them the front end
+            # has no value to draw a per-outcome line from and the chart's extra
+            # outcomes sit frozen at their seed price while binary markets track
+            # live. All outcomes are priced, not just the traded one, so every
+            # line moves on every frame.
+            outcome_prices: dict[str, float] | None = None
+            if is_multi_outcome:
+                book = await build_orderbook(db, str(market.id))
+                outcome_prices = OrderService.outcome_prices_from_book(
+                    book, all_outcomes
+                )
             await redis_pubsub.publish_price_update(
-                str(market.id), yes_price, no_price, float(market.total_volume)
+                str(market.id),
+                yes_price,
+                no_price,
+                float(market.total_volume),
+                outcome_prices=outcome_prices,
             )
             await redis_pubsub.publish_market_event(str(market.id), "trade:new", {
                 "outcome": data.outcome,

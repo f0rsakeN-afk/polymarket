@@ -112,6 +112,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     (outcomeName: string, fallback: number) => outcomePrices[outcomeName.toLowerCase()] ?? fallback,
     [outcomePrices]
   )
+
+  // outcomePrices is already keyed by lower-cased outcome name (the orderbook's
+  // own key shape), which is exactly what trade-form selects by, so it passes
+  // straight through.
   // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
@@ -593,6 +597,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             marketId={market.id}
             currentYesPrice={Number(market.yes_price)}
             currentNoPrice={Number(market.no_price)}
+            // Live book-derived price per outcome. Multi-outcome markets have no
+            // AMM price at all, so without this the form quoted 0 for the third
+            // and later outcomes.
+            outcomePrices={outcomePrices}
             outcomes={outcomes}
             marketStatus={market.status}
             onSubmit={handleTrade}

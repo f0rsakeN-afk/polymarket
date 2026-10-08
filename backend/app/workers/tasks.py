@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 
 from app.amm.engine import BinaryAMM
 from app.config import settings
@@ -35,9 +35,9 @@ from app.services.liquidity_service import LiquidityService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
-# Thread-local event loops — each Celery thread gets its own loop, reused across tasks
+# Thread-local event loops • each Celery thread gets its own loop, reused across tasks
 _thread_local = threading.local()
 
 
@@ -58,7 +58,7 @@ def celery_run(coro):
 def get_session():
     """Fresh AsyncSession from the shared pooled session factory.
 
-    Note: ``async_session_maker`` is the cached sessionmaker *getter* — calling
+    Note: ``async_session_maker`` is the cached sessionmaker *getter* • calling
     it returns the maker itself, not a session (``async with`` on it raises
     TypeError). ``app.database.async_session()`` returns an actual session
     bound to the pooled engine and honours the test-session patching in
@@ -121,7 +121,7 @@ def expire_stale_orders(self):
                 if not expired_count:
                     return "No orders to expire"
 
-                # Notify WebSocket clients — all publishes run concurrently
+                # Notify WebSocket clients • all publishes run concurrently
                 await asyncio.gather(
                     *[
                         redis_pubsub.publish_market_event(
@@ -168,7 +168,7 @@ def check_limit_order_execution(self):
             async with get_session() as db:
                 # Only markets whose price moved can have newly fillable orders.
                 # AMM prices change exclusively on trade, and every trade marks
-                # its market dirty — so an empty dirty set means zero work.
+                # its market dirty • so an empty dirty set means zero work.
                 # None = Redis unavailable -> fall back to the full scan.
                 dirty = await pop_dirty_markets()
                 if dirty is not None and not dirty:
@@ -193,7 +193,7 @@ def check_limit_order_execution(self):
 
                 executed = 0
 
-                # Group orders by market — one market/pool lock per group instead of per order
+                # Group orders by market • one market/pool lock per group instead of per order
                 by_market: dict[str, list] = {}
                 for order in orders:
                     by_market.setdefault(str(order.market_id), []).append(order)
@@ -219,6 +219,13 @@ def check_limit_order_execution(self):
                         pool = pool_result.scalar_one_or_none()
                         if not pool:
                             continue
+
+                        # Outcome count decides whether an AMM leg is even
+                        # meaningful for this market (see amm_side below).
+                        count_result = await db.execute(
+                            select(func.count()).select_from(Outcome).where(Outcome.market_id == market.id)
+                        )
+                        market_outcome_count = int(count_result.scalar_one())
 
                         for order in market_orders:
                             # Re-lock the individual order row
@@ -246,6 +253,14 @@ def check_limit_order_execution(self):
                             if not outcome:
                                 continue
 
+                            # Resolve the AMM side explicitly. The engine selects its
+                            # reserve with a literal `outcome == "yes"`, so passing
+                            # a raw name routed every outcome that was not "yes"
+                            # into the NO reserve. None for 3+ outcome markets.
+                            amm_side: str | None = None
+                            if market_outcome_count <= 2:
+                                amm_side = "yes" if outcome.name.lower() == "yes" else "no"
+
                             order_side = re_locked_order.side
                             order_amount = re_locked_order.remaining_amount
                             limit_price = re_locked_order.price
@@ -260,14 +275,19 @@ def check_limit_order_execution(self):
                             amm_fee = Decimal(0)
                             sell_proceeds_amm = Decimal(0)
 
-                            if remaining > 0:
+                            # Same rule as OrderService.execute_order: a market with
+                            # 3+ outcomes has no AMM leg, because one binary book
+                            # cannot price mutually exclusive outcomes. A resting
+                            # order there is serviced by the book alone - it must
+                            # not be filled against the NO reserve.
+                            if remaining > 0 and amm_side is not None:
                                  amm = BinaryAMM(
                                      yes_shares=pool.yes_shares,
                                      no_shares=pool.no_shares,
                                      fee_rate=pool.fee_rate,
                                  )
 
-                                 current_price = float(amm.price(outcome.name.lower()))
+                                 current_price = float(amm.price(amm_side))
                                  limit_price_f = float(limit_price)
 
                                  if order_side == "buy":
@@ -292,7 +312,7 @@ def check_limit_order_execution(self):
                                      # must not be double-spent by a second fill.
                                      if wallet.balance - wallet.locked_balance < remaining:
                                          continue
-                                     quote = amm.buy(outcome.name.lower(), remaining)
+                                     quote = amm.buy(amm_side, remaining)
                                      wallet.balance -= remaining
                                      # Escrow the spend: it funds the shares the
                                      # AMM just minted (single-entry ledger).
@@ -321,7 +341,7 @@ def check_limit_order_execution(self):
                                          pos.shares_held = total_shares_pos
                                      else:
                                          avg_price = remaining / amm_shares if amm_shares > 0 else Decimal(0)
-                                         # Upsert: INSERT ON CONFLICT DO UPDATE — atomic, no race between SELECT and INSERT
+                                         # Upsert: INSERT ON CONFLICT DO UPDATE • atomic, no race between SELECT and INSERT
                                          await db.execute(
                                              text("""
                                                  INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
@@ -353,7 +373,7 @@ def check_limit_order_execution(self):
                                      if not pos or pos.shares_held < remaining:
                                          continue
 
-                                     quote = amm.sell(outcome.name.lower(), remaining)
+                                     quote = amm.sell(amm_side, remaining)
                                      cost_basis = pos.average_price * remaining
                                      sell_proceeds_amm = quote.collateral_in
                                      realized_pnl = sell_proceeds_amm - cost_basis
@@ -460,7 +480,7 @@ def check_limit_order_execution(self):
                         await db.commit()
                     except Exception:
                         await db.rollback()
-                        logger.exception(f"Limit executor failed for market {market_id} — continuing")
+                        logger.exception(f"Limit executor failed for market {market_id} • continuing")
                         continue
 
                     if market_fills:
@@ -482,7 +502,7 @@ def check_limit_order_execution(self):
                         # These fills moved the price again, so an order the
                         # current sweep already passed over may now be
                         # fillable. Re-arm the sweep instead of leaving that
-                        # cascade for the next 30s beat tick — throttled to
+                        # cascade for the next 30s beat tick • throttled to
                         # one enqueue per second, so it cannot loop hot.
                         try:
                             from app.services.order_service import (
@@ -711,7 +731,7 @@ def check_markets_ready_to_resolve(self):
 
                 for market in markets:
                     market.status = "closed"
-                    logger.warning(f"Market {market.slug} ({market.id}) closed — awaiting resolution")
+                    logger.warning(f"Market {market.slug} ({market.id}) closed • awaiting resolution")
 
                 await db.commit()
                 return f"Closed {len(markets)} markets"
@@ -733,19 +753,19 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
     """Settle one market: pay winners from escrow, sweep protocol fees, redeem LP shares.
 
     Module-level coroutine rather than a nested `_run()` so it can be awaited
-    directly on the caller's event loop — Celery's `celery_run()` needs a
+    directly on the caller's event loop • Celery's `celery_run()` needs a
     thread with no running loop, which never exists inside an async test.
     """
     async with get_session() as db:
         from app.redis import get_redis
         r = await get_redis()
 
-        # Finished-marker — written only after a successful settlement
+        # Finished-marker • written only after a successful settlement
         # commit. Status can't be used as the "already settled" signal:
         # both enqueueing callers set `resolving`/`resolved` *before*
         # the worker starts, which is exactly why the old guard
         # (`if status in ("resolving", "resolved"): return`) skipped
-        # every single settlement — winners were never credited, LP
+        # every single settlement • winners were never credited, LP
         # shares were never redeemed, protocol fees were never swept,
         # and markets stayed in "resolving" where claim_winnings
         # refuses to pay (it requires "resolved").
@@ -764,7 +784,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         # A stale delivery (market re-resolved through the dispute
         # flow) must not settle against a superseded proposal.
         if not market.winning_outcome_id:
-            return f"Market {market_id} has no winning outcome — refusing to settle"
+            return f"Market {market_id} has no winning outcome • refusing to settle"
         if str(market.winning_outcome_id) != str(winning_outcome_id):
             logger.warning(json.dumps({
                 "event": "settlement_outcome_mismatch",
@@ -772,7 +792,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 "expected": str(winning_outcome_id),
                 "recorded": str(market.winning_outcome_id),
             }))
-            return f"Market {market_id} outcome mismatch — stale settlement task dropped"
+            return f"Market {market_id} outcome mismatch • stale settlement task dropped"
 
         pool_result = await db.execute(
             select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
@@ -781,7 +801,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
 
         # Get or create system treasury user with row lock to prevent concurrent creation.
         # System users use a cryptographically random password_hash derived from
-        # the application's JWT secret — they cannot be used for human authentication.
+        # the application's JWT secret • they cannot be used for human authentication.
         treasury_result = await db.execute(
             select(User).where(User.is_system).with_for_update().limit(1)
         )
@@ -813,7 +833,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
             db.add(treasury_wallet)
             await db.flush()
 
-        # Settle positions — lock only unsettled rows to prevent double settlement with claim_winnings (C9 fix)
+        # Settle positions • lock only unsettled rows to prevent double settlement with claim_winnings (C9 fix)
         pos_result = await db.execute(
             select(Position)
             .where(Position.market_id == market.id, Position.settled_at.is_(None))
@@ -821,7 +841,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         )
         positions = pos_result.scalars().all()
 
-        # Batch-fetch all wallets upfront — O(1) query vs O(n) inside the loop
+        # Batch-fetch all wallets upfront • O(1) query vs O(n) inside the loop
         user_ids = list({str(p.user_id) for p in positions})
         if user_ids:
             wallets_result = await db.execute(
@@ -836,7 +856,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         # per-position and reacting to a shortfall part-way through is what
         # used to happen: the first winners were paid in full, the last one
         # got whatever was left, and *every* position was still stamped
-        # settled — so the remainder was owed to nobody and reachable by
+        # settled • so the remainder was owed to nobody and reachable by
         # nobody. A shortfall can only mean the ledger upstream is broken, so
         # the correct response is to abort the whole settlement, leave every
         # position claimable, and surface it loudly.
@@ -868,7 +888,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 "action": "settlement_aborted_positions_left_claimable",
             }))
             raise EscrowShortfallError(
-                f"market {market.id}: escrow cannot fund settlement — need {required}, "
+                f"market {market.id}: escrow cannot fund settlement • need {required}, "
                 f"hold {available}. Positions left unsettled and claimable."
             )
 
@@ -882,7 +902,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 continue
 
             is_winner = str(pos.outcome_id) == winning_outcome_id
-            # Use Decimal throughout to avoid float rounding — convert to float only at DB write
+            # Use Decimal throughout to avoid float rounding • convert to float only at DB write
             payout: Decimal = pos.shares_held if is_winner else Decimal(0)
 
             # Strict debit: the pre-flight proved the escrow covers the entire
@@ -891,7 +911,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
             if payout > 0:
                 pool.debit_collateral(payout)
 
-            # Mark as settled — prevents double-claim if claim_winnings is called after Celery settles
+            # Mark as settled • prevents double-claim if claim_winnings is called after Celery settles
             pos.settled_at = Decimal(str(int(datetime.now(UTC).timestamp())))
 
             if payout > 0:
@@ -923,12 +943,12 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 winners_credited += 1
 
         # Extract protocol fees to treasury before LP redemption.
-        # The sweep is paid out of the escrow too — protocol_fees is a
+        # The sweep is paid out of the escrow too • protocol_fees is a
         # sub-ledger inside pool.collateral, so removing the claim and
         # the backing dollars happen together.
         if pool and pool.protocol_fees > 0:
             owed_fees = Decimal(str(pool.protocol_fees))
-            # Covered by the pre-flight check — strict debit fails the whole
+            # Covered by the pre-flight check • strict debit fails the whole
             # settlement if it somehow isn't, rather than zeroing the fee
             # record while paying the treasury less than it recorded.
             treasury_amount = pool.debit_collateral(owed_fees)
@@ -947,8 +967,8 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 )
                 db.add(treasury_tx)
 
-        # Settle LP shares — lock rows to prevent concurrent LP redemption
-        # NOTE: runs regardless of protocol_fees — LPs must be credited even on 0-fee markets (C1 fix)
+        # Settle LP shares • lock rows to prevent concurrent LP redemption
+        # NOTE: runs regardless of protocol_fees • LPs must be credited even on 0-fee markets (C1 fix)
         if pool:
             lp_result = await db.execute(
                 select(LPShare).where(LPShare.pool_id == pool.id, LPShare.lp_tokens > 0).with_for_update()
@@ -956,7 +976,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
             lp_shares = lp_result.scalars().all()
 
             # LP redemption: LPs split whatever the escrow still holds
-            # *after* winners and protocol fees — paid in USDC,
+            # *after* winners and protocol fees • paid in USDC,
             # pro-rata to their lp_tokens. The old formula handed them
             # the winning side's reserve shares
             # (winning_shares / lp_token_supply), which was uncorrelated
@@ -970,7 +990,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 else Decimal(0)
             )
 
-            # These payouts are pro-rata of the residual, so they sum to it —
+            # These payouts are pro-rata of the residual, so they sum to it •
             # strict debit cannot fail, and if it ever did that would mean the
             # token supply and the share rows disagree (a real bug), so fail
             # loudly rather than underpaying an LP and burning their tokens.
@@ -986,7 +1006,7 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
                 }))
                 raise EscrowShortfallError(
                     f"market {market.id}: LP share rows total {outstanding_tokens} but "
-                    f"lp_token_supply is {pool.lp_token_supply} — refusing to redeem"
+                    f"lp_token_supply is {pool.lp_token_supply} • refusing to redeem"
                 )
 
             for lp in lp_shares:
@@ -1052,9 +1072,9 @@ def resolve_market(self, market_id: str, winning_outcome_id: str):
         # below on success AND on failure: the old code never released it, so
         # a crash left the lock held for its 2h TTL and every Celery retry hit
         # "already running", acked, and the market silently never settled.
-        # The real correctness guarantee is DB-side — the market row lock plus
+        # The real correctness guarantee is DB-side • the market row lock plus
         # idempotent data (positions carry settled_at, LP shares are zeroed,
-        # protocol fees are swept) — this lock only collapses duplicate work.
+        # protocol fees are swept) • this lock only collapses duplicate work.
         # NOTE: distinct from the API enqueue dedup key (resolve_enqueue:{id}).
         from app.redis import get_redis_sync
 
@@ -1276,31 +1296,31 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
     start = time.perf_counter()
     try:
         if purpose == "verify":
-            subject = "Your Polymarket verification code"
+            subject = "Your PredictX verification code"
             body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "magic" and magic_url:
-            subject = "Your Polymarket login link"
+            subject = "Your PredictX login link"
             body = (
                 f"Click this link to sign in: {magic_url}\n\n"
                 f"This link expires in 15 minutes. "
                 f"If you didn't request this, you can safely ignore this email."
             )
         elif purpose == "magic":
-            subject = "Your Polymarket login code"
+            subject = "Your PredictX login code"
             body = (
                 f"Your login code is: {code}\n"
                 f"This code expires in 10 minutes. "
                 f"If you didn't request this, you can safely ignore this email."
             )
         elif purpose == "resetpwd":
-            subject = "Your Polymarket password reset code"
+            subject = "Your PredictX password reset code"
             body = (
                 f"Your password reset code is: {code}\n"
                 f"This code expires in 10 minutes. "
                 f"If you didn't request this, your account is safe."
             )
         elif purpose == "exists":
-            subject = "You already have a Polymarket account"
+            subject = "You already have a PredictX account"
             body = (
                 "Someone tried to register with this email address, but an "
                 "account already exists.\n\n"
@@ -1309,7 +1329,7 @@ def send_auth_email(self, email: str, purpose: str, code: str | None = None, mag
                 "- your account and password are unchanged."
             )
         else:
-            subject = "Your Polymarket code"
+            subject = "Your PredictX code"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
         send_email.delay(to_email=email, subject=subject, body=body)
@@ -1354,7 +1374,7 @@ def enqueue_otp(self, email: str, purpose: str):
             return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()[:64]
 
         def _generate_code() -> str:
-            # secrets.randbelow(10**8) gives 8-digit code (~100M combos) — cryptographically secure
+            # secrets.randbelow(10**8) gives 8-digit code (~100M combos) • cryptographically secure
             return str(secrets.randbelow(10**8)).zfill(8)
 
         code = _generate_code()
@@ -1363,7 +1383,7 @@ def enqueue_otp(self, email: str, purpose: str):
 
         # Store in Redis synchronously inside the task.
         # Hash-only: the plaintext code goes into the email body below and
-        # nowhere else — see OTPService.verify_code, which re-hashes the
+        # nowhere else • see OTPService.verify_code, which re-hashes the
         # submitted code instead of reading a stored plaintext one.
         async def _store():
             from app.redis import get_redis, redis_cb
@@ -1375,16 +1395,16 @@ def enqueue_otp(self, email: str, purpose: str):
 
         # Build email content based on purpose
         if purpose == "verify":
-            subject = "Your Polymarket verification code"
+            subject = "Your PredictX verification code"
             body = f"Your verification code is: {code}\nThis code expires in 10 minutes."
         elif purpose == "magic":
-            subject = "Your Polymarket login code"
+            subject = "Your PredictX login code"
             body = f"Your login code is: {code}\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email."
         elif purpose == "resetpwd":
-            subject = "Your Polymarket password reset code"
+            subject = "Your PredictX password reset code"
             body = f"Your password reset code is: {code}\nThis code expires in 10 minutes. If you didn't request this, your account is safe."
         else:
-            subject = "Your Polymarket code"
+            subject = "Your PredictX code"
             body = f"Your code is: {code}\nThis code expires in 10 minutes."
 
         send_email.delay(to_email=email, subject=subject, body=body)
@@ -1504,7 +1524,7 @@ def audit_escrow_invariants(self):
     """Nightly check that every pool's escrow still covers what it owes.
 
     Settlement pre-flights the same arithmetic and refuses to run when the
-    escrow is short — correct, but it only tells you at resolution. This runs
+    escrow is short • correct, but it only tells you at resolution. This runs
     the identical check on a schedule so a broken ledger surfaces overnight,
     naming the market, while it can still be funded or unwound.
 
