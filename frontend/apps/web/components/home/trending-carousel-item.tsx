@@ -179,20 +179,32 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
 
   const displayOutcomes = useMemo(() => {
     if (!isMultiOutcome) return []
-    // Latest sample wins: history is ordered ascending, so the last entry
-    // carrying a price for an outcome is its current one.
+
+    // Seed from the price the API put on each outcome, so the card shows real
+    // numbers on first paint. Reading only from price history meant a market
+    // whose history had not been snapshotted yet rendered a column of "—" -
+    // the API knows every outcome's price, so there is no reason to wait.
     const latest = new Map<string, number>()
+    for (const outcome of outcomes) {
+      const seeded = Number(outcome.price)
+      if (Number.isFinite(seeded)) latest.set(outcome.name, seeded)
+    }
+
+    // History then overrides, newest last: it is the live source once it
+    // exists. (History is ordered ascending, so the last entry carrying a
+    // price for an outcome is its current one.)
     for (const point of historyPoints) {
       for (const outcome of outcomes) {
         const price = Number(point[outcome.name])
         if (Number.isFinite(price)) latest.set(outcome.name, price)
       }
     }
+
     return outcomes.map((outcome) => {
       const price = latest.get(outcome.name)
       return {
         name: outcome.name,
-        // null rather than 0 for an outcome the book cannot price: a fabricated
+        // null rather than 0 for an outcome nothing can price: a fabricated
         // zero is a real, wrong probability.
         pct:
           price === undefined

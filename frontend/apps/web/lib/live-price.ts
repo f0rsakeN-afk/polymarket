@@ -91,6 +91,63 @@ export interface PriceHistorySample {
  * missing price is a gap, and a fabricated zero is a wrong price that also
  * stretches the y-domain.
  */
+/**
+ * Per-outcome prices, keyed by lower-cased outcome name.
+ *
+ * Preference order:
+ *   1. `outcome.price` from the API - the backend prices every outcome from its
+ *      own pool, so this is a real quote and works on first paint.
+ *   2. An orderbook midpoint, only for an outcome the API did not price.
+ *
+ * The old code derived prices from the orderbook alone. On a thin market with no
+ * resting orders that yields nothing, every outcome then fell back to the same
+ * even split, and an eight-way market rendered as "Yes 75 / No 25" - two
+ * numbers that were not any of its outcomes.
+ *
+ * Extracted from market-detail.tsx so the ordering is testable on its own; the
+ * "prefer the API, fall back to the book" rule is the whole point and was
+ * invisible when it lived inside a useMemo in a component.
+ */
+export function buildOutcomePrices(
+  outcomes: { name?: string; price?: number | string | null }[] | null | undefined,
+  orderbook?: Record<string, { bids?: { price: string | number }[]; asks?: { price: string | number }[] }> | null
+): Record<string, number> {
+  const map: Record<string, number> = {}
+
+  for (const outcome of outcomes ?? []) {
+    // null/undefined means "the API did not price this outcome". It must be
+    // skipped explicitly rather than run through Number(), because Number(null)
+    // is 0 - and 0 renders as a confident "0%, certain not to happen" for an
+    // outcome nobody quoted.
+    if (outcome?.name == null || outcome?.price == null) continue
+    const price = Number(outcome.price)
+    if (Number.isFinite(price)) {
+      map[outcome.name.toLowerCase()] = price
+    }
+  }
+
+  for (const [name, book] of Object.entries(orderbook ?? {})) {
+    const key = name.toLowerCase()
+    if (map[key] !== undefined) continue
+
+    const bids = (book?.bids ?? [])
+      .map((b) => Number(b.price))
+      .filter((p) => Number.isFinite(p))
+    const asks = (book?.asks ?? [])
+      .map((a) => Number(a.price))
+      .filter((p) => Number.isFinite(p))
+
+    const bestBid = bids.length ? Math.max(...bids) : NaN
+    const bestAsk = asks.length ? Math.min(...asks) : NaN
+
+    if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) map[key] = (bestBid + bestAsk) / 2
+    else if (Number.isFinite(bestAsk)) map[key] = bestAsk
+    else if (Number.isFinite(bestBid)) map[key] = bestBid
+  }
+
+  return map
+}
+
 export function priceHistoryToPoints(
   samples: PriceHistorySample[] | undefined | null
 ): LivePricePoint[] {

@@ -36,11 +36,26 @@ vi.mock("next/dynamic", () => ({
 
 import TrendingCarouselItem from "@/components/home/trending-carousel-item";
 
-const outcome = (name: string, index: number) => ({
+const outcome = (name: string, index: number, price?: number) => ({
   id: name,
   name,
   outcome_index: index,
+  // The API prices every outcome; the card must not wait for price history
+  // before showing a number.
+  ...(price === undefined ? {} : { price }),
 });
+
+/** A market whose outcomes carry the API's per-outcome prices. */
+function pricedMarket(
+  rows: { name: string; price: number }[],
+  slug = "euro-2024-winner"
+) {
+  return {
+    ...base,
+    slug,
+    outcomes: rows.map((r, i) => outcome(r.name, i, r.price)),
+  } as unknown as MarketResponse;
+}
 
 const base = {
   id: "mkt-1",
@@ -280,5 +295,77 @@ describe("three-or-more outcome markets", () => {
     );
 
     expect(screen.getByText("+1 more")).toBeInTheDocument();
+  });
+});
+describe("per-outcome prices come from the API", () => {
+  it("shows real prices on first paint, before any history exists", () => {
+    // The bug this guards: the card read prices only from price_history, so a
+    // market whose history had not been snapshotted yet rendered a column of
+    // "—" even though the API had priced every outcome.
+    setHistory([]);
+
+    render(
+      <TrendingCarouselItem
+        market={pricedMarket([
+          { name: "France", price: 0.4893 },
+          { name: "England", price: 0.1854 },
+          { name: "Germany", price: 0.1051 },
+        ])}
+      />
+    );
+
+    expect(screen.getByText("49%")).toBeInTheDocument();
+    expect(screen.getByText("19%")).toBeInTheDocument();
+    expect(screen.getByText("11%")).toBeInTheDocument();
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("never renders a flat 1/n for every outcome", () => {
+    setHistory([]);
+    render(
+      <TrendingCarouselItem
+        market={pricedMarket([
+          { name: "France", price: 0.49 },
+          { name: "England", price: 0.19 },
+          { name: "Germany", price: 0.11 },
+          { name: "Spain", price: 0.07 },
+        ])}
+      />
+    );
+
+    // 1/4 would be 25% four times.
+    const rendered = screen
+      .getAllByText(/^\d+%$/)
+      .map((el) => el.textContent);
+    expect(new Set(rendered).size).toBe(rendered.length);
+    expect(rendered).not.toContain("25%");
+  });
+
+  it("lets newer history override the API's seeded price", () => {
+    setHistory(samples([{ name: "France", price: 0.2 }]));
+    render(
+      <TrendingCarouselItem
+        market={pricedMarket([
+          { name: "France", price: 0.4893 },
+          { name: "England", price: 0.1854 },
+        ])}
+      />
+    );
+
+    // History is the live source once it exists; the seed is only for first paint.
+    expect(screen.getByText("20%")).toBeInTheDocument();
+    expect(screen.getByText("19%")).toBeInTheDocument();
+  });
+
+  it("still shows '—' when neither the API nor history prices an outcome", () => {
+    setHistory([]);
+    render(
+      <TrendingCarouselItem
+        market={marketWith([{ name: "France" }, { name: "England" }])}
+      />
+    );
+
+    // No fabricated 0%: an unknown price is unknown, not certain.
+    expect(screen.getAllByText("—").length).toBe(2);
   });
 });
