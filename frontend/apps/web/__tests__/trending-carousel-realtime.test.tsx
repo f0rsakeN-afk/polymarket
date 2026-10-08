@@ -12,6 +12,14 @@ import type { MarketResponse } from "@/hooks/api/types/market";
 
 let socketHandler: ((data: unknown) => void) | null = null;
 
+// The card now fetches real price history (so the sparkline is a curve rather
+// than two seeded points). Mocked here: without this the real hook runs and
+// demands a QueryClientProvider.
+let history: unknown = [];
+vi.mock("@/hooks/api/use-markets", () => ({
+  usePriceHistory: () => ({ data: history }),
+}));
+
 vi.mock("@/hooks/use-market-socket", () => ({
   useMarketSocket: ({ onMessage }: { onMessage: (d: unknown) => void }) => {
     socketHandler = onMessage;
@@ -23,7 +31,7 @@ vi.mock("@/hooks/use-market-socket", () => ({
 // synchronously and we can inspect the props it was handed.
 const chartProps: { data: unknown[]; value: number }[] = [];
 vi.mock("next/dynamic", () => ({
-  default: (_loader: () => Promise<unknown>) =>
+  default: () =>
     function Stub(props: { data: unknown[]; value: number; children?: unknown }) {
       chartProps.push({ data: props.data, value: props.value });
       return <div data-testid="sparkline" />;
@@ -44,6 +52,7 @@ const market = {
 
 beforeEach(() => {
   socketHandler = null;
+  history = [];
   chartProps.length = 0;
 });
 
@@ -93,9 +102,11 @@ describe("TrendingCarouselItem live price", () => {
 
   it("caps the history so a long-lived tab cannot grow unbounded", () => {
     render(<TrendingCarouselItem market={market} />);
-    for (let i = 0; i < 80; i++) sendFrame(0.5 + i / 1000);
+    for (let i = 0; i < 200; i++) sendFrame(0.5 + i / 1000);
 
-    expect(chartProps.at(-1)!.data.length).toBeLessThanOrEqual(60);
+    // Combined history + live points are capped, so the array stays bounded no
+    // matter how long the tab is left open.
+    expect(chartProps.at(-1)!.data.length).toBeLessThanOrEqual(120);
   });
 
   it("never appends a zero for a malformed frame", () => {

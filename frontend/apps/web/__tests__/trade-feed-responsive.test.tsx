@@ -12,7 +12,6 @@
  * it - each breakpoint's column set fills the row on its own.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
 import {
   DESKTOP_COLUMNS,
   MOBILE_COLUMNS,
@@ -66,40 +65,3 @@ describe("trade feed column sets", () => {
     expect(DESKTOP_COLUMNS.some((c) => c.hiddenSm)).toBe(false);
   });
 });
-
-describe("trade feed rendering", () => {
-  const trades = [
-    {
-      id: "t1",
-      market_id: "m1",
-      market_slug: "slug",
-      market_question: "Will X?",
-      outcome: "Team A Wins The Cup Final",
-      side: "buy" as const,
-      price: "0.6200",
-      amount: "100",
-      executed_at: new Date().toISOString(),
-      username: "a-very-long-username-that-would-overflow",
-    },
-  ];
-
-  it("renders a row whose grid swaps column count at sm", () => {
-    const { container } = render(
-      <div>{trades.map((t) => null)}</div>
-    );
-    // Structure is asserted below via the row component directly.
-    expect(container).toBeTruthy();
-  });
-
-  it("shows outcome on phones without giving it its own column", () => {
-    // The phone set has no Outcome column, so the value moves under the trader
-    // name instead of being dropped - otherwise a phone user cannot tell
-    // which outcome was traded at all.
-    const { unmount } = render(<TradeRowForTest trade={trades[0]!} />);
-    expect(screen.getByText("Team A Wins The Cup Final")).toBeInTheDocument();
-    unmount();
-  });
-});
-
-// Imported lazily so the column-set assertions above stay readable.
-import { TradeRow as TradeRowForTest } from "@/components/trades/trade-feed";

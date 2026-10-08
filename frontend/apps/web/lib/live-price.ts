@@ -72,6 +72,50 @@ export function buildLivePricePoint(
 }
 
 /**
+ * Minimal shape of one REST price-history sample.
+ */
+export interface PriceHistorySample {
+  timestamp: string;
+  outcomes?: { id?: string; name?: string; price?: string | number }[];
+}
+
+/**
+ * Map REST price-history samples onto chart points.
+ *
+ * Shared by the market page and the home-page cards so both draw the same curve
+ * from the same data. The cards previously seeded two identical points and
+ * waited for a WebSocket frame, which renders as a dead straight line whenever
+ * nothing trades - a chart that looks broken rather than a flat market.
+ *
+ * Samples with no usable price are skipped rather than defaulted to 0: a
+ * missing price is a gap, and a fabricated zero is a wrong price that also
+ * stretches the y-domain.
+ */
+export function priceHistoryToPoints(
+  samples: PriceHistorySample[] | undefined | null
+): LivePricePoint[] {
+  if (!samples?.length) return [];
+
+  const points: LivePricePoint[] = [];
+  for (const sample of samples) {
+    const outcomes = sample.outcomes ?? [];
+    const value = Number(outcomes[0]?.price);
+    if (!Number.isFinite(value)) continue;
+
+    const parsedTime = new Date(sample.timestamp).getTime() / 1000;
+    if (!Number.isFinite(parsedTime)) continue;
+
+    const point: LivePricePoint = { time: parsedTime, value };
+    for (const outcome of outcomes) {
+      const price = Number(outcome?.price);
+      if (Number.isFinite(price) && outcome?.name) point[outcome.name] = price;
+    }
+    points.push(point);
+  }
+  return points;
+}
+
+/**
  * Patch the cached market with the frame's prices.
  *
  * Returns the same object reference when there is nothing to write, so React

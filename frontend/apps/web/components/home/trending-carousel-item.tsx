@@ -1,9 +1,11 @@
 "use client"
 
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
 import { useMarketSocket } from "@/hooks/use-market-socket"
+import { usePriceHistory } from "@/hooks/api/use-markets"
+import { priceHistoryToPoints, buildLivePricePoint } from "@/lib/live-price"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { MarketResponse } from "@/hooks/api/types/market"
 
@@ -21,6 +23,15 @@ const LiveLine = dynamic(
   () => import("@workspace/ui/components/charts/live-line").then((m) => ({ default: m.LiveLine })),
   { ssr: false }
 )
+
+/** Series palette, matching the market page so a colour means the same thing. */
+const CHART_COLORS = [
+  "var(--chart-1)",
+  "var(--chart-5)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-2)",
+]
 
 interface TrendingCarouselItemProps {
   market: MarketResponse
@@ -42,6 +53,19 @@ function parseYesPrice(raw: string | number | null | undefined): number | null {
 }
 
 function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
+  // Real history, same source the market page charts. Without it the sparkline
+  // seeded two identical points and waited for a WebSocket frame, so any market
+  // that had not traded recently drew a dead straight line - which reads as a
+  // broken chart rather than an unchanged price.
+  const { data: historyData } = usePriceHistory(market.slug)
+
+  const historyPoints = useMemo(
+    // priceHistoryToPoints always sets `value`, so it satisfies LiveLinePoint;
+    // the cast keeps the chart's required field from being re-derived here.
+    () => priceHistoryToPoints(historyData as never) as LiveLinePoint[],
+    [historyData]
+  )
+
   // Live price, seeded from the REST payload and moved by every WS frame.
   //
   // The card used to re-read `market.yes_price` for everything it displayed,
@@ -52,39 +76,55 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
     parseYesPrice(market.yes_price)
   )
 
-  const [priceHistory, setPriceHistory] = useState<LiveLinePoint[]>(() => {
-    const parsed = parseYesPrice(market.yes_price)
-    // No usable price seeds no points rather than a 0: a zero seed flowed into
-    // the y-domain and drew the sparkline flat on the floor.
-    if (parsed === null) return []
-    const now = Math.floor(Date.now() / 1000)
+  // History is the base; live frames are appended by the WS handler. Seeded from
+  // history rather than the current price so a market with real trading has a
+  // curve immediately, and from the current price only when there is none.
+  const [livePoints, setLivePoints] = useState<LiveLinePoint[]>([])
+
+  // Anchor clock, captured once like the market page's seedTime. Date.now() in
+  // the body of a useMemo is an impure render-time call: it shifts on every
+  // re-render, so the seeded points moved each time anything else changed.
+  const [seedTime] = useState(() => Math.floor(Date.now() / 1000))
+
+  const priceHistory = useMemo(() => {
+    // Real history wins. Without it the seed is two identical points, which
+    // draws a dead straight line and reads as a broken chart rather than an
+    // unchanged price.
+    if (historyPoints.length > 0) {
+      return [...historyPoints, ...livePoints].slice(-120)
+    }
+
+    const seed = parseYesPrice(market.yes_price)
+    if (seed === null) return livePoints
+    // Seed first, then live: the seed points are older, and the chart's tip is
+    // the LAST point. Appending the seed last made the tip show the stale seed
+    // instead of the newest price.
     return [
-      { time: now - 60, value: parsed },
-      { time: now, value: parsed },
-    ]
-  })
+      { time: seedTime - 60, value: seed },
+      { time: seedTime, value: seed },
+      ...livePoints,
+    ].slice(-120)
+  }, [historyPoints, livePoints, market.yes_price, seedTime])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number }
-    if (msg.type !== "market:price_update" || !Number.isFinite(msg.yes_price)) return
+    const msg = data as { type?: string; yes_price?: number; outcome_prices?: Record<string, number> }
+    if (msg.type !== "market:price_update") return
 
-    const price = msg.yes_price as number
-    setLivePrice(price)
+    /*
+     * buildLivePricePoint, not a hand-rolled `{time, value}`.
+     *
+     * A bare point carries only the primary `value`, so on a multi-outcome
+     * market every per-outcome line lost its key at the live tip and - now that
+     * getY renders a missing key as a gap rather than a fake 0 - the coloured
+     * lines would break at the right edge. The server sends `outcome_prices` for
+     * 3+ outcome markets, and this maps them onto their outcome names.
+     */
+    const point = buildLivePricePoint(msg, Math.floor(Date.now() / 1000))
+    if (!point) return
 
-    setPriceHistory((prev) => {
-      // `msg.yes_price ?? 0` would append a hard 0 for a malformed frame - the
-      // exact "graph dives to zero" failure fixed on the market page.
-      if (!Number.isFinite(msg.yes_price)) return prev
-      const now = Math.floor(Date.now() / 1000)
-      const seed: LiveLinePoint[] =
-        prev.length === 0
-          ? [
-              { time: now - 60, value: price },
-              { time: now, value: price },
-            ]
-          : prev
-      return [...seed, { time: now, value: price }].slice(-60)
-    })
+    if (Number.isFinite(msg.yes_price)) setLivePrice(msg.yes_price as number)
+    // buildLivePricePoint always sets `value`; the cast mirrors the history one.
+    setLivePoints((prev) => [...prev, point as unknown as LiveLinePoint].slice(-60))
   }, [])
 
   const { status } = useMarketSocket({
@@ -104,11 +144,76 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
   const shownPrice = livePrice ?? parseYesPrice(market.yes_price) ?? 0.5
   const prob = Math.round(Math.min(Math.max(shownPrice, 0), 1) * 100)
 
+  /*
+   * Named-outcome support, which is not the same thing as "more than two".
+   *
+   * The list endpoint's `outcomes` is nullable and carries no price, so the
+   * per-outcome prices come from the same price-history payload the chart uses.
+   * `yes_price`/`no_price` describe the binary pool; on a named market they are
+   * not any of the outcomes, so they must not be displayed as if they were.
+   */
+  // `outcomes` is a fresh array when the list payload carries none (`market.outcomes`
+  // is nullable), which would make every downstream memo recompute each render.
+  const outcomes = useMemo(() => market.outcomes ?? [], [market.outcomes])
+
+  /*
+   * Binary means "the outcomes are the YES/NO pair" - not "there are two of
+   * them". Counting outcomes gets a 2-way named market wrong: a Trump-vs-Biden
+   * market has two outcomes, but rendering it as "Yes 55% / No 45%" labels them
+   * with sides that do not exist, and it is not the binary book the AMM prices.
+   *
+   * Same rule as the market page (`isBinary` there = an outcome named "yes" and
+   * one named "no"), so a card and its detail page always agree.
+   *
+   * Edge case: with NO outcome names there is nothing to judge by, so fall back
+   * to the binary split - yes_price/no_price are then the only prices we have,
+   * and an empty outcome list would render a card with no prices at all.
+   */
+  const isBinaryMarket = useMemo(() => {
+    if (outcomes.length === 0) return true
+    const names = outcomes.map((outcome) => outcome.name.toLowerCase())
+    return names.includes("yes") && names.includes("no")
+  }, [outcomes])
+
+  const isMultiOutcome = !isBinaryMarket
+
+  const displayOutcomes = useMemo(() => {
+    if (!isMultiOutcome) return []
+    // Latest sample wins: history is ordered ascending, so the last entry
+    // carrying a price for an outcome is its current one.
+    const latest = new Map<string, number>()
+    for (const point of historyPoints) {
+      for (const outcome of outcomes) {
+        const price = Number(point[outcome.name])
+        if (Number.isFinite(price)) latest.set(outcome.name, price)
+      }
+    }
+    return outcomes.map((outcome) => {
+      const price = latest.get(outcome.name)
+      return {
+        name: outcome.name,
+        // null rather than 0 for an outcome the book cannot price: a fabricated
+        // zero is a real, wrong probability.
+        pct:
+          price === undefined
+            ? null
+            : Math.round(Math.min(Math.max(price, 0), 1) * 100),
+      }
+    })
+  }, [historyPoints, isMultiOutcome, outcomes])
+
   return (
     <Link
       href={`/markets/${market.slug}`}
       role="listitem"
-      aria-label={`${market.question} • YES ${prob}%, NO ${100 - prob}%`}
+      aria-label={
+        isMultiOutcome
+          ? `${market.question} • ${displayOutcomes
+              .filter((o) => o.pct !== null)
+              .map((o) => `${o.name} ${o.pct}%`)
+              .join(", ")}`
+          : `${market.question} • YES ${prob}%, NO ${100 - prob}%`
+      }
       className="flex w-[280px] shrink-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:shadow-md"
     >
       {/* Header row */}
@@ -156,33 +261,78 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
           numXTicks={3}
           height={96}
         >
-          <LiveLine dataKey="value" stroke="var(--primary)" fill />
+          {/*
+            One line per outcome on a multi-outcome market, each in its own
+            colour - same shape as the market page. A single line cannot
+            represent three mutually exclusive prices, and tracing only the first
+            outcome hides the others entirely.
+
+            Binary markets keep a single `value` line: that key is the YES
+            price and the NO line is already implied by its complement.
+          */}
+          {isMultiOutcome ? (
+            outcomes.slice(0, 5).map((outcome, i) => (
+              <LiveLine
+                key={outcome.name}
+                dataKey={outcome.name}
+                stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                fill={i === 0}
+              />
+            ))
+          ) : (
+            <LiveLine dataKey="value" stroke="var(--primary)" fill />
+          )}
         </LiveLineChart>
       </div>
 
-      {/* YES/NO prices + volume */}
-      <div className="flex items-center justify-between">
+      {/*
+        Outcome prices + volume.
+
+        Binary markets show the familiar YES/NO split. With 3+ outcomes there is
+        no NO: "Yes 40% / No 60%" on a three-way market is simply wrong, so the
+        outcomes are listed by name instead.
+      */}
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-4">
-          <div>
-            <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
-              Yes
+          {isMultiOutcome ? (
+            <div className="min-w-0 space-y-0.5">
+              {displayOutcomes.slice(0, 3).map((outcome) => (
+                <div key={outcome.name} className="flex items-baseline gap-1.5">
+                  <span className="max-w-[6rem] truncate text-[10px] tracking-wider text-muted-foreground uppercase">
+                    {outcome.name}
+                  </span>
+                  <span className="text-xs font-bold tabular-nums text-foreground">
+                    {/* "—" not 0% for an outcome the book cannot price. */}
+                    {outcome.pct === null ? "—" : `${outcome.pct}%`}
+                  </span>
+                </div>
+              ))}
+              {displayOutcomes.length > 3 && (
+                <div className="text-[10px] text-muted-foreground">
+                  +{displayOutcomes.length - 3} more
+                </div>
+              )}
             </div>
-            <div
-              className="text-sm font-bold text-green-700 tabular-nums"
-            >
-              {prob}%
-            </div>
-          </div>
-          <div>
-            <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
-              No
-            </div>
-            <div
-              className="text-sm font-bold text-red-700 tabular-nums"
-            >
-              {100 - prob}%
-            </div>
-          </div>
+          ) : (
+            <>
+              <div>
+                <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
+                  Yes
+                </div>
+                <div className="text-sm font-bold text-green-700 tabular-nums">
+                  {prob}%
+                </div>
+              </div>
+              <div>
+                <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">
+                  No
+                </div>
+                <div className="text-sm font-bold text-red-700 tabular-nums">
+                  {100 - prob}%
+                </div>
+              </div>
+            </>
+          )}
         </div>
         <div className="text-right">
           <div className="mb-0.5 text-[10px] tracking-wider text-muted-foreground uppercase">

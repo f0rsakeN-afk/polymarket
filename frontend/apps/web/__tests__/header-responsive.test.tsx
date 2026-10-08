@@ -10,7 +10,6 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "next-themes";
-import type { ReactNode } from "react";
 
 // next/navigation's usePathname is what drives both the active nav state and
 // the drawer's "still open" derivation.
