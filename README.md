@@ -57,11 +57,40 @@ docker compose -f docker-compose.dev.yml up -d
 ```bash
 cd backend
 uv run alembic upgrade head    # apply migrations
-PYTHONPATH=. uv run python scripts/seed.py   # ~17 markets, 10 users, trades, charts
+PYTHONPATH=. uv run python scripts/seed.py   # 17 markets, 20 accounts, trades, charts
 ```
 
 The seed is idempotent — it skips anything already present, so re-running it tops
 up rather than duplicating.
+
+**Demo accounts**
+
+| Email | Password | Role | Use it to show |
+|---|---|---|---|
+| `admin@predictx.io` | `testpass123` | admin | market approval, moderation, disputes, resolution |
+| `demo@predictx.io` | `testpass123` | trader | wallet, portfolio, positions, order placement |
+
+Override the password with `SEED_PASSWORD=... python scripts/seed.py` before
+seeding. Both accounts have `is_email_verified=True`, so there is no confirmation
+step in the way.
+
+The seed also creates 18 background accounts (`alice@predictx.io` and so on, same
+password). They are **not** login accounts — they exist so the trade feed, comment
+threads and leaderboards are not all attributed to the demo user, which reads as
+fabricated. The two above are the documented way in.
+
+**What gets seeded**
+
+| | |
+|---|---|
+| Markets | 17 — 15 binary, 2 parimutuel (an 8-way football winner, a 6-way NBA championship) |
+| Resolved markets | 5, with winners, and charts that settle at $1.00 / $0.00, so settlement and claims are demoable |
+| Trades | ~2,500, each priced against its own outcome's live price |
+| Price history | ~48 points per outcome over ~30 days, ending exactly at the current price |
+| Positions | every market has holders, every trader has a portfolio |
+| Resting orders | ~136, all with `remaining ≤ amount` |
+| Comments | every market has a thread, with replies |
+| Also | wallets, transactions, LP shares, alerts, notifications, disputes, flags, referrals, treasury |
 
 **Run it** — three terminals:
 

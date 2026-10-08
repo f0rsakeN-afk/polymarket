@@ -131,15 +131,29 @@ uv run python -m scripts.seed
 SEED_PASSWORD=otherpass uv run python -m scripts.seed
 ```
 
-| Account | Email | Password |
-|---------|-------|----------|
-| `alice_trades`, `bob_predicts`, `carol_markets`, … (10 users) | `alice@test.com`, `bob@test.com`, … | `testpass123` (or `$SEED_PASSWORD`) |
+| Account | Email | Password | Role |
+|---------|-------|----------|------|
+| `admin` | `admin@predictx.io` | `testpass123` (or `$SEED_PASSWORD`) | admin — approval, moderation, resolution |
+| `demo` | `demo@predictx.io` | `testpass123` (or `$SEED_PASSWORD`) | trader — wallet, portfolio, orders |
+| `alice`, `bob`, … (18 background) | `alice@predictx.io`, … | same | not login accounts; they populate the feed and leaderboards |
 
-What it creates: 10 users + wallets + notification prefs, 17 markets with outcomes,
-liquidity pools and LP shares, FAQs, disputes, flags, ~1400 trades, 30-day price
-history, transactions, treasury, notifications, alerts, comments, positions, pending
-orders, referrals, refresh tokens and sessions. Re-running it is safe • every block
-checks for existing rows first.
+What it creates: 2 demo accounts + 18 background accounts with wallets and
+notification prefs, 17 markets (15 binary, 2 parimutuel) with outcomes, per-outcome
+liquidity pools and LP shares, FAQs, disputes, flags, ~2,500 trades, ~30 days of
+price history per outcome, 5 resolved markets with settled charts, transactions,
+treasury, notifications, alerts, comments, positions, resting orders, referrals,
+refresh tokens and sessions. Re-running it is safe — every block checks for
+existing rows first.
+
+Two properties worth knowing, because they are what make the data read as real
+rather than as noise:
+
+- **A trade's price sits within a couple of cents of its own outcome's live
+  price.** Drawing them independently produced fills at 0.90 on a market priced
+  0.15 — visible as soon as anyone puts the trade feed beside the price.
+- **A chart's last point equals the market's current price**, and a resolved
+  market's chart ends at $1.00 for the winner and $0.00 for the losers, matching
+  the payout.
 
 ```bash
 # Spot-check the result

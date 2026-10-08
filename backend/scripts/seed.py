@@ -31,20 +31,28 @@ from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Transaction, Wallet
 
 # Test users
-TEST_USERS = [
-    {"email": "alice@test.com", "username": "alice_trades"},
-    {"email": "bob@test.com", "username": "bob_predicts"},
-    {"email": "carol@test.com", "username": "carol_markets"},
-    {"email": "david@test.com", "username": "david_hodl"},
-    {"email": "eve@test.com", "username": "eve_speculator"},
-    {"email": "frank@test.com", "username": "frank_trader"},
-    {"email": "grace@test.com", "username": "grace_winner"},
-    {"email": "henry@test.com", "username": "henry_analyst"},
-    {"email": "iris@test.com", "username": "iris_trader"},
-    {"email": "jack@test.com", "username": "jack_degen"},
-]
-
+# ── Demo accounts ─────────────────────────────────────────────────────────────
+# Exactly two accounts are meant to be logged into. Both are documented in the
+# README so a reviewer can get in without reading this file.
+#
+#   admin@predictx.io  - admin: moderation, market approval, resolution
+#   demo@predictx.io   - regular trader: portfolio, positions, wallet
+#
+# They share one password, overridable with SEED_PASSWORD.
 TEST_PASSWORD = os.environ.get("SEED_PASSWORD", "testpass123")
+DEMO_ADMIN_EMAIL = "admin@predictx.io"
+DEMO_USER_EMAIL = "demo@predictx.io"
+
+# ── Background cast ───────────────────────────────────────────────────────────
+# Not login accounts. They exist so activity is not all attributed to one
+# person: the trade feed, comment threads and leaderboards look fabricated if
+# every row is the demo user. Same password, so they are usable, but the two
+# above are the documented way in.
+BACKGROUND_USERS = [
+    "alice", "bob", "carol", "david", "eve", "frank",
+    "grace", "henry", "iris", "jack", "kelly", "liam",
+    "mia", "noah", "olivia", "peter", "quinn", "ruby",
+]
 
 MARKETS_DATA = [
     # Politics
@@ -72,6 +80,21 @@ MARKETS_DATA = [
     {"slug": "sp500-5000", "question": "Will S&P 500 exceed 5,000 by end of 2024?", "category": "Economics", "subcategory": "Stock Market", "yes_price": 0.68, "volume": 3500000, "liquidity": 780000, "closing_days": 270},
 ]
 
+# Chart history. One point per step, spanning roughly a month - wide enough that
+# a market resolved up to 30 days ago still has its settlement inside the series.
+HISTORY_POINTS = 48
+HISTORY_STEP_MINUTES = 60 * 16
+
+# Markets pre-resolved so the settlement and claim flow can be demonstrated.
+# Winner must match an existing outcome name on that market.
+RESOLVED_MARKETS = [
+    {"slug": "trump-2024-wins", "winner": "Yes"},
+    {"slug": "ethereum-etf-2024", "winner": "No"},
+    {"slug": "swift-tour-2b", "winner": "Yes"},
+    {"slug": "olympics-2024-usa-top", "winner": "No"},
+    {"slug": "gta6-2024", "winner": "No"},
+]
+
 COMMENTS = [
     "Interesting market, what's the resolution criteria?",
     "I think this is underpriced given recent developments.",
@@ -82,6 +105,22 @@ COMMENTS = [
     "The volume is really picking up on this one.",
     "Liquidity looks good, easy to get in and out.",
     "Nice spread on this market.",
+    "The resolution wording is ambiguous — does 'exceed' include exactly 100K?",
+    "Taking a small position. Not a conviction bet, just sizing in.",
+    "This price is way off from the consensus on the polling sites.",
+    "Anyone else seeing the book thin on the bid side?",
+    "Adding liquidity here, the spread widened after the last headline.",
+    "I got filled at a much better price yesterday. Worth checking the history.",
+    "Remind me to take profit if this clears 0.80.",
+    "The dates on this are tight. Watch the close date.",
+    "Good entry for anyone who missed the last move.",
+    "Long term I think this resolves yes, short term the tape says no.",
+    "The fees make this harder to trade than it looks.",
+    "Checked the primary source, it's tracking well behind this price.",
+    "Splitting my position across the top 3 outcomes instead of just one.",
+    "Volume is dead here. Better liquidity on the neighbouring market.",
+    "This is a coin flip and the price reflects that. Leaving it alone.",
+    "Made my mistake earlier, averaging down now.",
 ]
 
 DISPUTE_EVIDENCE = [
@@ -105,6 +144,148 @@ def _outcome_weights(n: int) -> list[float]:
     return [r / total for r in raw]
 
 
+def _planned_resolved_at(slug: str, now):
+    """When a market in RESOLVED_MARKETS settles.
+
+    Deterministic from the slug, and shared by the history generator and the
+    resolver so the two cannot disagree: if they did, the series would either run
+    past its own settlement or stop short of it.
+    """
+    return now - timedelta(days=(hash(slug) % 27) + 3, hours=6)
+
+
+async def _finalise_history(db, market_id, outcome, resolved_at, settled: float = 1.0):
+    """Push an outcome's price history to its settlement value.
+
+    The last snapshot before resolution becomes exactly $1.00 for the winner and
+    $0.00 for the losers. Without this, a resolved market's chart still ends on a
+    mid-range price, so it disagrees with the $1-per-share payout shown next to
+    it.
+    """
+    rows = list(
+        (
+            await db.execute(
+                select(PriceHistory)
+                .where(PriceHistory.outcome_id == outcome.id)
+                .order_by(PriceHistory.snapshot_at.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+    )
+    if not rows:
+        return
+    last = rows[0]
+    last.price = Decimal(str(settled))
+    # Keep it inside the pre-resolution window so it is the tip of the series.
+    last.snapshot_at = resolved_at - timedelta(hours=1)
+
+
+async def _outcome_prices(db, market_id, outcomes) -> dict:
+    """Current price per outcome id, keyed by outcome id.
+
+    Reads the same pools the API prices from, so seeded trades and seeded chart
+    history agree with what the application will actually show. Reusing the
+    service would be better still, but the seed must not depend on app state that
+    a schema change could invalidate - this mirrors the parimutuel rule: an
+    outcome's price is its pool's share of the market total.
+
+    Keys are `str(outcome.id)` everywhere, including for callers who hold a
+    UUID. Mixing the two is not a type error, it is a silent miss: the
+    parimutuel branch keyed by `str(pool.outcome_id)` while callers asked for
+    `outcome.id`, so every parimutuel lookup returned the 0.5 default and the
+    eight-way market's trades and chart all sat at an even split.
+    """
+    rows = list(
+        (
+            await db.execute(
+                select(LiquidityPool).where(LiquidityPool.market_id == market_id)
+            )
+        ).scalars().all()
+    )
+
+    prices: dict = {}
+    by_outcome = {str(p.outcome_id): p for p in rows if p.outcome_id is not None}
+    total = sum((float(p.yes_shares) for p in rows), 0.0)
+
+    if total > 0 and by_outcome:
+        for outcome_id, pool in by_outcome.items():
+            prices[outcome_id] = float(pool.yes_shares) / total
+        return prices
+
+    # Binary: one pool, so the denominator is that pool's own two reserves.
+    #
+    # It is NOT the market-wide total of yes_shares. Dividing the NO reserve by
+    # yes_shares alone gives 744000/456000 = 1.63 - a price above 1, which then
+    # fed the trade and history generators and put fills at 0.99 on a market
+    # sitting at 0.38.
+    pool = next((p for p in rows if p.outcome_id is None), None)
+    if pool is None:
+        return {str(o.id): 0.5 for o in outcomes}
+
+    pool_total = float(pool.yes_shares) + float(pool.no_shares)
+    for outcome in outcomes:
+        if pool_total <= 0:
+            prices[str(outcome.id)] = 0.5
+            continue
+        reserve = (
+            float(pool.yes_shares)
+            if outcome.name.lower() == "yes"
+            else float(pool.no_shares)
+        )
+        prices[str(outcome.id)] = reserve / pool_total
+    return prices
+
+
+def _price_path(end_price: float, points: int, volatility: float = 0.06):
+    """A price series for one outcome that ends exactly at `end_price`.
+
+    Returns `points` prices ordered oldest → newest, so the last value equals
+    `end_price`.
+
+    Seeded prices used to be `uniform(0.3, 0.7)` per day: pure noise,
+    uncorrelated with the market's actual price. So the chart's right-hand tip and
+    the big price number beside it disagreed the moment the page loaded, which
+    reads as a broken chart.
+
+    Backwards random walk, then rescaled so the endpoint lands on the real price.
+    A flat random walk's endpoint is arbitrary, so the final value is overwritten
+    and the step before it nudged to keep the curve smooth.
+    """
+    if points <= 1:
+        return [end_price]
+
+    # Random walk, damped so it cannot wander far from where it started.
+    path = [end_price]
+    value = end_price
+    for _ in range(points - 1):
+        # Drift back toward the end price so the series converges on it, which
+        # is what makes the shape read as a market finding its level.
+        pull = (end_price - value) * 0.18
+        value = value + pull + uniform(-volatility, volatility)
+        value = min(max(value, 0.01), 0.99)
+        path.append(value)
+
+    path.reverse()  # oldest first
+    path[-1] = end_price
+    return path
+
+
+def _trade_price(outcome_price: float) -> float:
+    """A fill price near, but not exactly at, the market.
+
+    Old behaviour drew `uniform(0.05, 0.95)` independently of the market, so the
+    trade feed showed fills at 0.90 on a market priced 0.15. Average gap between a
+    seeded trade and the market it belonged to was 0.29 - which anyone can spot by
+    putting the feed next to the price.
+
+    Now: small ticks around the mid, weighted toward it, clamped to a valid band
+    and never below one tick (1 cent) so a fill price is always tradeable.
+    """
+    ticks = [0, 0, 0, -1, -1, 1, 1, -2, 2]
+    price = outcome_price + 0.01 * choice(ticks) + uniform(-0.004, 0.004)
+    return round(min(max(price, 0.01), 0.99), 4)
+
+
 FAQ_QUESTIONS = [
     ("What does this market resolve to?", "This market will resolve based on the outcome of the event described in the question."),
     ("How is the winner determined?", "The market resolves based on credible public sources."),
@@ -126,7 +307,21 @@ async def seed():
         # Get or create test users with wallets
         print("Creating users...")
         users = []
-        for user_data in TEST_USERS:
+        # The demo admin first, so it leads the list everywhere the UI shows
+        # "recent activity by user".
+        all_users_spec = [
+            {"email": DEMO_ADMIN_EMAIL, "username": "admin", "is_admin": True},
+            {"email": DEMO_USER_EMAIL, "username": "demo", "is_admin": False},
+            *(
+                {
+                    "email": f"{name}@predictx.io",
+                    "username": name,
+                    "is_admin": False,
+                }
+                for name in BACKGROUND_USERS
+            ),
+        ]
+        for user_data in all_users_spec:
             result = await db.execute(select(User).where(User.email == user_data["email"]))
             user = result.scalar_one_or_none()
             if not user:
@@ -137,6 +332,7 @@ async def seed():
                     password_hash=hash_password(TEST_PASSWORD),
                     is_email_verified=True,
                     is_active=True,
+                    is_admin=user_data.get("is_admin", False),
                 )
                 db.add(user)
                 await db.flush()
@@ -243,15 +439,19 @@ async def seed():
 
                 if outcome_names == ["Yes", "No"]:
                     # Binary: one pool, yes/no reserves summing to total_liquidity.
-                    # shares are inverted against the price so that
-                    # yes_shares/total == yes_price.
+                    #
+                    # price(YES) = yes_shares / (yes_shares + no_shares), so the
+                    # YES reserve must be seeded WITH `yes_price` of the
+                    # collateral. Seeding the inverse made every binary market
+                    # open at 1 - its declared price: "Bitcoin above $100K"
+                    # declared 0.62 was showing 0.38.
                     yes_price = Decimal(str(market_data["yes_price"]))
                     pool = LiquidityPool(
                         id=uuid.uuid4(),
                         market_id=market.id,
                         outcome_id=None,
-                        yes_shares=Decimal(str(total_liquidity * (1 - yes_price))),
-                        no_shares=Decimal(str(total_liquidity * yes_price)),
+                        yes_shares=Decimal(str(total_liquidity * yes_price)),
+                        no_shares=Decimal(str(total_liquidity * (1 - yes_price))),
                         collateral=total_liquidity,
                         fee_rate=Decimal("0.02"),
                         lp_token_supply=total_liquidity,
@@ -478,7 +678,11 @@ async def seed():
             if result.scalar_one_or_none():
                 continue
 
-            num_trades = randint(30, 150)
+            # Trades are priced against the outcome's REAL current price, so the
+            # feed agrees with the market it belongs to.
+            prices = await _outcome_prices(db, market.id, outcomes)
+
+            num_trades = randint(60, 220)
             for _ in range(num_trades):
                 outcome = choice(outcomes)
                 user = choice(users)
@@ -488,9 +692,9 @@ async def seed():
                     market_id=market.id,
                     outcome=outcome.name.lower(),
                     side=choice(["buy", "sell"]),
-                    price=Decimal(str(uniform(0.05, 0.95))),
+                    price=Decimal(str(_trade_price(prices.get(str(outcome.id), 0.5)))),
                     amount=Decimal(str(uniform(10, 1000))),
-                    executed_at=now - timedelta(hours=randint(0, 720)),
+                    executed_at=now - timedelta(hours=uniform(0, 720)),
                 )
                 db.add(trade)
                 trade_count += 1
@@ -502,8 +706,36 @@ async def seed():
         for market in markets:
             result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
             outcomes = list(result.scalars().all())
+            if not outcomes:
+                continue
 
-            for outcome in outcomes[:2]:  # Yes and No outcomes
+            prices = await _outcome_prices(db, market.id, outcomes)
+
+            # EVERY outcome, not outcomes[:2]. An eight-way market was getting a
+            # chart for only its first two outcomes and blank lines for the other
+            # six, which looked like the chart was broken rather than the data
+            # being absent.
+            # A resolved market's series must stop at its resolution date, so its
+            # window is only as long as it traded for. An active one runs to now.
+            #
+            # Keyed off RESOLVED_MARKETS rather than `market.resolved_at`,
+            # because resolution runs later in this script - at this point the
+            # row is still `active` and has no resolved_at, so the check would
+            # never fire and every series would run past its own settlement.
+            planned = next(
+                (r for r in RESOLVED_MARKETS if r["slug"] == market.slug), None
+            )
+            resolved_at = None
+            if planned:
+                # Deterministic, so a re-seed produces the same shape: 3-30 days
+                # before now, matching the range the resolver draws from.
+                resolved_at = _planned_resolved_at(market.slug, now)
+                span = max((now - resolved_at).total_seconds() / 60, 60)
+                points = max(int(span // HISTORY_STEP_MINUTES) + 1, 4)
+            else:
+                points = HISTORY_POINTS
+
+            for outcome in outcomes:
                 # Check if price history exists
                 result = await db.execute(
                     select(PriceHistory).where(PriceHistory.outcome_id == outcome.id).limit(1)
@@ -511,14 +743,26 @@ async def seed():
                 if result.scalar_one_or_none():
                     continue
 
-                for day in range(30):
+                end = prices.get(str(outcome.id), 0.5)
+                series = _price_path(end, points=points)
+                base_volume = Decimal(str(randint(1000, 100000)))
+
+                # series is oldest-first; walk it backwards in time so the newest
+                # snapshot is the live price.
+                #
+                # For a resolved market the newest snapshot is its resolution
+                # date, not now: the series has to stop at settlement, or the
+                # chart runs past it and its tip disagrees with the $1.00 payout
+                # shown beside it.
+                anchor = resolved_at if planned else now
+                for idx, price in enumerate(reversed(series)):
                     snapshot = PriceHistory(
                         id=uuid.uuid4(),
                         market_id=market.id,
                         outcome_id=outcome.id,
-                        price=Decimal(str(uniform(0.3, 0.7))),
-                        total_volume=Decimal(str(randint(1000, 100000))),
-                        snapshot_at=now - timedelta(days=day, hours=randint(0, 23)),
+                        price=Decimal(str(round(price, 6))),
+                        total_volume=base_volume * Decimal(str(1 + (len(series) - idx) * 0.01)),
+                        snapshot_at=anchor - timedelta(minutes=idx * HISTORY_STEP_MINUTES),
                     )
                     db.add(snapshot)
 
@@ -660,13 +904,14 @@ async def seed():
         # Create comments
         print("Creating comments...")
         comment_count = 0
-        for market in markets[:10]:
+        # Every market, so no market page opens on an empty thread.
+        for market in markets:
             # Check if comments exist
             result = await db.execute(select(Comment).where(Comment.market_id == market.id).limit(1))
             if result.scalar_one_or_none():
                 continue
 
-            num_comments = randint(3, 12)
+            num_comments = randint(4, 14)
             for _ in range(num_comments):
                 user = choice(users)
                 comment = Comment(
@@ -675,7 +920,9 @@ async def seed():
                     user_id=user.id,
                     content=choice(COMMENTS),
                     depth=0,
-                    is_deleted=choice([False, False, False, True]),
+                    # One in ten, not one in four: moderation is still demonstrable but the thread
+                    # does not read as half-destroyed.
+                    is_deleted=choice([False] * 9 + [True]),
                     created_at=now - timedelta(hours=randint(0, 500)),
                 )
                 db.add(comment)
@@ -700,7 +947,10 @@ async def seed():
         # Create positions
         print("Creating positions...")
         position_count = 0
-        for market in markets[:8]:
+        # Every market and every trader, not markets[:8] × users[:4]. Half the
+        # markets had no positions and 6 of 10 users had none, so the portfolio
+        # page was nearly empty and the market page showed no holders.
+        for market in markets:
             # Get outcomes
             result = await db.execute(select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index))
             outcomes = list(result.scalars().all())
@@ -712,19 +962,77 @@ async def seed():
             if result.scalar_one_or_none():
                 continue
 
-            for user in users[:4]:
+            prices = await _outcome_prices(db, market.id, outcomes)
+            for user in users:
+                # Not every user in every market: a position implies a
+                # conviction. Roughly half, so the portfolio has breadth without
+                # looking auto-populated.
+                if uniform(0, 1) > 0.5:
+                    continue
                 outcome = choice(outcomes)
+                current = prices.get(str(outcome.id), 0.5)
+                # Average price near the current one, so unrealised P&L is
+                # plausible in both directions rather than always deeply negative
+                # against an unrelated entry price.
+                entry = min(max(current + uniform(-0.12, 0.12), 0.01), 0.99)
+                shares = Decimal(str(round(uniform(50, 2000), 2)))
                 position = Position(
                     id=uuid.uuid4(),
                     user_id=user.id,
                     market_id=market.id,
                     outcome_id=outcome.id,
-                    shares_held=Decimal(str(uniform(50, 2000))),
-                    average_price=Decimal(str(uniform(0.1, 0.9))),
-                    realized_pnl=Decimal(str(uniform(-500, 2000))),
+                    shares_held=shares,
+                    average_price=Decimal(str(round(entry, 4))),
+                    realized_pnl=Decimal(str(round(uniform(-500, 2000), 2))),
                 )
                 db.add(position)
                 position_count += 1
+
+        await db.flush()
+
+        # Resolve a few markets so settlement, claims and the Resolved badge are
+        # demoable. All 17 markets were `active`, which meant the most
+        # distinctive part of the system - $1 per correct share, claimed through
+        # the escrow - could not be shown at all.
+        print("Resolving some markets...")
+        resolved_count = 0
+        for market_data in RESOLVED_MARKETS:
+            market = next(
+                (m for m in markets if m.slug == market_data["slug"]), None
+            )
+            if market is None or market.status == "resolved":
+                continue
+
+            outcomes = list(
+                (
+                    await db.execute(
+                        select(Outcome)
+                        .where(Outcome.market_id == market.id)
+                        .order_by(Outcome.outcome_index)
+                    )
+                ).scalars().all()
+            )
+            winner_name = market_data["winner"]
+            winner = next(
+                (o for o in outcomes if o.name.lower() == winner_name.lower()), None
+            )
+            if winner is None:
+                continue
+
+            market.status = "resolved"
+            market.winning_outcome_id = winner.id
+            # Same date the history was generated against.
+            market.resolved_at = _planned_resolved_at(market.slug, now)
+            market.closes_at = market.resolved_at - timedelta(days=randint(1, 5))
+
+            # The winning outcome settles at $1.00 per share, so its final
+            # history point is 1.0 and the losers' is 0.0 - which is what a
+            # settled chart should show.
+            await _finalise_history(db, market.id, winner, market.resolved_at)
+            for loser in outcomes:
+                if loser.id != winner.id:
+                    await _finalise_history(db, market.id, loser, market.resolved_at, settled=0)
+            resolved_count += 1
 
         await db.flush()
 
@@ -745,21 +1053,30 @@ async def seed():
             if result.scalar_one_or_none():
                 continue
 
-            for user in users[:3]:
+            prices = await _outcome_prices(db, market.id, outcomes)
+            for user in users[:8]:
                 outcome = choice(outcomes)
+                amount = Decimal(str(round(uniform(50, 500), 2)))
+                # remaining <= amount, always. Both were independent randoms
+                # before, so roughly a third of resting orders claimed more
+                # unfilled than they were ever sized for - a state the order
+                # service can never produce.
+                remaining = (
+                    amount * Decimal(str(round(uniform(0.1, 1.0), 4)))
+                ).quantize(Decimal("0.01"))
                 order = Order(
                     id=uuid.uuid4(),
                     user_id=user.id,
                     market_id=market.id,
                     outcome_id=outcome.id,
                     side=choice(["buy", "sell"]),
-                    order_type=choice(["limit", "fill_or_kill"]),
-                    amount=Decimal(str(uniform(50, 500))),
-                    price=Decimal(str(uniform(0.05, 0.95))),
-                    remaining_amount=Decimal(str(uniform(50, 500))),
+                    order_type="limit",
+                    amount=amount,
+                    price=Decimal(str(_trade_price(prices.get(str(outcome.id), 0.5)))),
+                    remaining_amount=remaining,
                     status="pending",
                     client_order_id=str(uuid.uuid4()),
-                    created_at=now - timedelta(hours=randint(0, 48)),
+                    created_at=now - timedelta(hours=uniform(0, 48)),
                 )
                 db.add(order)
                 order_count += 1
