@@ -17,7 +17,7 @@ const faqs = [
       },
       {
         q: "How do I reset my password?",
-        a: "Use the 'Forgot password?' link on the sign-in page: we email you a short-lived code, you pick a new password, and every other session is signed out. Accounts are email + password with optional authenticator-app 2FA — there is no wallet or seed phrase.",
+        a: "Use the 'Forgot password?' link on the sign-in page: we email you a short-lived code, you pick a new password, and every other session is signed out. Accounts are email + password with optional authenticator-app 2FA • there is no wallet or seed phrase.",
       },
       {
         q: "How do I delete my account?",
@@ -34,7 +34,7 @@ const faqs = [
       },
       {
         q: "What's the difference between limit and market orders?",
-        a: "A limit order lets you set a maximum buy price or minimum sell price — it executes only when the market reaches your price. A market order executes immediately at the best available price.",
+        a: "A limit order lets you set a maximum buy price or minimum sell price • it executes only when the market reaches your price. A market order executes immediately at the best available price.",
       },
       {
         q: "Can I cancel an order?",
@@ -55,7 +55,7 @@ const faqs = [
     questions: [
       {
         q: "How are markets created?",
-        a: "Markets are created by Polymarket or authorized market makers. Each market has defined resolution criteria and an expiration date.",
+        a: "Markets are created by PredictX or authorized market makers. Each market has defined resolution criteria and an expiration date.",
       },
       {
         q: "How are markets resolved?",
@@ -80,7 +80,7 @@ const faqs = [
     questions: [
       {
         q: "What fees do you charge?",
-        a: "Pool trades pay a 2% trading fee plus a 1% protocol fee, order-book matches pay 1%, and splitting or merging collateral into shares costs 2% — each is shown before you confirm. Deposits and withdrawals are free, and because balances live inside the platform rather than on a chain there are no gas fees.",
+        a: "Pool trades pay a 2% trading fee plus a 1% protocol fee, order-book matches pay 1%, and splitting or merging collateral into shares costs 2% • each is shown before you confirm. Deposits and withdrawals are free, and because balances live inside the platform rather than on a chain there are no gas fees.",
       },
       {
         q: "Are there withdrawal fees?",
@@ -100,8 +100,8 @@ const faqs = [
     category: "Security",
     questions: [
       {
-        q: "Is Polymarket safe to use?",
-        a: "Passwords are hashed with bcrypt, session cookies are HttpOnly and rotated on refresh, optional authenticator-app 2FA is available, and the auth endpoints are rate limited. Funds are held custodially as balances in the platform's database, not in a wallet you control — so your password and 2FA device are what to protect.",
+        q: "Is PredictX safe to use?",
+        a: "Passwords are hashed with bcrypt, session cookies are HttpOnly and rotated on refresh, optional authenticator-app 2FA is available, and the auth endpoints are rate limited. Funds are held custodially as balances in the platform's database, not in a wallet you control • so your password and 2FA device are what to protect.",
       },
       {
         q: "How do I enable two-factor authentication?",
@@ -121,12 +121,12 @@ const faqs = [
         a: "A prediction market is a platform where participants trade contracts based on the outcome of real-world events. Prices reflect the collective probability assessment of all traders.",
       },
       {
-        q: "What makes Polymarket different from other exchanges?",
-        a: "Polymarket focuses specifically on prediction markets with real-world event resolution, offering a curated set of markets rather than general financial instruments.",
+        q: "What makes PredictX different from other exchanges?",
+        a: "PredictX focuses specifically on prediction markets with real-world event resolution, offering a curated set of markets rather than general financial instruments.",
       },
       {
-        q: "Does Polymarket provide investment advice?",
-        a: "No. Polymarket does not provide investment, legal, or tax advice. All trading decisions are your own. Please consult qualified professionals for financial advice.",
+        q: "Does PredictX provide investment advice?",
+        a: "No. PredictX does not provide investment, legal, or tax advice. All trading decisions are your own. Please consult qualified professionals for financial advice.",
       },
       {
         q: "Where can I find API documentation?",
@@ -186,7 +186,7 @@ export default function FAQPage() {
           Frequently Asked Questions
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Common questions about Polymarket prediction markets, trading, and
+          Common questions about PredictX prediction markets, trading, and
           platform features.
         </p>
       </div>

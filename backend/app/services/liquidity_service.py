@@ -16,10 +16,72 @@ from app.models.wallet import Transaction, Wallet
 from app.services.market_service import MarketService
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 class LiquidityService:
+
+    @staticmethod
+    async def _resolve_liquidity_pool(
+        db: AsyncSession,
+        market: Market,
+        outcome_name: str | None,
+        lock: bool = False,
+    ) -> LiquidityPool:
+        """The pool an LP deposit/withdrawal applies to.
+
+        A parimutuel market holds one pool per outcome, so liquidity has to name
+        the outcome it is for - attributing it to an arbitrary pool would let one
+        outcome's deposit back another's price. A binary market has exactly one
+        pool and the argument is ignored.
+        """
+        from app.models.market import Outcome
+
+        outcome_rows = list(
+            (
+                await db.execute(
+                    select(Outcome)
+                    .where(Outcome.market_id == market.id)
+                    .order_by(Outcome.outcome_index)
+                )
+            ).scalars().all()
+        )
+
+        if not MarketService.is_parimutuel(outcome_rows):
+            pool = await MarketService.load_binary_pool(db, market.id)
+            if pool is None:
+                raise ValidationError(
+                    "Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY"
+                )
+            return pool
+
+        if not outcome_name:
+            names = ", ".join(o.name for o in outcome_rows)
+            raise ValidationError(
+                f"This market has {len(outcome_rows)} outcomes, so liquidity must "
+                f"name one. Available outcomes: {names}.",
+                error_code="OUTCOME_REQUIRED",
+            )
+
+        match = next(
+            (o for o in outcome_rows if o.name.lower() == outcome_name.lower()), None
+        )
+        if match is None:
+            raise ValidationError(f"Invalid outcome '{outcome_name}'")
+
+        stmt = select(LiquidityPool).where(
+            LiquidityPool.market_id == market.id,
+            LiquidityPool.outcome_id == match.id,
+        )
+        if lock:
+            stmt = stmt.with_for_update()
+        pool = (await db.execute(stmt)).scalar_one_or_none()
+        if pool is None:
+            raise ValidationError(
+                f"Market has no liquidity pool for outcome '{match.name}'",
+                error_code="MARKET_NO_LIQUIDITY",
+            )
+        return pool
 
     @staticmethod
     async def add_liquidity(
@@ -28,6 +90,7 @@ class LiquidityService:
         market_id: str,
         amount: Decimal,
         slippage_tolerance: Decimal = Decimal("0.05"),  # 5% default slippage tolerance
+        outcome_name: str | None = None,
     ) -> dict:
         market_result = await db.execute(
             select(Market).where(Market.id == market_id).with_for_update()
@@ -38,12 +101,9 @@ class LiquidityService:
         if market.status != "active":
             raise ValidationError("Market is not active for liquidity provision")
 
-        pool_result = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+        pool = await LiquidityService._resolve_liquidity_pool(
+            db, market, outcome_name, lock=True
         )
-        pool = pool_result.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY")
 
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -60,7 +120,7 @@ class LiquidityService:
             )
 
         # Capture pre-operation prices to detect adverse price movement.
-        # Share counts are Decimal, so prices stay Decimal — never mix float in.
+        # Share counts are Decimal, so prices stay Decimal • never mix float in.
         pre_total = pool.yes_shares + pool.no_shares
         pre_yes_price = pool.yes_shares / pre_total if pre_total > 0 else Decimal("0.5")
         pre_no_price = pool.no_shares / pre_total if pre_total > 0 else Decimal("0.5")
@@ -123,7 +183,7 @@ class LiquidityService:
 
         logger.info(f"Liquidity added: user={user.id} market={market.slug} amount={float(amount)} lp_tokens={float(lp_tokens_minted)}")
 
-        # Publish WS events — liquidity changes affect AMM prices
+        # Publish WS events • liquidity changes affect AMM prices
         try:
             yes_price, no_price = MarketService.compute_prices(pool)
             await redis_pubsub.publish_price_update(
@@ -151,19 +211,18 @@ class LiquidityService:
         market_id: str,
         lp_tokens: Decimal,
         slippage_tolerance: Decimal = Decimal("0.05"),  # 5% default slippage tolerance
+        outcome_name: str | None = None,
     ) -> dict:
         market = await db.get(Market, market_id)
         if not market:
             raise NotFoundError("Market not found")
 
-        pool_result = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-        )
-        pool = pool_result.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity pool", error_code="MARKET_NO_LIQUIDITY")
         if market.status != "active":
             raise ValidationError("Market is not active for liquidity removal")
+
+        pool = await LiquidityService._resolve_liquidity_pool(
+            db, market, outcome_name, lock=True
+        )
 
         # Standardize lock order: Market → Pool → Wallet → LPShare
         wallet_result = await db.execute(
@@ -208,7 +267,7 @@ class LiquidityService:
         # Without this cap an LP could withdraw the whole pool while traders
         # still hold shares, and settlement would have to short-change them
         # (or fail outright). The claims are read from position rows, which
-        # are the authoritative source — pool reserves are AMM pricing state.
+        # are the authoritative source • pool reserves are AMM pricing state.
         claim_rows = await db.execute(
             select(Position.outcome_id, func.sum(Position.shares_held))
             .where(Position.market_id == market.id, Position.settled_at.is_(None))
@@ -238,7 +297,7 @@ class LiquidityService:
         lp_share.collateral_deposited = max(
             Decimal(0), lp_share.collateral_deposited - total_redeemed
         )
-        # Escrow out — strictly bounded by what the pool holds; `fraction <= 1`
+        # Escrow out • strictly bounded by what the pool holds; `fraction <= 1`
         # makes a shortfall impossible unless the ledger is already broken.
         pool.debit_collateral(total_redeemed)
         wallet.balance += total_redeemed
@@ -270,7 +329,7 @@ class LiquidityService:
 
         logger.info(f"Liquidity removed: user={user.id} market={market.slug} lp_tokens={float(lp_tokens)} redeemed={float(total_redeemed)}")
 
-        # Publish WS events — liquidity changes affect AMM prices
+        # Publish WS events • liquidity changes affect AMM prices
         try:
             yes_price, no_price = MarketService.compute_prices(pool)
             await redis_pubsub.publish_price_update(
@@ -309,7 +368,7 @@ class LiquidityService:
 
         # Get or create system treasury user with row lock to prevent concurrent creation.
         # System users use a cryptographically random password_hash derived from
-        # the application's JWT secret — they cannot be used for human authentication.
+        # the application's JWT secret • they cannot be used for human authentication.
         treasury_result = await db.execute(
             select(User).where(User.is_system.is_(True)).with_for_update().limit(1)
         )
@@ -337,7 +396,7 @@ class LiquidityService:
             # FLUSH: without it `treasury_wallet.id` is still None, so the
             # Transaction below hits the NOT NULL constraint on wallet_id and
             # the entire sweep dies. Reachable on any deploy where fees accrue
-            # before the first settlement has created the treasury account —
+            # before the first settlement has created the treasury account •
             # i.e. the 3:30am sweep failing on day one.
             await db.flush()
         else:
@@ -364,7 +423,7 @@ class LiquidityService:
             owed = Decimal(str(pool.protocol_fees))
             # The sweep is paid out of the pool's escrow: protocol_fees is a
             # sub-ledger *inside* pool.collateral, not extra money. A shortfall
-            # means recorded fees exceed backing collateral — an invariant
+            # means recorded fees exceed backing collateral • an invariant
             # violation. Pay what the escrow actually holds and keep the rest
             # recorded, so the next sweep retries it; never zero the record
             # while handing the treasury less than it claims.

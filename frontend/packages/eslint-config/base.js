@@ -23,7 +23,7 @@ export const config = [
   {
     // `eslint-plugin-only-warn` used to live here: it downgraded *every*
     // finding to a warning, so `eslint` always exited 0 and CI could never
-    // fail on a lint problem. It is gone — errors are errors again.
+    // fail on a lint problem. It is gone • errors are errors again.
   },
   {
     ignores: ["dist/**", ".next/**", "**/.turbo/**", "**/coverage/**"],

@@ -240,7 +240,7 @@ const HeatmapMotionCell = memo(function HeatmapMotionCell({
   const dataOpacity = useMotionValue(0);
   /** Orchestration layer: conceal, static loading base. */
   const shimmerOpacity = useMotionValue(0);
-  /** Pulse loop only — kept separate so stagger tweens don't break re-entry. */
+  /** Pulse loop only • kept separate so stagger tweens don't break re-entry. */
   const pulseOpacity = useMotionValue(0);
   const wasShimmerPulsingRef = useRef(false);
 

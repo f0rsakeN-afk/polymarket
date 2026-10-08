@@ -359,7 +359,7 @@ function MagicLinkStep({
     const codeToVerify = code ?? totpCode
     if (codeToVerify.length !== 6) return
     if (!magicPartialToken) {
-      setError("Session expired — please request a new code")
+      setError("Session expired • please request a new code")
       return
     }
     setError("")
@@ -494,7 +494,7 @@ export function LoginForm() {
           <PolygonMark />
         </div>
         <span className="text-sm font-medium tracking-tight text-foreground">
-          Polymarket
+          PredictX
         </span>
       </div>
 

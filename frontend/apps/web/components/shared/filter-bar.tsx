@@ -65,7 +65,7 @@ export function FilterBar({
     [onFilterAdd]
   )
 
-  // Stable per-key callbacks — one function per filter, never recreated
+  // Stable per-key callbacks • one function per filter, never recreated
   const filterCallbacks = useMemo(() => {
     const map = new Map<string, () => void>()
     for (const f of filters) {

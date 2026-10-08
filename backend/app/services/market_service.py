@@ -7,10 +7,11 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.amm.engine import BinaryAMM
 from app.models.liquidity import LiquidityPool
 from app.redis import get_redis, redis_cb
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 class MarketService:
@@ -52,6 +53,132 @@ class MarketService:
         if total == 0:
             return Decimal("0.5")
         return pool.yes_shares / total
+
+    # ── Parimutuel (multi-outcome) pricing ──────────────────────────────────
+    #
+    # A market with 3+ mutually exclusive outcomes is parimutuel, not binary.
+    # Each outcome owns a pool row whose `yes_shares` is that outcome's share
+    # count; the price is its share of the market total, so the outcome prices
+    # sum to 1 and buying one raises its price while lowering the others.
+    #
+    # BinaryAMM is reused unchanged: constructed per outcome with
+    # yes_shares=shares_i and no_shares=total-shares_i, its reserve is the
+    # outcome's own and its total is the market total - the same constant-product
+    # curve it always was, now with a correct reserve.
+
+    @staticmethod
+    def is_parimutuel(outcomes) -> bool:
+        """True when the market has no real YES/NO pair.
+
+        Decided by name, matching the frontend and the detail endpoint: counting
+        outcomes would call a two-way named market (Trump vs Biden) binary and
+        invent a NO side that does not exist.
+        """
+        names = [o.name.lower() for o in outcomes]
+        return not ("yes" in names and "no" in names)
+
+    @staticmethod
+    def outcome_prices(pools: list[LiquidityPool]) -> dict[str, Decimal]:
+        """Price per outcome from its pool: shares_i / SUM(shares)."""
+        total = sum((p.yes_shares or Decimal(0)) for p in pools)
+        if total == 0:
+            # Nothing funded: an even split is the only non-fabricated answer.
+            n = len(pools) or 1
+            return {str(p.outcome_id): Decimal(1) / Decimal(n) for p in pools}
+        return {str(p.outcome_id): (p.yes_shares or Decimal(0)) / total for p in pools}
+
+    @staticmethod
+    def build_outcome_amm(
+        pools: list[LiquidityPool], outcome_id
+    ) -> tuple["BinaryAMM", Decimal]:
+        """BinaryAMM for one outcome, plus the market total.
+
+        The reserve is the outcome's own shares; the opposite side is the
+        complement (total - shares_i), which is what makes the constant-product
+        maths behave like a parimutuel book rather than a second binary market.
+        """
+        total = sum((p.yes_shares or Decimal(0)) for p in pools)
+        target = next(
+            (p for p in pools if str(p.outcome_id) == str(outcome_id)), None
+        )
+        own = (target.yes_shares if target else Decimal(0)) or Decimal(0)
+        fee_rate = target.fee_rate if target else Decimal("0.02")
+        amm = BinaryAMM(
+            yes_shares=own,
+            no_shares=max(total - own, Decimal(0)),
+            fee_rate=fee_rate,
+        )
+        return amm, total
+
+    @staticmethod
+    async def load_outcome_pools(
+        db: AsyncSession, market_id
+    ) -> list[LiquidityPool]:
+        """Every per-outcome pool for a market, ordered by outcome for determinism."""
+        from app.models.market import Outcome
+
+        result = await db.execute(
+            select(LiquidityPool)
+            .join(Outcome, Outcome.id == LiquidityPool.outcome_id)
+            .where(LiquidityPool.market_id == market_id)
+            .order_by(Outcome.outcome_index)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def load_binary_pool(
+        db: AsyncSession, market_id
+    ) -> LiquidityPool | None:
+        """The single NULL-outcome pool, for a binary market.
+
+        Scoped explicitly on outcome_id IS NULL. A market_id-only lookup used to
+        be safe because market_id was UNIQUE; with per-outcome rows it would
+        match several and raise MultipleResultsFound.
+        """
+        result = await db.execute(
+            select(LiquidityPool).where(
+                LiquidityPool.market_id == market_id,
+                LiquidityPool.outcome_id.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def load_all_pools(
+        db: AsyncSession, market_id
+    ) -> list[LiquidityPool]:
+        """Every pool row for a market, whatever its kind.
+
+        For read paths that must aggregate across a market rather than price one
+        outcome - total liquidity, a user's LP stake, the pool count. Returns a
+        list on purpose: calling scalar_one_or_none() here would raise
+        MultipleResultsFound on a parimutuel market, and picking one row would
+        report a fraction of the market as if it were the whole thing.
+        """
+        result = await db.execute(
+            select(LiquidityPool).where(LiquidityPool.market_id == market_id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def load_pools_for_outcomes(
+        db: AsyncSession, market_id, outcome_ids
+    ) -> dict[str, LiquidityPool]:
+        """Pool rows keyed by outcome id, for a batch of outcomes.
+
+        Prices a position against the pool of the outcome it was actually taken
+        in. Keying on market_id alone would let a position in "Draw" be priced
+        off whichever pool happened to be last in the result set.
+        """
+        if not outcome_ids:
+            return {}
+        result = await db.execute(
+            select(LiquidityPool).where(
+                LiquidityPool.market_id == market_id,
+                LiquidityPool.outcome_id.in_(outcome_ids),
+            )
+        )
+        return {str(row.outcome_id): row for row in result.scalars().all()}
 
     @staticmethod
     async def get_market_prices_batch(
@@ -144,11 +271,19 @@ class MarketService:
         db: AsyncSession | None = None,
     ) -> tuple[float, float]:
         async with MarketService._session(db) as session:
-            pool_result = await session.execute(
-                select(LiquidityPool).where(LiquidityPool.market_id == market_id)
-            )
-            pool = pool_result.scalar_one_or_none()
-            if pool:
+            pool = await MarketService.load_binary_pool(session, market_id)
+            if pool is None:
+                # Parimutuel market: no binary pool exists. The (yes, no) pair
+                # callers expect is generalised to the leading outcome versus
+                # everything else - the same information compressed to two
+                # numbers, and it still sums to 1.
+                prices = MarketService.outcome_prices(
+                    await MarketService.load_outcome_pools(session, market_id)
+                )
+                if prices:
+                    lead = max(prices.values())
+                    return float(lead), float(Decimal(1) - lead)
+            elif pool is not None:
                 total = pool.yes_shares + pool.no_shares
                 return (
                     float(pool.yes_shares / total) if total > 0 else 0.5,

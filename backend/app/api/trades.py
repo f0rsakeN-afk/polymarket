@@ -13,7 +13,7 @@ from app.models.market import Market
 from app.models.trade import Trade
 from app.models.user import User
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(tags=["trades"])
 
 

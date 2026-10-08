@@ -2,21 +2,21 @@
 
 `OrderService.execute_order` has one commit, at the end of the fill path. The
 "AMM price is worse than my limit, leave it resting" branch returned an
-`OrderResult` from *inside* the function — before that commit — so on the way
+`OrderResult` from *inside* the function • before that commit • so on the way
 out `get_db` closed the session and rolled the whole thing back.
 
 The visible effects, in order of how much they hurt:
 
 1. **Resting limit orders do not exist.** The row is discarded. Every limit
    order that doesn't cross the spread immediately is gone, so the whole
-   resting-order feature — and the 350-line sweeper that services it — has
+   resting-order feature • and the 350-line sweeper that services it • has
    never had anything to service in production.
 2. **The client is told it worked.** A 200 with `status: "pending"` and
    `order_id: ""`, so the UI shows "order resting" for an order the platform
    never stored, and any follow-up cancel/poll by that id has nothing to find.
 3. **The locked funds vanish too.** `wallet.locked_balance += remaining_usdc`
-   was rolled back with it, so the balance is self-consistent — nothing is
-   stolen — but nothing is reserved either.
+   was rolled back with it, so the balance is self-consistent • nothing is
+   stolen • but nothing is reserved either.
 
 These tests assert against a *second* session, because the endpoint's session
 can see its own uncommitted writes and would happily hide the bug.
@@ -37,7 +37,7 @@ async def _committed_orders_for(db, market_id: str) -> int:
     """Count order rows that survive a rollback.
 
     The endpoint's session is the test session, so it can read its own
-    uncommitted writes — which is exactly how this bug stayed invisible. A
+    uncommitted writes • which is exactly how this bug stayed invisible. A
     rollback is the discriminator: committed data survives it, uncommitted
     data is discarded. So "row still there after rollback" means "committed".
     """
@@ -69,7 +69,7 @@ async def test_a_resting_limit_order_is_persisted(client, test_user, test_market
     # 1. The client gets a usable id. An empty one cannot be cancelled,
     #    polled, or shown in the order history.
     assert data["order_id"], (
-        "resting order returned an empty order_id — the client has nothing to "
+        "resting order returned an empty order_id • the client has nothing to "
         "track, cancel or poll"
     )
 
@@ -78,7 +78,7 @@ async def test_a_resting_limit_order_is_persisted(client, test_user, test_market
     committed = await _committed_orders_for(db_session, str(test_market.id))
     assert committed == 1, (
         f"expected the resting order to be committed, found {committed} rows "
-        "visible from a separate session — it was rolled back"
+        "visible from a separate session • it was rolled back"
     )
 
     order = (
@@ -125,7 +125,7 @@ async def test_a_resting_order_reports_real_prices_not_zeros(
 ):
     """The resting response hardcoded `yes_price_after = 0` and
     `no_price_after = 0`. A client rendering those shows a 0/0 market, and
-    anything computing off them (slippage, chart) is working from fiction —
+    anything computing off them (slippage, chart) is working from fiction •
     even though no trade happened, so the prices are simply unchanged."""
     client.cookies.set("access_token", token_for(test_user.id))
 
@@ -217,11 +217,11 @@ async def test_a_market_order_that_fills_is_unaffected(client, test_user, test_m
 async def test_a_sell_limit_order_below_the_market_also_rests(
     client, test_user, test_market, db_session
 ):
-    """The sell side of the same branch — it shares the code path, so it needs
+    """The sell side of the same branch • it shares the code path, so it needs
     the same guarantee."""
     client.cookies.set("access_token", token_for(test_user.id))
 
-    # Buy first — you cannot sell shares you don't hold.
+    # Buy first • you cannot sell shares you don't hold.
     buy = await client.post("/api/v1/orders/", json={
         "market_id": str(test_market.id),
         "outcome": "yes",

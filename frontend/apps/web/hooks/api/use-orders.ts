@@ -5,6 +5,7 @@ import { listOrders, placeOrder, cancelOrder } from "@/lib/api/orders"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { apiErrorCode, apiErrorMessage } from "@/lib/api/client"
 import { sileo } from "sileo"
+import { useAuthGate } from "./use-auth-gate"
 
 export function useOrders(filters?: {
   status?: string
@@ -12,6 +13,7 @@ export function useOrders(filters?: {
   order_type?: string
   market_id?: string
 }) {
+  const { enabled } = useAuthGate()
   return useInfiniteQuery({
     queryKey: queryKeys.orders(filters),
     // Backend is keyset-paginated: `cursor`, never `page`.
@@ -22,6 +24,7 @@ export function useOrders(filters?: {
       orders: data.pages.flatMap((p) => p.data.orders),
       hasMore: data.pages[data.pages.length - 1]?.data.has_more ?? false,
     }),
+    enabled,
   })
 }
 
@@ -52,7 +55,7 @@ export function usePlaceOrder() {
           sileo.error({ title: "Market closed", description: apiErrorMessage(err, "This market is no longer active for trading.") })
           break
         case "POST_ONLY_WOULD_CROSS":
-          sileo.error({ title: "Post-only order rejected", description: apiErrorMessage(err, "Order would cross the spread — try increasing your limit price.") })
+          sileo.error({ title: "Post-only order rejected", description: apiErrorMessage(err, "Order would cross the spread • try increasing your limit price.") })
           break
         default:
           sileo.error({ title: "Trade failed", description: apiErrorMessage(err, "Your order could not be placed.") })
@@ -65,7 +68,7 @@ export function useCancelOrder() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: cancelOrder,
-    // Single toast owner — callers only manage their local UI state.
+    // Single toast owner • callers only manage their local UI state.
     onSuccess: (res) => {
       sileo.success({ title: res.message ?? "Order cancelled" })
       qc.invalidateQueries({ queryKey: queryKeys.orders() })

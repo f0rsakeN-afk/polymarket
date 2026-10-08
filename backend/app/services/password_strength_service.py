@@ -4,7 +4,7 @@ import re
 class PasswordStrengthService:
     """
     Fast, dependency-free password strength checker.
-    Enforces complexity requirements — no blocklists.
+    Enforces complexity requirements • no blocklists.
     Returns (is_strong: bool, reason: str | None)
     """
 

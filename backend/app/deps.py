@@ -13,7 +13,7 @@ from app.database import get_db
 from app.models.user import Session, User
 from app.redis import get_redis, redis_cb
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 ALGORITHM = "HS256"
 
@@ -58,7 +58,7 @@ def _bcrypt_input(password: str) -> bytes:
     """Normalise a password to ≤72 bytes for bcrypt.
 
     bcrypt only reads the first 72 bytes of input: longer input used to raise
-    (`ValueError: password cannot be longer than 72 bytes`) — which made
+    (`ValueError: password cannot be longer than 72 bytes`) • which made
     registration with a long password a 500, and made *first-ever settlement*
     crash, because the system treasury account derives its password hash from
     `jwt_secret + 32 random bytes` (well over 72 bytes). Pre-hashing keeps the
@@ -93,7 +93,7 @@ def dummy_password_hash() -> str:
 
     Used when an email is not registered so that an unknown-user login costs
     the same ~100 ms of bcrypt work as a known-user login. Without it, a
-    fast response means "no such account" — a reliable user-enumeration
+    fast response means "no such account" • a reliable user-enumeration
     oracle. Generated lazily (never at import) and cached: the value is
     meaningless, it only exists to be slow.
     """
@@ -146,11 +146,11 @@ async def is_token_blacklisted(jti: str) -> bool:
         if _BLACKLIST_FAIL_OPEN:
             # Fail-open: allow the token during Redis outage.
             # Token still rejected at natural expiry (JWT `exp`, max 15 min).
-            logger.warning(f"Redis unavailable for blacklist check — failing open (jti={jti})")
+            logger.warning(f"Redis unavailable for blacklist check • failing open (jti={jti})")
             return False
         # Fail-closed: deny the token when Redis is unavailable.
         # Safer for production where a Redis outage should not admit revoked tokens.
-        logger.error(f"Redis unavailable for blacklist check — failing closed (jti={jti})")
+        logger.error(f"Redis unavailable for blacklist check • failing closed (jti={jti})")
         return True
 
 
@@ -161,11 +161,11 @@ async def blacklist_token(jti: str, ttl_seconds: int):
         await redis_cb.call(lambda: r.set(f"blacklist:{jti}", "1", ex=ttl_seconds))
     except Exception:
         if _BLACKLIST_FAIL_OPEN:
-            logger.warning(f"Redis unavailable to blacklist token (jti={jti}) — allowing logout")
+            logger.warning(f"Redis unavailable to blacklist token (jti={jti}) • allowing logout")
             return
         # Fail-closed: re-raise so the caller knows the blacklist write failed.
-        # Logout is aborted but the token is not blacklisted — it expires naturally in 15 min.
-        logger.error(f"Redis unavailable to blacklist token (jti={jti}) — failing closed")
+        # Logout is aborted but the token is not blacklisted • it expires naturally in 15 min.
+        logger.error(f"Redis unavailable to blacklist token (jti={jti}) • failing closed")
         raise
 
 
@@ -173,7 +173,7 @@ async def _validate_session(db: AsyncSession, payload: dict, user: User) -> None
     """Reject the token unless its session is alive.
 
     An access token is only valid for the session it was minted for: the `sid`
-    claim names that row. This is what makes revocation exact — `logout` and
+    claim names that row. This is what makes revocation exact • `logout` and
     `DELETE /auth/sessions/{id}` kill that device's tokens immediately, and
     `logout-all` kills every device's, instead of the token surviving as long
     as some other session of the same user is still alive. Expiry is checked
@@ -272,10 +272,18 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
     # Secure cookie only when actually in production (HTTPS). Localhost and dev
     # environments must use non-secure cookies even when DEBUG=false.
     is_prod = settings.app_env == "production"
-    # Domain=localhost allows the cookie to work across frontend (:3000) and
-    # backend (:8000) on different ports during local development.
-    cookie_domain = "localhost" if not is_prod else None
 
+    # Deliberately NO `Domain` attribute • these are host-only cookies.
+    #
+    # Dev used to set `Domain=localhost` so the cookie would "work across
+    # frontend (:3000) and backend (:8000)". It never needed to: cookie scope is
+    # host-based and ignores ports entirely, so a host-only cookie set by
+    # localhost:8000 is sent to localhost:8000 just the same. The attribute bought
+    # nothing and cost real breakage • a `Domain=localhost` cookie is rejected
+    # outright by RFC 6265 cookie stores (Python's `http.cookiejar`, and so every
+    # httpx/requests client, silently discards it), which made a successful login
+    # look like an anonymous one on the very next request. Host-only is also what
+    # production already used, so dev now matches it.
     response.set_cookie(
         key="access_token",
         value=access_token,
@@ -284,7 +292,6 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
         samesite="lax",
         max_age=settings.jwt_access_expire,
         path="/",
-        domain=cookie_domain,
     )
     if refresh_token:
         response.set_cookie(
@@ -295,12 +302,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
             samesite="lax",
             max_age=settings.jwt_refresh_expire,
             path="/",
-            domain=cookie_domain,
         )
 
 
 def clear_auth_cookies(response: Response):
     is_prod = settings.app_env == "production"
-    cookie_domain = "localhost" if not is_prod else None
-    response.delete_cookie("access_token", path="/", secure=is_prod, domain=cookie_domain)
-    response.delete_cookie("refresh_token", path="/", secure=is_prod, domain=cookie_domain)
+    # Must mirror set_auth_cookies exactly • a delete_cookie with a different
+    # Domain/Path than the one it set does not remove the stored cookie.
+    response.delete_cookie("access_token", path="/", secure=is_prod)
+    response.delete_cookie("refresh_token", path="/", secure=is_prod)

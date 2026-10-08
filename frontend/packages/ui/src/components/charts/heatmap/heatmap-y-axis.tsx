@@ -18,9 +18,9 @@ export interface HeatmapYAxisProps {
   className?: string;
   /** Which row ticks to display. Default: `"odd"` (Mon / Wed / Fri). */
   tickFilter?: HeatmapYAxisTickFilter;
-  /** Label format — `"initial"` shows the first letter only (Mon → M). Default: `"full"`. */
+  /** Label format • `"initial"` shows the first letter only (Mon → M). Default: `"full"`. */
   labelFormat?: HeatmapYAxisLabelFormat;
-  /** Per-row label opacity — mirrors {@link HeatmapCells} `rowOpacity`. */
+  /** Per-row label opacity • mirrors {@link HeatmapCells} `rowOpacity`. */
   rowOpacity?: number | readonly number[];
 }
 

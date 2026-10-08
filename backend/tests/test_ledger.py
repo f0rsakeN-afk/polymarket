@@ -4,7 +4,7 @@ Every dollar a wallet gains from a pool must be a dollar `pool.collateral`
 lost, and every pool payout must be covered by collateral that actually went
 in. These tests pin the invariant that used to be missing (§6.1 of
 docs/trading-engine.md): buys, splits and deposits credit the escrow; sells,
-merges, LP exits, fee sweeps, claims and settlement debit it — so settlement
+merges, LP exits, fee sweeps, claims and settlement debit it • so settlement
 can never mint money, and a market can never promise more than it holds.
 """
 from decimal import Decimal
@@ -70,7 +70,7 @@ def test_credit_collateral_rejects_negative():
 
 
 def test_debit_is_bounded_by_escrow():
-    """The escrow can never go negative — it is a hard payout bound.
+    """The escrow can never go negative • it is a hard payout bound.
 
     There is no "pay what you can" mode any more: a caller that debits less
     than it records as paid destroys the difference. A shortfall raises, and
@@ -264,7 +264,7 @@ async def test_lp_exit_never_exceeds_escrow_after_imbalanced_trading(
     payout = w1 - w0
     frac = lp_tokens / supply
     assert payout > 0
-    # Bounded by the pro-rata escrow slice — never the inflated reserve sum
+    # Bounded by the pro-rata escrow slice • never the inflated reserve sum
     # the old `yes_redeemed + no_redeemed` formula would have paid out.
     assert payout <= collateral * frac + D("0.000001")
     assert payout < reserve_sum * frac
@@ -396,7 +396,7 @@ async def test_settlement_refuses_a_stale_outcome(
 
     assert await _balance(db_session, test_user.id) == user_before
     await db_session.refresh(test_market, ["status"])
-    assert test_market.status == "resolving"  # untouched — no partial settle
+    assert test_market.status == "resolving"  # untouched • no partial settle
 
 
 @pytest.mark.asyncio
@@ -407,7 +407,7 @@ async def test_settlement_refuses_rather_than_underpaying_a_winner(
 
     This test used to assert the opposite: that a winner owed $400 was paid the
     $50 the escrow held, the residual went to LPs, and the market settled. That
-    "capping" *is* the bug — the unpaid $350 was then stamped `settled_at`,
+    "capping" *is* the bug • the unpaid $350 was then stamped `settled_at`,
     so it was owed to nobody and claimable by nobody. Refusing keeps the whole
     $400 claimable, which is the only outcome that loses nothing.
     """
@@ -428,7 +428,7 @@ async def test_settlement_refuses_rather_than_underpaying_a_winner(
         await settle_market(str(market_id), str(yes.id), "t1")
 
     await db_session.rollback()
-    # Nobody was paid — not the winner, not the LP.
+    # Nobody was paid • not the winner, not the LP.
     assert await _balance(db_session, user_id) == user_before
     assert await _balance(db_session, admin_id) == admin_before
     # The escrow is untouched: still a hard bound, never negative.
@@ -504,7 +504,7 @@ async def test_claim_refuses_to_pay_an_unfunded_escrow(
 # Settlement used to pay each winner with `allow_shortfall=True`, then stamp
 # `settled_at` on every position regardless. An underfunded escrow therefore
 # paid the first winners in full, gave the last one whatever was left, and
-# marked everybody settled — so the remainder was owed to nobody and reachable
+# marked everybody settled • so the remainder was owed to nobody and reachable
 # by nobody. It also had a `pool is not None` guard that *skipped the debit
 # entirely* and credited the wallet anyway: money from nothing.
 #
@@ -518,7 +518,7 @@ async def test_settlement_refuses_to_run_on_an_underfunded_escrow(
     """An escrow that cannot cover winners + fees must abort the whole settle.
 
     Nothing is paid, nothing is marked settled, and the market is not marked
-    resolved — so the position stays claimable and a later top-up (or retry)
+    resolved • so the position stays claimable and a later top-up (or retry)
     can settle it in full. Nothing is lost.
     """
     yes = next(o for o in test_market.outcomes if o.name.lower() == "yes")

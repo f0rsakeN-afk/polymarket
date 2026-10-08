@@ -1,4 +1,4 @@
-// Typed query key factory — use these instead of inline arrays in hooks
+// Typed query key factory • use these instead of inline arrays in hooks
 
 export const queryKeys = {
   // Auth
@@ -12,7 +12,7 @@ export const queryKeys = {
   marketActivity: (slug: string) => ["market-activity", slug] as const,
   marketTrades: (slug: string) => ["market-trades", slug] as const,
   globalTrades: (marketSlug?: string) => ["global-trades", marketSlug] as const,
-  // Non-infinite variants of the same feeds — MUST be distinct keys from the
+  // Non-infinite variants of the same feeds • MUST be distinct keys from the
   // infinite queries above: they cache a single page object, not {pages, pageParams}.
   // The "…", "simple" segment keeps them out of each other's exact-key lookups while
   // still matching prefix invalidations like ["market-trades"].

@@ -135,7 +135,7 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Share your link — friends get bonus credits on signup and you earn when they complete their first trade.
+          Share your link • friends get bonus credits on signup and you earn when they complete their first trade.
         </p>
       </CardContent>
     </Card>
@@ -149,7 +149,7 @@ function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
     return (
       <Card className="overflow-hidden pt-0">
         <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-          No referrals yet — share your code to get started!
+          No referrals yet • share your code to get started!
         </CardContent>
       </Card>
     )
@@ -190,14 +190,14 @@ function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
                   <p className="text-sm font-medium">
                     {ref.reward_amount && Number(ref.reward_amount) > 0
                       ? `$${Number(ref.reward_amount).toFixed(2)}`
-                      : "—"}
+                      : "•"}
                   </p>
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {formatDateShort(ref.created_at)}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {ref.completed_at ? formatDateShort(ref.completed_at) : "—"}
+                  {ref.completed_at ? formatDateShort(ref.completed_at) : "•"}
                 </TableCell>
               </TableRow>
             ))}

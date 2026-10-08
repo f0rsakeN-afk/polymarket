@@ -99,7 +99,7 @@ const BinaryOutcomeRow = memo(function BinaryOutcomeRow({
 
 // ─── Multi-outcome layout: compact 2-column grid ───────────────────────────────
 
-// Semantic chart tokens — adapts to light/dark automatically
+// Semantic chart tokens • adapts to light/dark automatically
 const MULTI_COLORS = [
   "var(--chart-1)",
   "var(--destructive)",
@@ -183,18 +183,35 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
 // ─── Market Card ───────────────────────────────────────────────────────────────
 
 const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
-  const isMulti = market.outcomes && market.outcomes.length > 2
+  // Name-based, matching the backend: a market is parimutuel when it has no
+  // YES/NO pair. Counting outcomes would classify a two-way NAMED market
+  // ("Trump vs Biden") as binary and render it as Yes/No, which is not what it is.
+  const hasNamedPair = useMemo(() => {
+    const names = (market.outcomes ?? []).map((o) => o.name.toLowerCase())
+    return names.includes("yes") && names.includes("no")
+  }, [market.outcomes])
+
+  const isMulti = (market.outcomes?.length ?? 0) > 0 && !hasNamedPair
 
   const displayOutcomes = useMemo(() => {
     if (isMulti) {
-      // List API doesn't provide per-outcome prices — show equal probability
+      // Real per-outcome prices from the API. The old fallback of `1 / n` for
+      // every outcome made all N read identical no matter what the market
+      // actually looked like.
+      const even = String(1 / (market.outcomes?.length ?? 1))
       return market.outcomes!.map((o) => ({
         id: o.id,
         name: o.name,
-        price: String(1 / market.outcomes!.length),
+        price:
+          o.price === null || o.price === undefined
+            ? even
+            : String(o.price),
         outcome_index: o.outcome_index,
       }))
     }
+    // Binary: the market-level pair. The API also prices each outcome
+    // individually, but on a YES/NO market that is the same two numbers, and
+    // `yes_price`/`no_price` is the pair the card has always displayed.
     return [
       { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
       { id: "no", name: "No", price: market.no_price, outcome_index: 1 },

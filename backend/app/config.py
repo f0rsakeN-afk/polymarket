@@ -12,20 +12,20 @@ class Settings(BaseSettings):
     )
 
     # App
-    app_name: str = "Polymarket API"
+    app_name: str = "PredictX API"
     # Environment: development | staging | production
     # Controls OpenAPI docs visibility, HSTS, detailed error responses.
-    # NEVER trust this for auth/security — use it only for UI/information leaks.
+    # NEVER trust this for auth/security • use it only for UI/information leaks.
     app_env: str = "development"
     # Log level: DEBUG | INFO | WARNING | ERROR
-    # independent of app_env — production can have DEBUG logs (piped to log aggregator).
+    # independent of app_env • production can have DEBUG logs (piped to log aggregator).
     log_level: str = "INFO"
     debug: bool = False  # deprecated: use app_env + log_level instead
 
-    # Frontend (Next.js) — used for magic link URLs
+    # Frontend (Next.js) • used for magic link URLs
     frontend_url: str = "http://localhost:3000"
 
-    # CORS — comma-separated, must NOT contain wildcards when credentials=True
+    # CORS • comma-separated, must NOT contain wildcards when credentials=True
     cors_origins: str = "http://localhost:3000"
 
     # Database
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     secret_key: str = "change-me-in-production"
     jwt_access_expire: int = 900
-    jwt_refresh_expire: int = 2592000  # 30 days — standard refresh token TTL
+    jwt_refresh_expire: int = 2592000  # 30 days • standard refresh token TTL
     # Absolute lifetime of a whole login CHAIN (login → N rotations). Each
     # rotation mints a token with its own fresh expiry, so jwt_refresh_expire
     # bounds one token while renewing could otherwise go on forever; this is
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     rate_limit_auth_lockout_seconds: int = 900  # 15 min
 
     # WebSocket auth. The access_token cookie is the supported way to
-    # authenticate the handshake — cookies are host-scoped, not port-scoped,
+    # authenticate the handshake • cookies are host-scoped, not port-scoped,
     # so the browser sends them to ws://localhost:8000 even when the app is
     # on localhost:3000, and to api.example.com from app.example.com.
     # `?token=<jwt>` is a legacy fallback for non-browser clients only:
@@ -83,19 +83,19 @@ class Settings(BaseSettings):
 
     # Resend (email notifications)
     resend_api_key: str = ""
-    notifications_from_email: str = "noreply@polymarket.example.com"
+    notifications_from_email: str = "noreply@PredictX.example.com"
 
-    # Mailtrap SMTP (dev fallback — set smtp_host to use instead of Resend)
+    # Mailtrap SMTP (dev fallback • set smtp_host to use instead of Resend)
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_pass: str = ""
-    smtp_from_email: str = "noreply@polymarket.example.com"
+    smtp_from_email: str = "noreply@PredictX.example.com"
 
     # Referral
     referral_reward_amount: Decimal = Decimal("1.0")
 
-    # Fees — all rates as decimals (0.02 = 2%).
+    # Fees • all rates as decimals (0.02 = 2%).
     # A taker buy pays BOTH legs: trading fee (stays in the pool for LPs,
     # deducted from collateral before the AMM quote) AND protocol fee
     # (accrues in pool.protocol_fees, swept to treasury at settlement).
@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     totp_encryption_key: str = "change-me-in-production"
     totp_setup_expire_seconds: int = 900  # 15 minutes
 
-    # Error tracking (optional — unset means errors only go to logs)
+    # Error tracking (optional • unset means errors only go to logs)
     sentry_dsn: str = ""
     sentry_traces_sample_rate: float = 0.1
     sentry_profiles_sample_rate: float = 0.0

@@ -1,10 +1,10 @@
 """Overnight escrow invariant audit.
 
 The nightly task re-checks every pool's escrow against what it still owes, so
-a ledger imbalance surfaces while there is time to fix it — instead of at
+a ledger imbalance surfaces while there is time to fix it • instead of at
 resolution, where `settle_market` correctly refuses and the market is stuck.
 
-Each test pins one invariant, and — just as importantly — that a healthy pool
+Each test pins one invariant, and • just as importantly • that a healthy pool
 produces *no* violation, so the audit can't cry wolf.
 """
 import asyncio
@@ -90,7 +90,7 @@ async def test_an_exactly_funded_pool_reports_no_violations(db_session, test_mar
 @pytest.mark.asyncio
 async def test_flags_an_escrow_below_the_largest_open_side(db_session, test_market):
     """Only ONE side is paid $1/share at resolution, so the worst case is the
-    *larger* side — not the sum. 60 NO shares owed against 50 of escrow is a
+    *larger* side • not the sum. 60 NO shares owed against 50 of escrow is a
     violation even though 60 < 60 + 60."""
     yes = await _outcome(db_session, test_market.id, "yes")
     no = await _outcome(db_session, test_market.id, "no")
@@ -144,7 +144,7 @@ async def test_protocol_fees_count_toward_the_obligation(db_session, test_market
 
 @pytest.mark.asyncio
 async def test_settled_positions_are_no_longer_a_claim(db_session, test_market):
-    """A paid position must not keep the pool permanently 'underfunded' —
+    """A paid position must not keep the pool permanently 'underfunded' •
     otherwise every settled market would report a violation forever."""
     yes = await _outcome(db_session, test_market.id, "yes")
     pool = await _pool(db_session, test_market.id)
@@ -204,7 +204,7 @@ async def test_flags_negative_collateral(db_session, test_market):
 
 @pytest.mark.asyncio
 async def test_flags_winners_owed_with_no_pool_at_all(db_session, test_market):
-    """No pool means nothing can fund the winners — settlement refuses, so it
+    """No pool means nothing can fund the winners • settlement refuses, so it
     must be caught here with the market named."""
     yes = await _outcome(db_session, test_market.id, "yes")
     pool = await _pool(db_session, test_market.id)

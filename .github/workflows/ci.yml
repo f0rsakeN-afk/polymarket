@@ -1,7 +1,7 @@
 name: CI
 
 # These workflows used to live in `backend/.github/workflows/`, where GitHub
-# never looked at them — so CI had never actually run. They now live at the
+# never looked at them • so CI had never actually run. They now live at the
 # repository root, which is the only place Actions reads from.
 on:
   pull_request:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   backend:
-    name: Backend — ruff + pytest
+    name: Backend • ruff + pytest
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -73,7 +73,7 @@ jobs:
         run: uv run pytest -q --cov=app --cov-report=term-missing --cov-fail-under=65
 
   frontend:
-    name: Frontend — eslint + tsc (apps/web)
+    name: Frontend • lint + typecheck + tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -91,12 +91,15 @@ jobs:
       - name: Lint with eslint
         run: bun run lint
 
-      # Scoped to apps/web: the shared `@workspace/ui` package still has type
-      # errors in the chart internals (see docs/README.md gap list) and is not
-      # part of the gate yet.
-      - name: Type-check apps/web
-        working-directory: frontend/apps/web
+      # Workspace-wide: `@workspace/ui` is clean now that its react-library
+      # tsconfig uses bundler resolution instead of NodeNext, so it no longer
+      # needs to be excluded from the gate.
+      - name: Type-check workspace
         run: bun run typecheck
+
+      - name: Unit tests
+        working-directory: frontend/apps/web
+        run: bun run test
 
   security-scan:
     name: Trivy scan (reports, does not block)

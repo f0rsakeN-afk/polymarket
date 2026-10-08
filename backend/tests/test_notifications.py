@@ -76,7 +76,7 @@ async def test_mark_notification_read(client: AsyncClient, test_user):
     """Marking a notification as read returns 200 or 404 (idempotent)."""
     client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(f"/api/v1/notifications/{uuid.uuid4()}/read")
-    # Non-existent notification — returns 404
+    # Non-existent notification • returns 404
     assert resp.status_code in (200, 404)
 
 

@@ -16,7 +16,7 @@ from app.models.position import Position
 from app.models.trade import Trade
 from app.models.wallet import Wallet
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 @dataclass
@@ -27,7 +27,6 @@ class MatchResult:
 
 
 class MatchingEngine:
-
     @staticmethod
     async def find_matches(
         db: AsyncSession,
@@ -35,7 +34,8 @@ class MatchingEngine:
         outcome_id: str,
         side: str,
         limit_price: Decimal | None = None,
-        exclude_user_id: UUID | None = None,  # actual type is UUID; callers convert str→UUID
+        exclude_user_id: UUID
+        | None = None,  # actual type is UUID; callers convert str→UUID
     ) -> list[Order]:
         opposite = "sell" if side == "buy" else "buy"
 
@@ -83,7 +83,7 @@ class MatchingEngine:
 
         # The 1% protocol fee is taken out of the seller's proceeds below, so it
         # has to be credited somewhere or it simply vanishes from circulation
-        # (previously it was burned — no ledger row anywhere recorded it).
+        # (previously it was burned • no ledger row anywhere recorded it).
         # Every production caller (order_service.execute_order and the
         # check-limit-order beat task) locks Market → Pool *before* entering the
         # matching engine, so this FOR UPDATE re-takes a lock we already hold and
@@ -91,10 +91,26 @@ class MatchingEngine:
         # canonical order Market → Pool → Wallet → Position intact.
         pool_result = await db.execute(
             select(LiquidityPool)
-            .where(LiquidityPool.market_id == maker.market_id)
+            .where(
+                LiquidityPool.market_id == maker.market_id,
+                LiquidityPool.outcome_id == maker.outcome_id,
+            )
             .with_for_update()
         )
         pool = pool_result.scalar_one_or_none()
+        if pool is None:
+            # Binary market: the single NULL-outcome pool. On a parimutuel
+            # market the row above is the maker's own outcome pool, so the fee is
+            # credited to the pool that actually earned it.
+            pool_result = await db.execute(
+                select(LiquidityPool)
+                .where(
+                    LiquidityPool.market_id == maker.market_id,
+                    LiquidityPool.outcome_id.is_(None),
+                )
+                .with_for_update()
+            )
+            pool = pool_result.scalar_one_or_none()
         if pool is not None and fee > 0:
             # The fee is withheld from the seller's proceeds (they receive
             # usdc_value - fee below), so those dollars belong to the pool's
@@ -130,21 +146,25 @@ class MatchingEngine:
         if buyer_wallet:
             buyer_available = buyer_wallet.balance - buyer_wallet.locked_balance
             if buyer_available < usdc_value:
-                raise InsufficientBalanceError({
-                    "available": float(buyer_available),
-                    "required": float(usdc_value),
-                })
+                raise InsufficientBalanceError(
+                    {
+                        "available": float(buyer_available),
+                        "required": float(usdc_value),
+                    }
+                )
 
         # Seller guard: verify cover BEFORE mutating. A concurrent fill may have
         # consumed the seller's shares after find_matches read them; matching
         # more than held would mint shares from thin air. Races skip the match
         # (caller continues to the next maker) instead of corrupting supply.
         seller_pos_check = await db.execute(
-            select(Position).where(
+            select(Position)
+            .where(
                 Position.user_id == seller_user_id,
                 Position.market_id == maker.market_id,
                 Position.outcome_id == maker.outcome_id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
         seller_pos_row = seller_pos_check.scalar_one_or_none()
         seller_held = seller_pos_row.shares_held if seller_pos_row else Decimal(0)
@@ -178,7 +198,9 @@ class MatchingEngine:
             maker.status = "partial"
 
         if maker.side == "buy" and maker_wallet:
-            locked_release = min(maker.amount - maker.remaining_amount, match_shares * maker.price)
+            locked_release = min(
+                maker.amount - maker.remaining_amount, match_shares * maker.price
+            )
             maker_wallet.locked_balance = max(
                 Decimal(0), maker_wallet.locked_balance - locked_release
             )
@@ -207,11 +229,13 @@ class MatchingEngine:
 
         if maker.side == "buy":
             seller_pos = await db.execute(
-                select(Position).where(
+                select(Position)
+                .where(
                     Position.user_id == taker_user_id,
                     Position.market_id == maker.market_id,
                     Position.outcome_id == maker.outcome_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             seller_pos = seller_pos.scalar_one_or_none()
             if seller_pos:
@@ -222,22 +246,29 @@ class MatchingEngine:
                 seller_pos.realized_pnl += realized_pnl
 
             buyer_pos = await db.execute(
-                select(Position).where(
+                select(Position)
+                .where(
                     Position.user_id == maker.user_id,
                     Position.market_id == maker.market_id,
                     Position.outcome_id == maker.outcome_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             buyer_pos = buyer_pos.scalar_one_or_none()
             if buyer_pos:
                 total_shares = buyer_pos.shares_held + match_shares
                 buyer_pos.average_price = (
-                    buyer_pos.average_price * buyer_pos.shares_held + usdc_value
-                ) / total_shares if total_shares > 0 else Decimal(0)
+                    (buyer_pos.average_price * buyer_pos.shares_held + usdc_value)
+                    / total_shares
+                    if total_shares > 0
+                    else Decimal(0)
+                )
                 buyer_pos.shares_held = total_shares
             else:
-                avg_price = usdc_value / match_shares if match_shares > 0 else Decimal(0)
-                # Atomic upsert — eliminates SELECT-then-INSERT race
+                avg_price = (
+                    usdc_value / match_shares if match_shares > 0 else Decimal(0)
+                )
+                # Atomic upsert • eliminates SELECT-then-INSERT race
                 await db.execute(
                     text("""
                         INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
@@ -252,26 +283,33 @@ class MatchingEngine:
                         "outcome_id": maker.outcome_id,
                         "shares_held": match_shares,
                         "average_price": avg_price,
-                    }
+                    },
                 )
         else:
             buyer_pos = await db.execute(
-                select(Position).where(
+                select(Position)
+                .where(
                     Position.user_id == taker_user_id,
                     Position.market_id == maker.market_id,
                     Position.outcome_id == maker.outcome_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             buyer_pos = buyer_pos.scalar_one_or_none()
             if buyer_pos:
                 total_shares = buyer_pos.shares_held + match_shares
                 buyer_pos.average_price = (
-                    buyer_pos.average_price * buyer_pos.shares_held + usdc_value
-                ) / total_shares if total_shares > 0 else Decimal(0)
+                    (buyer_pos.average_price * buyer_pos.shares_held + usdc_value)
+                    / total_shares
+                    if total_shares > 0
+                    else Decimal(0)
+                )
                 buyer_pos.shares_held = total_shares
             else:
-                avg_price = usdc_value / match_shares if match_shares > 0 else Decimal(0)
-                # Atomic upsert — eliminates SELECT-then-INSERT race
+                avg_price = (
+                    usdc_value / match_shares if match_shares > 0 else Decimal(0)
+                )
+                # Atomic upsert • eliminates SELECT-then-INSERT race
                 await db.execute(
                     text("""
                         INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
@@ -286,15 +324,17 @@ class MatchingEngine:
                         "outcome_id": maker.outcome_id,
                         "shares_held": match_shares,
                         "average_price": avg_price,
-                    }
+                    },
                 )
 
             seller_pos = await db.execute(
-                select(Position).where(
+                select(Position)
+                .where(
                     Position.user_id == maker.user_id,
                     Position.market_id == maker.market_id,
                     Position.outcome_id == maker.outcome_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             seller_pos = seller_pos.scalar_one_or_none()
             if seller_pos:
@@ -325,7 +365,12 @@ class MatchingEngine:
         taker_user_id: UUID | None = None,
     ) -> tuple[Decimal, Decimal, list[dict]]:
         matches = await MatchingEngine.find_matches(
-            db, str(market.id), outcome.id, side, limit_price, exclude_user_id=taker_user_id
+            db,
+            str(market.id),
+            outcome.id,
+            side,
+            limit_price,
+            exclude_user_id=taker_user_id,
         )
 
         matched_shares = Decimal(0)
@@ -346,7 +391,11 @@ class MatchingEngine:
                 remaining_shares = amount - matched_shares
                 if remaining_shares <= 0:
                     break
-                affordable = maker.remaining_amount / maker.price if maker.price > 0 else Decimal(0)
+                affordable = (
+                    maker.remaining_amount / maker.price
+                    if maker.price > 0
+                    else Decimal(0)
+                )
                 match_qty = min(affordable, remaining_shares)
                 if match_qty == 0:
                     break
@@ -376,7 +425,11 @@ class MatchingEngine:
         matched_details = []
 
         matches = await MatchingEngine.find_matches(
-            db, str(market.id), outcome.id, order.side, order.price,
+            db,
+            str(market.id),
+            outcome.id,
+            order.side,
+            order.price,
             exclude_user_id=str(order.user_id),
         )
 

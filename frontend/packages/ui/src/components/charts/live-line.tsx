@@ -43,9 +43,19 @@ export function detectMomentum(
     return "flat";
   }
   const tailStart = Math.max(start, data.length - 5);
-  const first = (data[tailStart]?.[dataKey] as number) ?? 0;
-  const last = (data.at(-1)?.[dataKey] as number) ?? 0;
-  const delta = last - first;
+  const rawFirst = data[tailStart]?.[dataKey];
+  const rawLast = data.at(-1)?.[dataKey];
+  // A missing sample is a gap, not a zero. Defaulting either end to 0 made the
+  // tail look like a crash to zero and flipped the line to the "down" colour.
+  if (
+    typeof rawFirst !== "number" ||
+    !Number.isFinite(rawFirst) ||
+    typeof rawLast !== "number" ||
+    !Number.isFinite(rawLast)
+  ) {
+    return "flat";
+  }
+  const delta = rawLast - rawFirst;
   const threshold = range * 0.12;
   if (delta > threshold) {
     return "up";
@@ -123,7 +133,11 @@ export function LiveLine({
   const getY = useCallback(
     (d: Record<string, unknown>) => {
       const v = d[dataKey];
-      return typeof v === "number" ? (yScale(v) ?? 0) : 0;
+      // NaN, not 0. A missing value used to fall back to the literal 0, which
+      // is a *plotted* y: d3 reads it as a real zero, so the line dove to the
+      // top of the plot and the y-domain stretched, and the badge showed 0.00.
+      // NaN makes d3 treat the point as a gap instead - an honest "no data".
+      return typeof v === "number" && Number.isFinite(v) ? yScale(v) : Number.NaN;
     },
     [dataKey, yScale]
   );
@@ -131,13 +145,16 @@ export function LiveLine({
   // The second-to-last point is the "now" position (live tip).
   // The last point is the queued future point for the fade-out zone.
   const nowPoint = data.length >= 2 ? data.at(-2) : data.at(-1);
+  const rawLive = nowPoint?.[dataKey];
+  // null rather than 0: a tip with no value has no marker to draw, and
+  // defaulting it to 0 printed a "0.00" badge and pinned the guide line to the
+  // floor for a market that simply had no fresh sample.
   const liveValue =
-    nowPoint && typeof nowPoint[dataKey] === "number"
-      ? (nowPoint[dataKey] as number)
-      : 0;
+    typeof rawLive === "number" && Number.isFinite(rawLive) ? rawLive : null;
 
   const liveDotX = nowPoint ? (xScale(xAccessor(nowPoint)) ?? 0) : innerWidth;
-  const liveDotY = yScale(liveValue) ?? 0;
+  const liveDotY = liveValue === null ? Number.NaN : yScale(liveValue);
+  const hasLiveMarker = liveValue !== null && Number.isFinite(liveDotY);
 
   const momentum = useMemo(
     () => detectMomentum(data, dataKey),
@@ -227,25 +244,27 @@ export function LiveLine({
       )}
 
       {/* Dashed horizontal line at current value */}
-      <line
-        opacity={0.25}
-        stroke={resolvedStroke}
-        strokeDasharray="4,4"
-        strokeWidth={1}
-        x1={0}
-        x2={innerWidth}
-        y1={liveDotY}
-        y2={liveDotY}
-      />
+      {hasLiveMarker && (
+        <line
+          opacity={0.25}
+          stroke={resolvedStroke}
+          strokeDasharray="4,4"
+          strokeWidth={1}
+          x1={0}
+          x2={innerWidth}
+          y1={liveDotY}
+          y2={liveDotY}
+        />
+      )}
 
-      {/* Live indicator (dot + badge) — dims when crosshair is active */}
+      {/* Live indicator (dot + badge) • dims when crosshair is active */}
       <motion.g
         animate={{ opacity: isScrubbing ? 0.25 : 1 }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
       >
         {/* Pulsing dot */}
         <g>
-          {pulse && (
+          {pulse && hasLiveMarker && (
             <circle
               cx={liveDotX}
               cy={liveDotY}
@@ -271,25 +290,29 @@ export function LiveLine({
               />
             </circle>
           )}
-          <circle
-            cx={liveDotX}
-            cy={liveDotY}
-            fill={dotColor}
-            opacity={0.1}
-            r={dotSize + 2}
-          />
-          <circle
-            cx={liveDotX}
-            cy={liveDotY}
-            fill={dotColor}
-            r={dotSize}
-            stroke={chartCssVars.background}
-            strokeWidth={2}
-          />
+          {hasLiveMarker && (
+            <>
+              <circle
+                cx={liveDotX}
+                cy={liveDotY}
+                fill={dotColor}
+                opacity={0.1}
+                r={dotSize + 2}
+              />
+              <circle
+                cx={liveDotX}
+                cy={liveDotY}
+                fill={dotColor}
+                r={dotSize}
+                stroke={chartCssVars.background}
+                strokeWidth={2}
+              />
+            </>
+          )}
         </g>
 
-        {/* Badge — use popover vars so text is never white-on-white */}
-        {badge && (
+        {/* Badge • use popover vars so text is never white-on-white */}
+        {badge && hasLiveMarker && liveValue !== null && (
           <g transform={`translate(${liveDotX + 12},${liveDotY})`}>
             <rect
               fill="var(--popover)"

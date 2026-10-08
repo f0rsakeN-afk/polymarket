@@ -23,9 +23,9 @@ frontend/
 
 ```bash
 bun install
-bun run dev          # turbo dev — http://localhost:3000
+bun run dev          # turbo dev • http://localhost:3000
 bun run build        # turbo build
-bun run lint         # eslint (warnings only today — see known gaps)
+bun run lint         # eslint (warnings only today • see known gaps)
 bun run typecheck    # tsc --noEmit
 ```
 
@@ -39,22 +39,22 @@ bun run typecheck    # tsc --noEmit
 - **Auth** is cookie-based (HttpOnly), so the server can read it on first paint. Middleware
   (`proxy.ts`) guards routes at the edge; the API still verifies every request itself.
 
-Server state lives in React Query, UI state in local `useState`/context — there is deliberately no
+Server state lives in React Query, UI state in local `useState`/context • there is deliberately no
 global store.
 
 ## Known gaps (documented, not hidden)
 
-- **No test suite at all.** First thing to fix (vitest + a few Playwright flows) — the backend has
+- **No test suite at all.** First thing to fix (vitest + a few Playwright flows) • the backend has
   300+ tests and this layer has none.
 
 Audited and closed in the same pass (kept here so nobody re-reports them): ESLint no longer runs
 `eslint-plugin-only-warn` (four heuristic `react-hooks` rules are `warn`, everything else fails the
 build), the duplicate `useCurrentUser` is down to one definition, the dead `app/metadata.ts` and the
-unused Sonner toaster mount are deleted, and the brand-name drift is swept to "Polymarket". The
+unused Sonner toaster mount are deleted, and the brand-name drift is swept to "PredictX". The
 `/admin` link turned out to be gated on `is_admin` already.
 
 ## More
 
-Project documentation lives in [`../docs/`](../docs/README.md) — in particular
+Project documentation lives in [`../docs/`](../docs/README.md) • in particular
 [`../docs/architecture.md`](../docs/architecture.md) for the API contract and
 [`../docs/viva-questions.md`](../docs/viva-questions.md) §K for the frontend questions.

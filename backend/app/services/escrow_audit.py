@@ -2,7 +2,7 @@
 
 Settlement pre-flights the escrow against what the pool owes and refuses to run
 if it can't cover it (`EscrowShortfallError`). That turns a broken ledger into
-a *resolution-time* failure — correct, but it surfaces once, at the worst
+a *resolution-time* failure • correct, but it surfaces once, at the worst
 possible moment, and only to whoever happens to be watching.
 
 This module runs the same arithmetic on a schedule so an imbalance surfaces
@@ -26,7 +26,7 @@ from app.models.liquidity import LiquidityPool, LPShare
 from app.models.market import Market
 from app.models.position import Position
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 D = Decimal
 
@@ -65,7 +65,7 @@ async def audit_escrow_invariants(
 ) -> list[EscrowViolation]:
     """Check every pool that still has obligations. Returns the violations.
 
-    Three aggregate queries total regardless of how many markets exist — the
+    Three aggregate queries total regardless of how many markets exist • the
     shape that keeps this cheap enough to run every night on a big table.
     """
     # 1. Shares still owed, per market per outcome. Unsettled is the right
@@ -96,7 +96,7 @@ async def audit_escrow_invariants(
     # can owe nothing to *positions* and still be worth checking, because it
     # may hold live LP tokens whose rows have drifted from `lp_token_supply`.
     # Filtering on "markets with unsettled positions" silently skipped exactly
-    # that case — a market nobody has traded yet is all LP rows and no claims.
+    # that case • a market nobody has traded yet is all LP rows and no claims.
     pool_rows = await db.execute(
         select(LiquidityPool, Market.slug)
         .join(Market, Market.id == LiquidityPool.market_id)
@@ -142,7 +142,7 @@ async def audit_escrow_invariants(
         # ── Invariant 1 & 2: the escrow must cover the worst-case settlement.
         #
         # At resolution exactly ONE side is paid $1 per share, so the worst
-        # case is the *larger* side's unsettled shares — plus the recorded
+        # case is the *larger* side's unsettled shares • plus the recorded
         # protocol fees, which settlement pays before LPs. This is precisely
         # the condition `settle_market` pre-flights, so if this is clean the
         # settlement cannot fail for lack of escrow.

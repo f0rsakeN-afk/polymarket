@@ -26,7 +26,7 @@ class DepositResponse(BaseModel):
 
 class WithdrawRequest(BaseModel):
     amount: PositiveMoney
-    # Idempotency key — client-generated, prevents double-withdrawal on retry
+    # Idempotency key • client-generated, prevents double-withdrawal on retry
     idempotency_key: str | None = Field(None, max_length=64)
 
 

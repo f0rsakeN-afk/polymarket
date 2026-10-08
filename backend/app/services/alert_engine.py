@@ -1,9 +1,9 @@
 """
-Alert trigger index — Redis ZSET + Lua for exactly-once firing at scale.
+Alert trigger index • Redis ZSET + Lua for exactly-once firing at scale.
 
 Problem with the naive approach: on every trade, load ALL untriggered alerts
 for the market into Python, evaluate, write back. That is O(alerts) DB rows per
-trade plus a race — two workers handling concurrent trades both see the same
+trade plus a race • two workers handling concurrent trades both see the same
 untriggered alert and both notify the user.
 
 Design here:
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.alert import Alert
 from app.redis import get_redis, redis_cb
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 DIRTY_MARKETS_KEY = "dirty:markets"
 

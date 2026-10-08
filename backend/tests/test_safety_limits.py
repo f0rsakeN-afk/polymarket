@@ -3,7 +3,7 @@
 Three protections that only become visible when something is about to go
 wrong, plus the trigger that keeps resting limit orders from going stale:
 
-* an LP exit must never take escrow that open positions still need — at
+* an LP exit must never take escrow that open positions still need • at
   resolution only ONE side is paid $1 per share, so the floor is the larger
   side's unsettled shares plus protocol fees still owed;
 * split and merge mint and burn real shares, so the AMM reserves have to move
@@ -57,7 +57,7 @@ async def test_split_and_merge_move_amm_reserves_with_the_shares(
     client: AsyncClient, test_user, test_market, db_session
 ):
     """A split mints `amount_after_fee` shares of EACH side, a merge burns
-    `amount` of each — the AMM reserves have to follow, or the shares the
+    `amount` of each • the AMM reserves have to follow, or the shares the
     split just handed out cannot be sold back (``amm.sell`` refuses to pay
     out more than the reserve holds). Both sides always move by the same
     amount, so the price ratio is untouched."""
@@ -97,8 +97,8 @@ async def test_lp_exit_cannot_take_escrow_away_from_open_positions(
     client: AsyncClient, test_user, test_market, db_session
 ):
     """Withdrawals are refused once the remaining escrow would no longer cover
-    the worst case at settlement (the larger side's unsettled shares — only
-    one side is ever paid — plus protocol fees still owed). Without the floor
+    the worst case at settlement (the larger side's unsettled shares • only
+    one side is ever paid • plus protocol fees still owed). Without the floor
     an LP could empty the pool while traders still hold shares, and
     settlement would have to short-change them."""
     client.cookies.set("access_token", token_for(test_user.id))
@@ -132,7 +132,7 @@ async def test_lp_exit_cannot_take_escrow_away_from_open_positions(
     fraction = lp.lp_tokens / pool.lp_token_supply
     payout = pool.collateral * fraction
     withdrawable = pool.collateral - D("120") - pool.protocol_fees
-    # Preconditions — otherwise the assertions below prove nothing.
+    # Preconditions • otherwise the assertions below prove nothing.
     assert payout > withdrawable, "full slice must exceed the floor for this test"
     assert withdrawable > 0, "partial withdrawal must still be possible"
 
@@ -199,7 +199,7 @@ async def test_a_fill_enqueues_the_limit_order_sweep_immediately(
 ):
     """`celery beat` only runs the limit-order sweep every 30s. A fill moves
     the price, so an order sitting on the other side of it may already be
-    fillable — waiting up to half a minute is a filled order the trader did
+    fillable • waiting up to half a minute is a filled order the trader did
     not get. The sweep is therefore enqueued right after the fill (throttled
     to one per second by a Redis NX key)."""
     from app.redis import get_redis

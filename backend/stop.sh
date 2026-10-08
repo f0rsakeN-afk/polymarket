@@ -1,11 +1,11 @@
 #!/bin/bash
-# ─── Polymarket Backend Stop Script ────────────────────────────────────────────
+# ─── PredictX Backend Stop Script ────────────────────────────────────────────
 # Stops FastAPI + Celery. Does NOT stop Docker (postgres/redis).
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$BASE_DIR/logs"
 
-echo "[stop] Shutting down Polymarket services..."
+echo "[stop] Shutting down PredictX services..."
 
 # Kill by PID files
 for pidfile in "$LOG_DIR"/api.pid "$LOG_DIR"/worker.pid "$LOG_DIR"/beat.pid; do

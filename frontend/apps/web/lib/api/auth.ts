@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, markSessionActive, markSessionEnded } from "./client"
 import type { MutationResponse } from "@/lib/api/client"
 
 /**
@@ -30,12 +30,12 @@ export interface Session {
 
 // ─── Shared payload shapes ─────────────────────────────────────────────────────
 
-/** `{ status: "..." }` — logout, refresh, revoke, 2FA and password operations. */
+/** `{ status: "..." }` • logout, refresh, revoke, 2FA and password operations. */
 export interface StatusResponse {
   status: string;
 }
 
-/** `{ message: "..." }` — fire-and-forget notifications (send/resend/reset). */
+/** `{ message: "..." }` • fire-and-forget notifications (send/resend/reset). */
 export interface MessageResponse {
   message: string;
 }
@@ -56,19 +56,59 @@ export interface MagicLoginResult {
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
 
+/**
+ * The auth cookies are HttpOnly, so the client cannot read them and has to be
+ * *told* when the server has just issued a session. Every endpoint whose
+ * *success* response calls `set_auth_cookies` is wrapped in `signedIn` (or, for
+ * `/auth/me`, is the probe itself): without that, the app stays in its
+ * negative-cached "no session" state after a successful sign-in and treats the
+ * in-flight requests that were sent before the cookie landed as anonymous.
+ */
+function signedIn<T>(p: Promise<T>): Promise<T> {
+  return p.then((res) => {
+    markSessionActive()
+    return res
+  })
+}
+
+/**
+ * Same, for the magic-link endpoints that answer either with a completed login
+ * or with a `requires_2fa` challenge. Only the first branch set auth cookies, so
+ * a challenge must not convince the client it is signed in.
+ */
+function signedInUnlessChallenged(
+  p: Promise<MutationResponse<MagicLoginResult>>
+): Promise<MutationResponse<MagicLoginResult>> {
+  return p.then((res) => {
+    if (!res.data?.requires_2fa) markSessionActive()
+    return res
+  })
+}
+
 export const authApi = {
-  me: () => api.get<{ success: boolean; data: MeResponse }>("/api/v1/auth/me"),
+  /**
+   * The session probe, and so the authoritative "a session exists" signal for the
+   * client. A 200 here is the only place the app can learn it is signed in.
+   */
+  me: () =>
+    signedIn(api.get<{ success: boolean; data: MeResponse }>("/api/v1/auth/me")),
 
   login: (email: string, password: string, totpCode?: string) =>
-    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/login", {
-      email,
-      password,
-      totp_code: totpCode,
-    }),
+    signedIn(
+      api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/login", {
+        email,
+        password,
+        totp_code: totpCode,
+      })
+    ),
 
-  logout: () => api.post<MutationResponse<StatusResponse>>("/api/v1/auth/logout"),
+  // `.finally`, not `.then`: the cookies are cleared by Set-Cookie on the way out
+  // and the local session is over whether or not the server confirmed it.
+  logout: () =>
+    api.post<MutationResponse<StatusResponse>>("/api/v1/auth/logout").finally(markSessionEnded),
 
-  logoutAll: () => api.post<MutationResponse<StatusResponse>>("/api/v1/auth/logout-all"),
+  logoutAll: () =>
+    api.post<MutationResponse<StatusResponse>>("/api/v1/auth/logout-all").finally(markSessionEnded),
 
   sessions: () =>
     api.get<{ success: boolean; data: Session[] }>("/api/v1/auth/sessions"),
@@ -108,33 +148,41 @@ export const magicLinkApi = {
 
   /** May return a `requires_2fa` challenge instead of logging in. */
   verifyCode: (email: string, code: string, totpCode?: string) =>
-    api.post<MutationResponse<MagicLoginResult>>("/api/v1/auth/verify-magic", {
-      email,
-      code,
-      totp_code: totpCode,
-    }),
+    signedInUnlessChallenged(
+      api.post<MutationResponse<MagicLoginResult>>("/api/v1/auth/verify-magic", {
+        email,
+        code,
+        totp_code: totpCode,
+      })
+    ),
 
   requestUrl: (email: string) =>
     api.post<MutationResponse<MessageResponse>>("/api/v1/auth/magic-link/url", { email }),
 
   /** May return a `requires_2fa` challenge instead of logging in. */
   verifyUrl: (token: string) =>
-    api.post<MutationResponse<MagicLoginResult>>(
-      "/api/v1/auth/verify-magic-url",
-      { token }
+    signedInUnlessChallenged(
+      api.post<MutationResponse<MagicLoginResult>>(
+        "/api/v1/auth/verify-magic-url",
+        { token }
+      )
     ),
 
   verifyUrl2fa: (partialToken: string, totpCode: string) =>
-    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-url-2fa", {
-      partial_token: partialToken,
-      totp_code: totpCode,
-    }),
+    signedIn(
+      api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-url-2fa", {
+        partial_token: partialToken,
+        totp_code: totpCode,
+      })
+    ),
 
   verifyMagic2fa: (partialToken: string, totpCode: string) =>
-    api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-2fa", {
-      partial_token: partialToken,
-      totp_code: totpCode,
-    }),
+    signedIn(
+      api.post<MutationResponse<{ id: string; email: string; username: string }>>("/api/v1/auth/verify-magic-2fa", {
+        partial_token: partialToken,
+        totp_code: totpCode,
+      })
+    ),
 };
 
 // ─── Password reset ────────────────────────────────────────────────────────────
@@ -160,15 +208,16 @@ export const accountApi = {
   setPassword: (password: string) =>
     api.post<MutationResponse<StatusResponse>>("/api/v1/auth/set-password", { password }),
 
+  // Re-issues the session (all refresh tokens are revoked), so record it as active.
   changePassword: (params: { old_password: string; new_password: string; totp_code?: string }) =>
-    api.post<MutationResponse<StatusResponse>>("/api/v1/auth/change-password", params),
+    signedIn(api.post<MutationResponse<StatusResponse>>("/api/v1/auth/change-password", params)),
 }
 
 // ─── 2FA ──────────────────────────────────────────────────────────────────────
 
 export interface TwoFactorSetup {
   uri: string;
-  /** Set when the account already has 2FA on — `uri` is then absent. */
+  /** Set when the account already has 2FA on • `uri` is then absent. */
   already_enabled?: boolean;
 }
 

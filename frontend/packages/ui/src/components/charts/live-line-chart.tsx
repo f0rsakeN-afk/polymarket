@@ -42,9 +42,9 @@ export interface LiveLinePoint {
   time: number;
   /** Primary value (used when only one line is needed) */
   value: number;
-  /** YES price — use as dataKey="yes_price" for green line */
+  /** YES price • use as dataKey="yes_price" for green line */
   yes_price?: number;
-  /** NO price — use as dataKey="no_price" for red line */
+  /** NO price • use as dataKey="no_price" for red line */
   no_price?: number;
   /** Multi-outcome prices keyed by outcome name */
   [key: string]: number | string | undefined;
@@ -101,7 +101,10 @@ interface AnimFrame {
 }
 
 function numericValues(d: LiveLinePoint): number[] {
-  const vals: number[] = [d.value];
+  // Only real numbers reach the y-domain. Pushing `d.value` unconditionally
+  // meant a point with no `value` injected `undefined` into the min/max scan.
+  const vals: number[] = [];
+  if (typeof d.value === "number" && Number.isFinite(d.value)) vals.push(d.value);
   if (d.yes_price != null) vals.push(d.yes_price);
   if (d.no_price != null) vals.push(d.no_price);
   for (const [k, v] of Object.entries(d)) {
@@ -125,6 +128,7 @@ function computeTargetRange(
   let max = Number.NEGATIVE_INFINITY;
   for (const d of data) {
     for (const v of numericValues(d)) {
+      if (!Number.isFinite(v)) continue;
       if (v < min) min = v;
       if (v > max) max = v;
     }
@@ -134,6 +138,11 @@ function computeTargetRange(
   if (valueNo !== undefined) {
     if (valueNo < min) min = valueNo;
     if (valueNo > max) max = valueNo;
+  }
+  // Every sample was unusable: fall back to a sane band around the current
+  // value instead of an empty domain, which would collapse the scale.
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return { yMin: value - 0.5, yMax: value + 0.5 };
   }
   const rawRange = max - min;
   const paddingFactor = exaggerate ? 0.03 : 0.15;
@@ -341,20 +350,33 @@ const LiveLineChartCore = memo(function LiveLineChartCore({
   const innerHeight = height - margin.top - margin.bottom;
 
   // ---- Animation state ----
+  //
+  // targetRange is computed BEFORE the animation state is seeded so the chart
+  // opens on the data's real range. It used to be seeded at [0,100] and then
+  // eased toward the data at lerpSpeed per frame, which took a couple of seconds
+  // - on a market priced around 0.5 the whole series sat in a couple of pixels
+  // at the bottom of a 0-100 axis, so a steady price looked like a flat line on
+  // the floor rather than a flat line at its actual value.
+  const targetRange = useMemo(
+    () => computeTargetRange(data, value, valueNo, exaggerate),
+    [data, value, valueNo, exaggerate]
+  );
+
+  const seedRangeRef = useRef(targetRange);
   const animRef = useRef<AnimFrame>({
     now: Date.now(),
-    yMin: 0,
-    yMax: 100,
+    yMin: seedRangeRef.current.yMin,
+    yMax: seedRangeRef.current.yMax,
     displayValue: value,
     displayValueNo: valueNo,
   });
-  const [frame, setFrame] = useState<AnimFrame>({
+  const [frame, setFrame] = useState<AnimFrame>(() => ({
     now: Date.now(),
-    yMin: 0,
-    yMax: 100,
+    yMin: seedRangeRef.current.yMin,
+    yMax: seedRangeRef.current.yMax,
     displayValue: value,
     displayValueNo: valueNo,
-  });
+  }));
 
   const pausedRef = useRef(paused);
   const dataRef = useRef(data);
@@ -363,11 +385,6 @@ const LiveLineChartCore = memo(function LiveLineChartCore({
   dataKeyRef.current = dataKey;
 
   useEffect(() => { pausedRef.current = paused; }, [paused]);
-
-  const targetRange = useMemo(
-    () => computeTargetRange(data, value, valueNo, exaggerate),
-    [data, value, valueNo, exaggerate]
-  );
 
   const lines = useMemo(() => extractLiveLineConfigs(children), [children]);
 
@@ -470,24 +487,42 @@ const LiveLineChartCore = memo(function LiveLineChartCore({
     let startIdx = bisectTime(data, windowStart / 1000, 0);
     if (startIdx > 0) startIdx--;
     const sliced = data.slice(startIdx);
+
+    // Carry the newest real value of every numeric field forward.
+    //
+    // A <LiveLine dataKey="Yes"/> reads `d["Yes"]`, so a series may be keyed on
+    // ANY field of the point - an outcome name, not just `value`. Previously
+    // records were rebuilt from scratch with only `value`/`yes_price`/`no_price`,
+    // so every other key vanished and the series silently plotted 0 instead of
+    // the real price. Keeping the original fields makes the key contract the
+    // same for real and virtual points alike.
+    const carried: Record<string, number> = {};
+    for (const p of sliced) {
+      for (const [k, v] of Object.entries(p)) {
+        if (k !== "time" && typeof v === "number") carried[k] = v;
+      }
+    }
+
     const records: Record<string, unknown>[] = sliced.map((p) => ({
+      // `time` is dropped: the chart's x accessor reads `date`.
+      ...Object.fromEntries(Object.entries(p).filter(([k]) => k !== "time")),
       date: new Date(p.time * 1000),
       [dataKey]: p.value,
-      ...(p.yes_price !== undefined ? { yes_price: p.yes_price } : {}),
-      ...(p.no_price !== undefined ? { no_price: p.no_price } : {}),
     }));
-    // Virtual "now" point
-    records.push({
-      date: new Date(frame.now),
+
+    // Virtual "now" and "+1 unit" points extend the line to the right edge.
+    // They inherit `carried` so they still expose every key their LiveLine
+    // reads; without it the live tip went missing and the line dived to 0.
+    const virtualPoint = (date: Date): Record<string, unknown> => ({
+      ...carried,
+      date,
       [dataKey]: frame.displayValue,
-      ...(frame.displayValueNo !== undefined ? { yes_price: frame.displayValue, no_price: frame.displayValueNo } : {}),
+      ...(frame.displayValueNo !== undefined
+        ? { yes_price: frame.displayValue, no_price: frame.displayValueNo }
+        : {}),
     });
-    // Virtual "+1 unit" point
-    records.push({
-      date: new Date(frame.now + xTickUnitMs),
-      [dataKey]: frame.displayValue,
-      ...(frame.displayValueNo !== undefined ? { yes_price: frame.displayValue, no_price: frame.displayValueNo } : {}),
-    });
+    records.push(virtualPoint(new Date(frame.now)));
+    records.push(virtualPoint(new Date(frame.now + xTickUnitMs)));
     return records;
   }, [
     data,

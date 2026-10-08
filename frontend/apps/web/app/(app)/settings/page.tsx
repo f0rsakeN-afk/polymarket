@@ -21,7 +21,7 @@ const sections = [
     href: "/settings/notifications",
     icon: Bell,
     title: "Notifications",
-    description: "Choose how you receive alerts — email and in-app.",
+    description: "Choose how you receive alerts • email and in-app.",
   },
   {
     href: "/settings/2fa",

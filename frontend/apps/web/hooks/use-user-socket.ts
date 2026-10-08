@@ -11,6 +11,15 @@ interface UseUserSocketOptions {
   enabled?: boolean
 }
 
+/**
+ * Consecutive reconnect attempts before the loop parks itself. Backoff stretches
+ * to 30s, so this is ~2 minutes of trying • enough to ride out a deploy or a
+ * dropped connection, without hammering the API for the lifetime of the tab when
+ * the endpoint stays unreachable (or the session dies and every handshake is
+ * refused). `enabled` flipping back to true restarts the loop.
+ */
+const MAX_RECONNECT_ATTEMPTS = 8
+
 export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSocketOptions) {
   const [statusState, setStatusState] = useState<WSStatus>("disconnected")
   const wsRef = useRef<WebSocket | null>(null)
@@ -20,6 +29,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
   const enabledRef = useRef(enabled)
   const userIdRef = useRef(userId)
   const mountedRef = useRef(true)
+  const gaveUpRef = useRef(false)
 
   // Keep message handler ref in sync
   useEffect(() => {
@@ -40,6 +50,7 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
   // without touching the outer `connect` binding during initialization.
   const connect: () => void = useCallback(function connectFn() {
     if (!enabledRef.current || !userIdRef.current) return
+    if (gaveUpRef.current) return
 
     setStatusState("connecting")
 
@@ -66,6 +77,12 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
     ws.onclose = () => {
       if (!mountedRef.current) return
       setStatusState("disconnected")
+      if (!enabledRef.current) return
+      if (retriesRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        gaveUpRef.current = true
+        setStatusState("error")
+        return
+      }
       const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 30_000)
       retriesRef.current++
       timeoutRef.current = setTimeout(() => {
@@ -82,14 +99,19 @@ export function useUserSocket({ userId, onMessage, enabled = true }: UseUserSock
 
   useEffect(() => {
     if (!enabled) {
-      // enabled flipped to false — close the socket immediately
+      // enabled flipped to false • close the socket immediately
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       wsRef.current?.close()
       wsRef.current = null
+      gaveUpRef.current = false
+      retriesRef.current = 0
       return
     }
 
     mountedRef.current = true
+    // Re-enabled (or first enabled) • clear the parked state and try again.
+    gaveUpRef.current = false
+    retriesRef.current = 0
     connect()
 
     return () => {

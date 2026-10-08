@@ -14,7 +14,7 @@ from app.api.exceptions import (
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 class WalletService:
@@ -63,7 +63,7 @@ class WalletService:
             type="withdrawal",
             amount=-amount,
             balance_after=wallet.balance,
-            # NULL when no key given — excluded from the partial unique index,
+            # NULL when no key given • excluded from the partial unique index,
             # so keyless withdrawals never collide with each other.
             reference_id=idempotency_key,
             reference_type="withdrawal",
@@ -115,7 +115,7 @@ class WalletService:
         if confirmed:
             tx.status = "completed"
             if blockchain_tx_hash:
-                # Keep reference_id (idempotency key) immutable — store on-chain hash in extra_data
+                # Keep reference_id (idempotency key) immutable • store on-chain hash in extra_data
                 tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
             logger.info(f"Withdrawal confirmed: id={withdrawal_id} tx={blockchain_tx_hash}")
         else:

@@ -12,7 +12,7 @@ import { HeatmapYAxis } from "./heatmap-y-axis";
 export interface HeatmapChartLoadingProps {
   /** Target column data used to size the skeleton grid. */
   data: HeatmapColumn[];
-  /** Visible time range — filters week columns that overlap the domain. */
+  /** Visible time range • filters week columns that overlap the domain. */
   xDomain?: [Date, Date];
   /** Chart margins */
   margin?: Partial<Margin>;

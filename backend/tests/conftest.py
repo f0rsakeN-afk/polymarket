@@ -11,7 +11,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-# The app reads credentials from .env (pydantic-settings) — tests must use the
+# The app reads credentials from .env (pydantic-settings) • tests must use the
 # same source, otherwise POSTGRES_PASSWORD/PORT defaults disagree with the stack.
 # override=False: real environment variables still win (CI, custom runs).
 try:
@@ -36,14 +36,14 @@ os.environ["DATABASE_URL"] = (
 )
 os.environ["REDIS_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
 # Celery broker for the test run. `POST /markets/{id}/resolve` answers 503 if
-# it cannot enqueue, so the suite needs *a* live broker — but a fresh checkout
+# it cannot enqueue, so the suite needs *a* live broker • but a fresh checkout
 # has no `backend/.env`, and the config default points at a port (6382) that
 # only a local dev stack opens. That is exactly what made CI's first run fail
 # six tests that passed locally. Keep whatever is already configured (a real
 # env var or `.env`); otherwise fall back to the Redis this suite provisions.
 if "CELERY_BROKER_URL" not in os.environ:
     os.environ["CELERY_BROKER_URL"] = f"redis://{_redis_auth}localhost:{_redis_port}/15"
-# Rate limiting is an infrastructure concern, not under test here — and the
+# Rate limiting is an infrastructure concern, not under test here • and the
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 # The `?token=` WebSocket fallback is OFF by default (it puts a JWT in URLs).
@@ -71,7 +71,7 @@ TestSessionFactory = async_sessionmaker(bind=test_engine, class_=AsyncSession, e
 
 # ── Self-sufficient test database ──────────────────────────────────────────────
 # A fresh checkout has no `mydatabase_test`, no schema and no alembic state, and
-# nothing else creates them — so build them here. The schema comes from
+# nothing else creates them • so build them here. The schema comes from
 # `alembic upgrade head` rather than Base.metadata.create_all: migrations are
 # the source of truth in production, and create_all would silently skip the
 # things only migrations define (partial unique indexes such as
@@ -110,7 +110,7 @@ def _bootstrap_test_database(url: str) -> None:
 
         cfg = Config(str(backend_dir / "alembic.ini"))
         cfg.set_main_option("sqlalchemy.url", url)
-        # migrations/env.py reads settings.database_url — point it at the test DB
+        # migrations/env.py reads settings.database_url • point it at the test DB
         # for the duration of the upgrade.
         previous = settings.database_url
         settings.database_url = url
@@ -225,7 +225,7 @@ async def client(db_session: AsyncSession) -> AsyncClient:
     async def override_get_db():
         yield db_session
 
-    # Override primary DB — replica is patched at the module level
+    # Override primary DB • replica is patched at the module level
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -244,7 +244,7 @@ async def create_login_session(db: AsyncSession, user) -> str:
     """Create the RefreshToken + Session pair that every login path creates.
 
     Access tokens are bound to a session (`sid`) and get_current_user rejects
-    tokens whose session is missing, revoked or expired — so a fixture user
+    tokens whose session is missing, revoked or expired • so a fixture user
     without a session would be permanently unauthorized, which is not a state
     any real login produces.
     """
@@ -256,7 +256,7 @@ async def create_login_session(db: AsyncSession, user) -> str:
     refresh_token = RefreshToken(
         id=uuid.uuid4(),
         user_id=user.id,
-        # Opaque stand-in for the raw refresh token — tests never present it.
+        # Opaque stand-in for the raw refresh token • tests never present it.
         token_hash=uuid.uuid4().hex,
         expires_at=expires_at,
         revoked=False,
@@ -288,7 +288,7 @@ def token_for(user_id) -> str:
     session_id = _BOUND_SESSIONS.get(str(user_id))
     if session_id is None:
         raise AssertionError(
-            f"user {user_id} has no session — a token without a `sid` claim is "
+            f"user {user_id} has no session • a token without a `sid` claim is "
             "rejected. Call `await create_login_session(db, user)` when the "
             "fixture creates the user."
         )
@@ -382,6 +382,64 @@ async def test_market(db_session: AsyncSession, admin_user):
         lp_token_supply="200.0",  # noqa: S106 -- LP share count, not a credential
     )
     db_session.add(pool)
+    await db_session.commit()
+    await db_session.refresh(market)
+    await db_session.refresh(market, ["outcomes"])
+    return market
+
+
+@pytest_asyncio.fixture
+async def multi_outcome_market(db_session: AsyncSession, admin_user):
+    """A market with 3+ outcomes • the case the binary AMM cannot price.
+
+    One binary book cannot express mutually exclusive outcome prices, so these
+    markets are book-priced: OrderService declines to run an AMM leg and
+    compute_quote raises AMM_NOT_AVAILABLE. Needs its own fixture because
+    `market` is hard-wired to two outcomes, and a multi-outcome market is
+    exactly where the old raw-name lookup mispriced fills.
+    """
+    from datetime import datetime
+
+    from app.models.liquidity import LiquidityPool
+    from app.models.market import Market, Outcome
+
+    slug = f"multi-mkt-{uuid.uuid4().hex[:8]}"
+    market = Market(
+        slug=slug,
+        question="Who will win the match?",
+        description="Three-way market",
+        category="sports",
+        status="active",
+        created_by=admin_user.id,
+        closes_at=datetime(2099, 12, 31, tzinfo=UTC),
+        total_liquidity="300.00",
+        total_volume="150.00",
+    )
+    db_session.add(market)
+    await db_session.flush()
+
+    outcomes = [
+        Outcome(market_id=market.id, name="Home", outcome_index=0),
+        Outcome(market_id=market.id, name="Draw", outcome_index=1),
+        Outcome(market_id=market.id, name="Away", outcome_index=2),
+    ]
+    db_session.add_all(outcomes)
+    await db_session.flush()
+
+    # Parimutuel: one pool per outcome, no binary pool. A NULL-outcome pool on a
+    # three-way market is meaningless (there is no YES side) and would be picked
+    # up by any market_id-only lookup.
+    for outcome_row, shares in zip(outcomes, ["450.0", "300.0", "250.0"]):
+        db_session.add(
+            LiquidityPool(
+                market_id=market.id,
+                outcome_id=outcome_row.id,
+                yes_shares=shares,
+                no_shares="0",
+                collateral="100.0",
+                lp_token_supply="300.0",  # noqa: S106 -- LP share count, not a credential
+            )
+        )
     await db_session.commit()
     await db_session.refresh(market)
     await db_session.refresh(market, ["outcomes"])

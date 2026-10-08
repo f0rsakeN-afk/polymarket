@@ -30,8 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && addgroup --system --gid 1001 appuser \
-    && adduser --system --uid 1001 --gid 1001 appuser
+    && groupadd -g 1001 appuser \
+    && useradd -u 1001 -g 1001 -M -s /usr/sbin/nologin appuser
 
 COPY --from=builder /app/.venv /app/.venv
 

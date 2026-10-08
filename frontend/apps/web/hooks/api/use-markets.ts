@@ -138,10 +138,20 @@ export function usePriceHistory(slug: string, interval = "5m") {
 export function useOrderBook(slug: string) {
   return useQuery({
     queryKey: queryKeys.orderBook(slug),
-    queryFn: () => getOrderBook(slug).then((r) => {
+    // Returns the whole envelope, not `r.data`.
+    //
+    // This cache key is shared with the OrderBook component's own inline query
+    // (which also returns the envelope) and with the WS 'orderbook:update'
+    // handler, which writes `{ success, data: { outcomes } }`. Returning the bare
+    // payload here made the three disagree on the cache shape, so the first WS
+    // update left `orderbookData.outcomes` undefined - silently emptying the
+    // derived per-outcome price map and sending multi-outcome trades back to a
+    // fallback price.
+    queryFn: async () => {
+      const r = await getOrderBook(slug)
       if (!r.success || !r.data) throw new Error("Failed to load order book")
-      return r.data
-    }),
+      return r
+    },
     enabled: !!slug,
     staleTime: 5_000,
   })

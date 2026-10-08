@@ -43,8 +43,8 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
     const retry = typeof d.retry_after === "number" ? d.retry_after : undefined
     return {
       message: retry
-        ? `Too many requests — try again in ${retry}s`
-        : "Too many requests — try again shortly",
+        ? `Too many requests • try again in ${retry}s`
+        : "Too many requests • try again shortly",
       error_code: "RATE_LIMIT_EXCEEDED",
     }
   }
@@ -52,14 +52,14 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
   const ad = d as Partial<ApiErrorData>
   if (ad.success === false && typeof ad.error === "string") {
     // Field-level detail (FastAPI validation and AppException `details.errors`)
-    // carries the *specific* reason — surface it, don't just show "Validation failed".
+    // carries the *specific* reason • surface it, don't just show "Validation failed".
     const fieldErrors = ad.details?.errors
     const fields =
       Array.isArray(fieldErrors) && fieldErrors.length > 0
         ? fieldErrors.map((e) => `${e.field}: ${e.message}`).join(" · ")
         : ""
     return {
-      message: fields ? `${ad.error} — ${fields}` : ad.error,
+      message: fields ? `${ad.error} • ${fields}` : ad.error,
       error_code: ad.error_code,
     }
   }
@@ -77,7 +77,7 @@ function extractMessage(data: unknown): { message: string; error_code?: string }
 
 /**
  * Safe error-to-message helper for mutation onError callbacks.
- * Never casts to ApiError — checks it, so non-Error throws fall back cleanly.
+ * Never casts to ApiError • checks it, so non-Error throws fall back cleanly.
  *
  * The backend's own message always wins. The fallback only applies when the
  * failure never reached the server (offline, timeout, aborted request), where
@@ -88,10 +88,10 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) return err.message || fallback
 
   if (err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError")) {
-    return "The request timed out — please try again."
+    return "The request timed out • please try again."
   }
   if (err instanceof TypeError && /fetch|network|load failed/i.test(err.message)) {
-    return "Can't reach the server — check your connection and try again."
+    return "Can't reach the server • check your connection and try again."
   }
   if (err instanceof Error && err.message) return err.message
   return fallback
@@ -117,7 +117,7 @@ export interface NormalizedResponse<T> {
   total?: number
 }
 
-/** Wraps mutation responses — backend always includes optional message */
+/** Wraps mutation responses • backend always includes optional message */
 export type MutationResponse<T = void> = {
   success: boolean
   data: T
@@ -136,7 +136,7 @@ export function parseResponse<T>(raw: unknown): NormalizedResponse<T> {
   }
 
   // Shape B: nested list (e.g. { comments: [...], page, page_size })
-  // Return as-is — callers know their own shape
+  // Return as-is • callers know their own shape
   return { success: true, data: raw as T }
 }
 
@@ -165,7 +165,7 @@ async function fetchWithRetry(
 
       if (res.ok) return res
 
-      // 429 — rate limited
+      // 429 • rate limited
       if (res.status === 429) {
         const retryAfter = res.headers.get("Retry-After")
         const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(1000 * 2 ** attempt, 30_000)
@@ -175,7 +175,7 @@ async function fetchWithRetry(
         }
       }
 
-      // 5xx — server error, retry
+      // 5xx • server error, retry
       if (res.status >= 500 && attempt < retries) {
         const delay = Math.min(1000 * 2 ** attempt, 30_000)
         await sleep(delay)
@@ -204,41 +204,95 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
   return controller.signal
 }
 
-// ─── Token refresh ────────────────────────────────────────────────────────────
+// ─── Session tracking + token refresh ──────────────────────────────────────────
+//
+// Auth rides on two HttpOnly cookies, so JavaScript cannot read them and cannot
+// tell "no session at all" from "access token expired, refresh cookie still
+// good". Getting that wrong is what turned one anonymous page view into a burst
+// of `/auth/refresh` calls: every 401 asked for a refresh, an anonymous visitor
+// has no refresh cookie so each attempt 401'd, and the next 401 asked again •
+// until the endpoint's per-minute cap answered 429 and the tab was rate-limiting
+// itself. The `isRefreshing` flag only deduplicated *concurrent* attempts; it
+// was cleared the moment each one settled, so a burst spread over a few seconds
+// still produced one call per 401.
+//
+// `sessionState` records what we have learned, so the same dead end is walked
+// once per tab:
+//
+//   "unknown" • nothing observed yet. The first 401 gets one refresh attempt,
+//               because a 401 genuinely cannot distinguish the two cases above.
+//   "active"  • a session exists; a 401 means it needs rotating.
+//   "none"    • proven dead. Skip refresh entirely; only a successful sign-in
+//               (or a 200 from `/auth/me`) revives it.
+type SessionState = "unknown" | "active" | "none"
 
-let isRefreshing = false
-let refreshSubscribers: Array<(token: string | null) => void> = []
+let sessionState: SessionState = "unknown"
+let refreshPromise: Promise<boolean> | null = null
+let refreshBlockedUntil = 0
 
-function subscribeRefresh(cb: (token: string | null) => void) {
-  refreshSubscribers.push(cb)
+/** How long to stay quiet after an *inconclusive* refresh failure (429 / 5xx / offline). */
+const REFRESH_COOLDOWN_MS = 30_000
+
+/** A sign-in succeeded, or `/auth/me` came back 200 • a session definitely exists. */
+export function markSessionActive() {
+  sessionState = "active"
+  refreshBlockedUntil = 0
 }
 
-function onRefreshDone(token: string | null) {
-  refreshSubscribers.forEach((cb) => cb(token))
-  refreshSubscribers = []
+/** Signed out, or a refresh the server definitively refused. */
+export function markSessionEnded() {
+  sessionState = "none"
+  refreshBlockedUntil = 0
 }
 
-async function doRefresh(): Promise<string | null> {
+/** True when a refresh would repeat a known-bad attempt. */
+function refreshSuppressed(): boolean {
+  if (sessionState === "none") return true
+  return Date.now() < refreshBlockedUntil
+}
+
+async function doRefresh(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
       method: "POST",
       credentials: "include",
     })
-    if (!res.ok) {
-      onRefreshDone(null)
-      return null
+    if (res.ok) {
+      markSessionActive()
+      return true
     }
-    onRefreshDone("refreshed")
-    return "refreshed"
+    // 401/403 is a verdict: the refresh cookie is absent, expired or revoked, and
+    // it cannot come back on its own. Anything else (429, 5xx) proves nothing •
+    // keep the current state and just stop hammering for a cooldown.
+    if (res.status === 401 || res.status === 403) {
+      markSessionEnded()
+    } else {
+      refreshBlockedUntil = Date.now() + REFRESH_COOLDOWN_MS
+    }
+    return false
   } catch {
-    onRefreshDone(null)
-    return null
-  } finally {
-    isRefreshing = false
+    refreshBlockedUntil = Date.now() + REFRESH_COOLDOWN_MS
+    return false
   }
 }
 
-// Routes that are publicly accessible — 401 on these means "unauthenticated", not "session expired"
+/** Single-flight • a burst of 401s shares one rotation instead of racing. */
+function refreshSession(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = doRefresh().finally(() => {
+      refreshPromise = null
+    })
+  }
+  return refreshPromise
+}
+
+function unauthenticatedMessage(): string {
+  return sessionState === "none"
+    ? "You need to sign in to view this."
+    : "Session expired. Please sign in again."
+}
+
+// Routes that are publicly accessible • 401 on these means "unauthenticated", not "session expired"
 const PUBLIC_PATHS = ["/", "/markets", "/trades", "/docs", "/faq", "/legal", "/support"]
 
 function isPublicPath(pathname: string) {
@@ -250,7 +304,7 @@ function redirectToLogin() {
   const { pathname } = window.location
   // Never redirect if already on an auth page
   if (pathname.startsWith("/login") || pathname.startsWith("/signup")) return
-  // Don't redirect for public pages — show empty/error state instead
+  // Don't redirect for public pages • show empty/error state instead
   if (isPublicPath(pathname)) return
   window.location.href = "/login"
 }
@@ -264,7 +318,7 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   timeout?: number
   /** Number of retries for 5xx/429 (default: 3) */
   retries?: number
-  /** Request body — plain object, array, or primitive (serialized to JSON) */
+  /** Request body • plain object, array, or primitive (serialized to JSON) */
   body?: unknown
 }
 
@@ -302,22 +356,18 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         body: reqBody,
       }, { retries, timeout, signal: externalSignal ?? undefined })
 
-      // 401 — attempt token refresh
+      // 401 • rotate the access token, then replay the original request once.
       if (res.status === 401 && !headers?.["Authorization"]) {
-        if (!isRefreshing) {
-          isRefreshing = true
-          doRefresh().then((token) => {
-            if (!token) redirectToLogin()
-          })
+        // No point asking if we already know the answer, or if a recent attempt
+        // was inconclusive: an anonymous visitor then costs zero refresh calls.
+        if (refreshSuppressed()) {
+          throw new ApiError(unauthenticatedMessage(), 401)
         }
 
-        const token = await new Promise<string | null>((resolve) => {
-          subscribeRefresh(resolve)
-          setTimeout(() => resolve(null), 10_000)
-        })
-
-        if (!token) {
-          throw new ApiError("Session expired. Please sign in again.", 401)
+        const refreshed = await refreshSession()
+        if (!refreshed) {
+          redirectToLogin()
+          throw new ApiError(unauthenticatedMessage(), 401)
         }
 
         // Retry with new session

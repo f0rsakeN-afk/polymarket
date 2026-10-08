@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -45,12 +46,12 @@ from app.config import settings
 from app.database import _get_engine, _get_replica_engine
 from app.middleware.metrics import MetricsMiddleware, clean_multiproc_dir
 from app.middleware.request_id import RequestIDMiddleware
-from app.websocket.manager import redis_pubsub
+from app.websocket.manager import manager, redis_pubsub
 from app.websocket.routes import router as ws_router
 
-# Read APP_ENV early — logging is configured in lifespan() after settings loads,
+# Read APP_ENV early • logging is configured in lifespan() after settings loads,
 # but this is used at module level to conditionally import/show docs.
-# Never use this for security decisions — only for UI/information exposure.
+# Never use this for security decisions • only for UI/information exposure.
 _APP_ENV = os.environ.get("APP_ENV", "development")
 
 
@@ -63,7 +64,7 @@ def _configure_logging(app_env: str, log_level: str) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     if app_env == "production":
-        # Structured JSON in production — parseable by log aggregators (Datadog, Loki, ELK)
+        # Structured JSON in production • parseable by log aggregators (Datadog, Loki, ELK)
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
                 return json.dumps({
@@ -78,19 +79,19 @@ def _configure_logging(app_env: str, log_level: str) -> None:
     logging.basicConfig(level=level, handlers=[handler])
 
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Configure logging AFTER settings load — uses app_env (production → JSON, else human-readable)
+    # Configure logging AFTER settings load • uses app_env (production → JSON, else human-readable)
     # and log_level (verbosity). This replaces the module-level basicConfig.
     _configure_logging(settings.app_env, settings.log_level)
     logger.info(f"Starting up (app_env={settings.app_env}, log_level={settings.log_level})")
     # Drop stale per-worker metric files from a previous run (multiproc mode).
     clean_multiproc_dir()
 
-    # Error tracking — opt-in via SENTRY_DSN. No-op locally when unset.
+    # Error tracking • opt-in via SENTRY_DSN. No-op locally when unset.
     if settings.sentry_dsn:
         import sentry_sdk
 
@@ -120,7 +121,7 @@ async def lifespan(app: FastAPI):
             "Set SECRET_KEY environment variable to a secure random value before deploying."
         )
 
-    # Warn if TRUSTED_PROXY_IPS is not set — IP-based rate limiting can be spoofed
+    # Warn if TRUSTED_PROXY_IPS is not set • IP-based rate limiting can be spoofed
     # behind an untrusted proxy (the direct connection IP will be the proxy's IP, not the real client)
     import os
     if settings.app_env == "production" and not os.environ.get("TRUSTED_PROXY_IPS", "").strip():
@@ -138,15 +139,14 @@ async def lifespan(app: FastAPI):
     if settings.app_env != "production":
         logger.warning(
             f"app_env={settings.app_env}: token blacklist checks FAIL OPEN if Redis is "
-            "unreachable — a logged-out token stays usable until it expires (≤15 min). "
+            "unreachable • a logged-out token stays usable until it expires (≤15 min). "
             "Set APP_ENV=production to fail closed."
         )
 
     # Wait for Postgres + Redis before accepting traffic.
     # Compose gates initial startup with depends_on:service_healthy, but that only
-    # applies at `up` time — if either dependency restarts later, or when running
+    # applies at `up` time • if either dependency restarts later, or when running
     # outside Compose, the app must block here instead of failing the first request.
-    import asyncio
 
     async def _wait_for_postgres(timeout_s: float = 60.0) -> None:
         from sqlalchemy import text
@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
                 async with _get_engine().begin() as conn:
                     await conn.execute(text("SELECT 1"))
                 return
-            except Exception as e:  # noqa: BLE001 — log and retry until timeout
+            except Exception as e:  # noqa: BLE001 • log and retry until timeout
                 last_err = e
                 if asyncio.get_event_loop().time() >= deadline:
                     raise RuntimeError(f"Postgres not ready after {timeout_s}s: {last_err}") from last_err
@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
                 r = await get_redis()
                 await redis_cb.call(lambda: r.ping())
                 return
-            except Exception as e:  # noqa: BLE001 — log and retry until timeout
+            except Exception as e:  # noqa: BLE001 • log and retry until timeout
                 last_err = e
                 if asyncio.get_event_loop().time() >= deadline:
                     raise RuntimeError(f"Redis not ready after {timeout_s}s: {last_err}") from last_err
@@ -184,12 +184,12 @@ async def lifespan(app: FastAPI):
 
     await _wait_for_postgres()
     await _wait_for_redis()
-    logger.info("Postgres + Redis ready — starting API")
+    logger.info("Postgres + Redis ready • starting API")
 
     async with _get_engine().begin() as conn:
         existing_tables = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         if not existing_tables:
-            logger.warning("Database is empty — run 'alembic upgrade head' before starting the API")
+            logger.warning("Database is empty • run 'alembic upgrade head' before starting the API")
         else:
             logger.info("Database tables present; migrations own the schema (no auto create_all)")
 
@@ -201,9 +201,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis pub/sub not available: {e}")
 
+    # Start the WebSocket heartbeat sweep. Without it a half-open socket (closed
+    # laptop, NAT timeout, killed container) is never reaped: no FIN arrives, it
+    # keeps its file descriptor and its per-IP counter slot, and `send_json`
+    # keeps succeeding until the kernel buffer overflows. Broadcast-failure
+    # detection only covers markets that actually trade, so a socket on a quiet
+    # market would leak indefinitely. `_cleanup_dead` existed for this but
+    # nothing ever called it.
+    heartbeat_task = asyncio.create_task(manager.heartbeat_loop())
+    logger.info("WebSocket heartbeat sweep started (30s)")
+
     yield
 
     logger.info("Shutting down...")
+    heartbeat_task.cancel()
+    try:
+        await heartbeat_task
+    except (asyncio.CancelledError, Exception):
+        pass
     await redis_pubsub.close()
     await _get_engine().dispose()
     await _get_replica_engine().dispose()
@@ -213,7 +228,7 @@ _is_prod = settings.app_env == "production"
 
 app = FastAPI(
     title=settings.app_name,
-    description="Polymarket-style prediction market API with AMM trading, real-time prices, and Stripe deposits.",
+    description="PredictX-style prediction market API with AMM trading, real-time prices, and Stripe deposits.",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if settings.app_env != "production" else None,
@@ -223,7 +238,7 @@ app = FastAPI(
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 if not origins:
-    raise ValueError("CORS_ORIGINS cannot be empty — set explicit origins (e.g. CORS_ORIGINS=http://localhost:3000)")
+    raise ValueError("CORS_ORIGINS cannot be empty • set explicit origins (e.g. CORS_ORIGINS=http://localhost:3000)")
 if "*" in origins:
     raise ValueError(
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
@@ -291,7 +306,7 @@ async def metrics():
 
 @app.get("/health/ready")
 async def health_ready():
-    """Readiness probe — verifies DB and Redis connectivity."""
+    """Readiness probe • verifies DB and Redis connectivity."""
     import time
 
     checks = {}

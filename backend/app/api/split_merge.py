@@ -18,7 +18,7 @@ from app.schemas.split_merge import SplitMergeRequest
 from app.services.market_service import MarketService
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/split-merge", tags=["split-merge"])
 
 
@@ -61,8 +61,23 @@ async def split(
     yes_outcome = outcomes[0]
     no_outcome = outcomes[1]
 
+    # Split/merge mints and redeems YES/NO pairs, so it only makes sense on a
+    # binary market. A parimutuel market has no YES/NO pair to split, and its
+    # pools are per-outcome - taking the first one would mint collateral against
+    # a pool that does not represent the whole market.
+    if MarketService.is_parimutuel(list(outcomes)):
+        raise ValidationError(
+            "Split and merge are only available on binary YES/NO markets",
+            error_code="NOT_BINARY_MARKET",
+        )
+
     pool_result = await db.execute(
-        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+        select(LiquidityPool)
+        .where(
+            LiquidityPool.market_id == market.id,
+            LiquidityPool.outcome_id.is_(None),
+        )
+        .with_for_update()
     )
     pool = pool_result.scalar_one_or_none()
 
@@ -89,7 +104,7 @@ async def split(
     if pool is not None:
         pool.credit_collateral(amount_dec)
         pool.protocol_fees += fee
-        # A split mints `amount_after_fee` shares of EACH side — real new
+        # A split mints `amount_after_fee` shares of EACH side • real new
         # supply the AMM now has to be able to hand back out. The trade legs
         # already keep pool reserves in step with minted/burned shares, so
         # these two lines match them; without them the shares created here
@@ -114,7 +129,7 @@ async def split(
             pos.average_price = total_cost / pos.shares_held
         else:
             avg_p = Decimal(str(avg_price))
-            # Atomic upsert — eliminates SELECT-then-INSERT race
+            # Atomic upsert • eliminates SELECT-then-INSERT race
             await db.execute(
                 text("""
                     INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
@@ -149,7 +164,7 @@ async def split(
 
     logger.info(f"Split: user={user.id} market={market_id} amount={amount} fee={float(fee)}")
 
-    # Publish WS events — split changes the supply of YES/NO shares in circulation
+    # Publish WS events • split changes the supply of YES/NO shares in circulation
     try:
         yes_price, no_price = MarketService.compute_prices(pool)
         await redis_pubsub.publish_price_update(
@@ -205,23 +220,6 @@ async def merge(
     if market.status != "active":
         raise ValidationError("Market is not active")
 
-    # Lock order market -> pool -> wallet -> position matches the trading
-    # path and standardizes lock ordering to prevent deadlocks. (The pool
-    # lock used to be taken *after* the wallet — a split holds pool-then-
-    # wallet while merge held wallet-then-pool, i.e. a genuine ABBA deadlock
-    # waiting to happen under concurrent split/merge on the same market.)
-    pool_result = await db.execute(
-        select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
-    )
-    pool = pool_result.scalar_one_or_none()
-
-    wallet_result = await db.execute(
-        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
-    )
-    wallet = wallet_result.scalar_one_or_none()
-    if not wallet:
-        raise NotFoundError("Wallet not found")
-
     outcomes_result = await db.execute(
         select(Outcome).where(Outcome.market_id == market.id).order_by(Outcome.outcome_index)
     )
@@ -231,6 +229,36 @@ async def merge(
 
     yes_outcome = outcomes[0]
     no_outcome = outcomes[1]
+
+    # Same rule as split: no YES/NO pair to merge on a parimutuel market, and
+    # its pools are per-outcome so a market_id-only lookup is ambiguous.
+    if MarketService.is_parimutuel(list(outcomes)):
+        raise ValidationError(
+            "Split and merge are only available on binary YES/NO markets",
+            error_code="NOT_BINARY_MARKET",
+        )
+
+    # Lock order market -> pool -> wallet -> position matches the trading
+    # path and standardizes lock ordering to prevent deadlocks. (The pool
+    # lock used to be taken *after* the wallet • a split holds pool-then-
+    # wallet while merge held wallet-then-pool, i.e. a genuine ABBA deadlock
+    # waiting to happen under concurrent split/merge on the same market.)
+    pool_result = await db.execute(
+        select(LiquidityPool)
+        .where(
+            LiquidityPool.market_id == market.id,
+            LiquidityPool.outcome_id.is_(None),
+        )
+        .with_for_update()
+    )
+    pool = pool_result.scalar_one_or_none()
+
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+    )
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise NotFoundError("Wallet not found")
 
     yes_pos_result = await db.execute(
         select(Position).where(
@@ -276,14 +304,14 @@ async def merge(
     no_pos.shares_held -= amount_dec
     wallet.balance += amount_after_fee
     # The destroyed pairs release exactly `amount_after_fee` of escrow; the
-    # fee stays behind in the pool (it was recorded above). Strict debit —
+    # fee stays behind in the pool (it was recorded above). Strict debit •
     # if the escrow can't cover the merge the ledger is broken, roll back.
     if pool is not None:
         pool.debit_collateral(amount_after_fee)
         # Mirror of the split above: a merge destroys `amount` shares of each
         # side, so the AMM reserves shrink by the same amount (both equally,
         # so the price ratio is unchanged). Clamped at zero because pools
-        # created before this sync can carry reserves below the real supply —
+        # created before this sync can carry reserves below the real supply •
         # a clamp is logged so the drift is visible instead of silent.
         before_yes, before_no = pool.yes_shares, pool.no_shares
         pool.yes_shares = max(Decimal(0), pool.yes_shares - amount_dec)
@@ -309,7 +337,7 @@ async def merge(
 
     logger.info(f"Merge: user={user.id} market={market_id} amount={amount} fee={float(fee)}")
 
-    # Publish WS events — merge removes YES/NO shares from circulation
+    # Publish WS events • merge removes YES/NO shares from circulation
     try:
         pool_result = await db.execute(
             select(LiquidityPool).where(LiquidityPool.market_id == market.id)

@@ -25,7 +25,7 @@ from app.services.cache_service import (
 )
 from app.services.notification_service import NotificationService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/disputes", tags=["disputes"])
 
 DISPUTE_WINDOW_HOURS = 48
@@ -44,7 +44,7 @@ async def create_dispute(
     if not market:
         raise NotFoundError("Market not found")
 
-    # `resolving` counts: the outcome is proposed and settlement is pending —
+    # `resolving` counts: the outcome is proposed and settlement is pending •
     # that is exactly the window users must be able to dispute in.
     if market.status not in ("resolving", "resolved", "dispute_window"):
         raise ValidationError("Market is not in a resolvable state")
@@ -197,7 +197,7 @@ async def adjudicate_dispute(
             market.winning_outcome_id = market.proposed_outcome_id
             market.resolved_at = datetime.now(UTC)
 
-            # Queue settlement BEFORE commit — if broker is down we fail before
+            # Queue settlement BEFORE commit • if broker is down we fail before
             # the market is marked resolved in the DB, preventing orphaned resolution
             # Propagate X-Request-ID for tracing across service boundaries.
             try:
@@ -223,7 +223,7 @@ async def adjudicate_dispute(
             )
 
     actual_market_status = market.status if (req.ruling == "upheld" and market) else None
-    ruling_msg = "dispute denied" if req.ruling == "dismissed" else "dispute upheld — market resolved"
+    ruling_msg = "dispute denied" if req.ruling == "dismissed" else "dispute upheld • market resolved"
     return success_response({
         "dispute_id": str(dispute.id),
         "ruling": req.ruling,

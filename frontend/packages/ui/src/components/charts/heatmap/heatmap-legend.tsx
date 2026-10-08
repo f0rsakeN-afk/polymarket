@@ -40,7 +40,7 @@ export interface HeatmapLegendProps {
   cornerRadius?: number;
   /** Horizontal alignment within the legend cell. Default: "end" */
   align?: "start" | "center" | "end";
-  /** Legend layout — discrete swatches or a continuous gradient bar. Default: `"swatches"` */
+  /** Legend layout • discrete swatches or a continuous gradient bar. Default: `"swatches"` */
   variant?: HeatmapLegendVariant;
   /** Gradient bar width in swatch units when `variant="gradient"`. Default: 5 */
   gradientSpan?: number;

@@ -16,7 +16,7 @@ from app.schemas.notification import (
 )
 from app.services.notification_service import NotificationService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 

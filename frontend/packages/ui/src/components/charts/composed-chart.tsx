@@ -19,7 +19,7 @@ import { SeriesBar, type SeriesBarProps } from "./series-bar";
 import { TimeSeriesChartInner } from "./time-series-chart-shell";
 
 export interface ComposedChartProps {
-  /** Data array — each row typically has a date and multiple numeric series */
+  /** Data array • each row typically has a date and multiple numeric series */
   data: Record<string, unknown>[];
   /** Key for the x-axis (time). Default: "date" */
   xDataKey?: string;
@@ -27,7 +27,7 @@ export interface ComposedChartProps {
   animationDuration?: number;
   animationEasing?: string;
   enterTransition?: Transition;
-  /** Signature of motion URL state — triggers reveal replay when it changes. */
+  /** Signature of motion URL state • triggers reveal replay when it changes. */
   revealSignature?: string;
   aspectRatio?: string;
   className?: string;
@@ -60,7 +60,7 @@ function upsertLineConfig(lines: LineConfig[], config: LineConfig): void {
     lines.push(config);
     return;
   }
-  // Area+Line pairs share a dataKey — keep the later config (Line over Area).
+  // Area+Line pairs share a dataKey • keep the later config (Line over Area).
   lines[index] = config;
 }
 

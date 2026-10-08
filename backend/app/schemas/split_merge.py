@@ -7,7 +7,7 @@ class SplitMergeRequest(BaseModel):
     """Body for POST /split-merge/split and POST /split-merge/merge.
 
     Both endpoints take a JSON body (like the liquidity endpoints) rather
-    than query parameters — the amounts are Decimal money values and must
+    than query parameters • the amounts are Decimal money values and must
     not travel in the query string.
     """
 

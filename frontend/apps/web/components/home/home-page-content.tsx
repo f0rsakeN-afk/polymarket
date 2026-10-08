@@ -31,7 +31,8 @@ export default function HomePageContent({
   const query = searchParams.get("q") ?? ""
 
   const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined }, initialMarketsPage)
-  const { data: closingSoonData, isLoading: closingSoonLoading } = useMarkets({ sort: "closing_soon" }, initialClosingPage)
+  const { data: closingSoonData, isLoading: closingSoonLoading, isError: closingSoonError } =
+    useMarkets({ sort: "closing_soon" }, initialClosingPage)
   const { data: tradesData } = useGlobalTrades(undefined, initialTradesPage)
 
   const recentTrades = tradesData?.trades.slice(0, 15) ?? []
@@ -65,10 +66,21 @@ export default function HomePageContent({
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Closing Soon</h2>
         </div>
-        {closingSoonLoading || !closingSoonData ? (
+        {/*
+          `closingSoonLoading || !closingSoonData` left the skeleton on screen
+          forever whenever the query *failed*: loading goes false but the data
+          stays undefined, so the condition never became false. A 4xx or a
+          network blip rendered as an endless shimmer with no way out. Skeleton
+          only while actually loading; an error is reported, not hidden.
+        */}
+        {closingSoonLoading ? (
           <SkeletonTrendingCarousel />
-        ) : closingSoonData.markets.length > 0 ? (
-          <TrendingCarousel markets={closingSoonData.markets.slice(0, 8)} />
+        ) : closingSoonError ? (
+          <p className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
+            Couldn&apos;t load markets closing soon.
+          </p>
+        ) : (closingSoonData?.markets.length ?? 0) > 0 ? (
+          <TrendingCarousel markets={closingSoonData!.markets.slice(0, 8)} />
         ) : (
           <p className="rounded-xl border border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
             No markets closing soon

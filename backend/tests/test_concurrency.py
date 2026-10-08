@@ -10,7 +10,7 @@ concurrency:
 * two admins resolving the same market simultaneously
 
 Unlike the shared ``client`` fixture (which overrides ``get_db`` with one
-session — serializing all requests), these tests use one client per request so
+session • serializing all requests), these tests use one client per request so
 every request opens its own pooled session/connection and the handlers
 genuinely interleave.
 """
@@ -30,7 +30,7 @@ from app.models.wallet import Wallet
 
 
 def _client() -> AsyncClient:
-    """A fresh client with no get_db override — one session per request."""
+    """A fresh client with no get_db override • one session per request."""
     from app.app import app
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
@@ -107,10 +107,10 @@ async def test_concurrent_orders_two_users(test_user, test_market, db_session):
     assert resp_a.json()["data"]["status"] in ("filled", "partial")
     assert resp_b.json()["data"]["status"] in ("filled", "partial")
 
-    # Both orders were persisted — no lost update under the market/pool locks.
+    # Both orders were persisted • no lost update under the market/pool locks.
     assert await _order_count(db_session, market_id) == 2
 
-    # populate_existing re-reads the rows the fixtures created — a plain select
+    # populate_existing re-reads the rows the fixtures created • a plain select
     # would return those identity-mapped instances with pre-order balances.
     wallet_rows = (
         await db_session.execute(
@@ -125,7 +125,7 @@ async def test_concurrent_orders_two_users(test_user, test_market, db_session):
         wallet = wallets[user.id]
         assert wallet.balance >= 0, "wallet balance went negative"
         assert wallet.locked_balance >= 0, "locked balance went negative"
-        # Each response reports the balance after its own order — the final
+        # Each response reports the balance after its own order • the final
         # committed balance must match the reported one exactly.
         assert wallet.balance == _reported_balance(resp), (
             f"stale wallet: db={wallet.balance} reported={_reported_balance(resp)}"
@@ -197,7 +197,7 @@ async def test_concurrent_orders_same_user(test_user, test_market, db_session):
     assert wallet.balance >= 0, "concurrent orders overdrew the wallet"
     assert wallet.locked_balance >= 0
     # Balances strictly decrease with each fill, so the last-completed order
-    # reports the lowest balance — it must equal the committed final balance.
+    # reports the lowest balance • it must equal the committed final balance.
     expected_final = min(_reported_balance(resp_1), _reported_balance(resp_2))
     assert wallet.balance == expected_final, (
         f"lost update: db={wallet.balance} expected={expected_final}"
@@ -247,7 +247,7 @@ async def test_concurrent_add_liquidity(test_user, test_market, db_session):
     db_session.expire_all()
     supply_after, shares_after = await _pool_state(db_session, market_id)
 
-    # Tokens minted must equal the increase of the pool's supply — a race in
+    # Tokens minted must equal the increase of the pool's supply • a race in
     # the mint accounting would break this delta conservation.
     assert supply_after - supply_before == shares_after - shares_before, (
         f"LP token drift: supply +{supply_after - supply_before}, "

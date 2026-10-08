@@ -2,7 +2,7 @@ import { PositionsPageClient } from "../../../components/positions/PositionsPage
 
 export const metadata = {
   title: "Positions",
-  description: "View your open positions on Polymarket. Track your holdings and unrealized P&L.",
+  description: "View your open positions on PredictX. Track your holdings and unrealized P&L.",
   robots: { index: false, follow: false },
 }
 

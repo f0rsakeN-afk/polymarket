@@ -60,7 +60,13 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        {/* Every cmdk subcomponent (Input/List/Group/Item/Empty/Separator) reads
+            the command store from React context, and only <Command> provides
+            it. Without this ancestor they dereference an undefined store and
+            throw "Cannot read properties of undefined (reading 'subscribe')".
+            The wrapper must enclose `children` — a sibling <Command /> provides
+            context to nothing, since context only flows to descendants. */}
+        <Command>{children}</Command>
       </DialogContent>
     </Dialog>
   )

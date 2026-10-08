@@ -64,7 +64,7 @@ export function ResetPasswordClient() {
     <div className="flex min-h-dvh flex-col items-center justify-center px-4 py-12">
       <div className="mb-8 flex flex-col items-center gap-2">
         <div className="text-foreground"><PolygonMark /></div>
-        <span className="text-sm font-medium text-foreground tracking-tight">Polymarket</span>
+        <span className="text-sm font-medium text-foreground tracking-tight">PredictX</span>
       </div>
 
       <Card className="w-full max-w-sm border-border/60 bg-card/80 backdrop-blur-sm shadow-none">

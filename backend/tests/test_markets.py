@@ -108,7 +108,7 @@ async def test_create_market_admin(client: AsyncClient, admin_user):
     assert resp.status_code == 200
     assert resp.json()["success"] is True
     assert resp.json()["data"]["slug"] == "new-test-market"
-    # Admins publish immediately — no review queue.
+    # Admins publish immediately • no review queue.
     assert resp.json()["data"]["status"] == "active"
 
 
@@ -159,7 +159,7 @@ async def _submit(client: AsyncClient, user, slug: str, **overrides) -> dict:
 
 @pytest.mark.asyncio
 async def test_create_market_verified_user_pending_review(client: AsyncClient, test_user):
-    """A verified (non-admin) user may submit — it enters the review queue."""
+    """A verified (non-admin) user may submit • it enters the review queue."""
     data = await _submit(client, test_user, "user-submitted-market")
     assert data["slug"] == "user-submitted-market"
     assert data["status"] == "pending_review"
@@ -215,7 +215,7 @@ async def test_pending_market_detail_access_control(
     resp = await client.get("/api/v1/markets/pending-detail-market")
     assert resp.status_code == 200
 
-    # Another user — existence must not leak
+    # Another user • existence must not leak
     other = await _make_user(db_session, "bystander")
     client.cookies.set("access_token", token_for(other.id))
     resp = await client.get("/api/v1/markets/pending-detail-market")
@@ -229,7 +229,7 @@ async def test_pending_market_detail_access_control(
 
 @pytest.mark.asyncio
 async def test_pending_market_not_tradable(client: AsyncClient, test_user):
-    """Approval is what makes a market tradable — before it, orders are refused."""
+    """Approval is what makes a market tradable • before it, orders are refused."""
     market = await _submit(client, test_user, "untradable-market")
     resp = await client.post("/api/v1/orders/", json={
         "market_id": market["id"],
@@ -688,7 +688,7 @@ async def test_claim_idempotent(client: AsyncClient, admin_user, db_session, tes
     await db_session.flush()
 
     # A funded escrow. This test previously created the market with no pool at
-    # all and still expected a 200 — it only passed because the claim endpoint
+    # all and still expected a 200 • it only passed because the claim endpoint
     # had an `else payout` branch that credited the wallet in full with no
     # escrow behind it. Claiming has to be funded like every other payout.
     db_session.add(

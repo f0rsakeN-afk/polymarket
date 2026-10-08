@@ -15,12 +15,13 @@ from fastapi import Request, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
+    Gauge,
     Histogram,
     generate_latest,
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 REQUESTS_TOTAL = Counter(
     "http_requests_total",
@@ -33,10 +34,48 @@ REQUEST_DURATION = Histogram(
     ["method", "route"],
 )
 
+# ── WebSocket / realtime ───────────────────────────────────────────────────────
+#
+# Without these there is no way to answer "how close to capacity are we?", which
+# makes the 50k-connection design a claim rather than a measurement. Live gauges
+# are set from ConnectionManager (in-process state, so `.inc()/.dec()` on
+# connect/disconnect is exact); the counters are monotonic event totals.
+#
+# `ws_connections` is PER PROCESS • the connection caps are per process too (see
+# `ConnectionManager` docstring), so fleet-wide totals are the sum across workers.
+WS_CONNECTIONS = Gauge(
+    "ws_connections",
+    "Currently open WebSocket connections held by this worker",
+)
+WS_SUBSCRIPTIONS = Gauge(
+    "ws_subscriptions",
+    "Current market subscriptions held by this worker",
+)
+WS_CONNECTS_TOTAL = Counter(
+    "ws_connects_total",
+    "WebSocket connection attempts by outcome",
+    ["outcome"],  # accepted | rejected_ip | rejected_user
+)
+WS_DISCONNECTS_TOTAL = Counter(
+    "ws_disconnects_total",
+    "WebSocket disconnects by cause",
+    ["cause"],  # client | limit | send_failed | heartbeat | shutdown
+)
+WS_SENDS_TOTAL = Counter(
+    "ws_sends_total",
+    "Frames handed to the socket, by result",
+    ["result"],  # ok | failed | timeout
+)
+WS_MESSAGES_FANNED_OUT = Counter(
+    "ws_messages_fanned_out_total",
+    "Realtime frames fanned out to local sockets, by channel class",
+    ["channel"],  # market | user | global
+)
+
 
 def _route_template(request: Request) -> str:
     # scope["route"] is populated by the router downstream; read AFTER call_next.
-    # Fall back to the raw path (may carry IDs — acceptable for unmapped paths).
+    # Fall back to the raw path (may carry IDs • acceptable for unmapped paths).
     route = request.scope.get("route")
     template = getattr(route, "path", None)
     return template or request.url.path

@@ -31,7 +31,7 @@ export function MarketDetailClient() {
         })
       }
     } catch {
-      // Error toast — including the backend's message — is emitted by
+      // Error toast • including the backend's message • is emitted by
       // usePlaceOrder, so re-throwing here would only duplicate it.
     }
   }, [placeOrder])

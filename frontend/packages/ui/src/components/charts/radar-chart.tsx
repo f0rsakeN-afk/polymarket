@@ -33,7 +33,7 @@ export interface RadarChartProps {
   staggerScale?: number;
   /** Motion enter transition (spring or cubic-bezier tween). */
   enterTransition?: Transition;
-  /** Changes when motion settings change — replays enter animations. */
+  /** Changes when motion settings change • replays enter animations. */
   motionReplayKey?: string;
   /** Controlled hover state - index of hovered area */
   hoveredIndex?: number | null;

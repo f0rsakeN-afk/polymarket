@@ -11,6 +11,14 @@ Each test pins one behaviour that used to be broken:
 5. Unknown-user logins returned faster than known-user ones (enumeration).
 6. AMM (non-book) fills on a BUY wrote no Trade row, and total_volume mixed
    USDC with share counts.
+7. `/auth/refresh` shared the 3/min credential-decision rate-limit bucket, so a
+   burst of 401s locked a signed-in client out of rotating its own token.
+8. Auth cookies were tagged `Domain=localhost` in dev, which RFC 6265 cookie
+   stores reject • so a real client silently dropped the session it was just
+   given (every test injected the token by hand and never saw it).
+9. The public market/trades feeds required a token, gating data that the REST
+   endpoints already serve anonymously • so logged-out visitors were refused and
+   the client re-opened the refused socket on every backoff tick.
 """
 import json
 from decimal import Decimal
@@ -79,22 +87,43 @@ async def test_websocket_rejects_blacklisted_token(ws_client, test_user, db_sess
 
 @pytest.mark.asyncio
 async def test_websocket_query_token_is_gated_off_by_default(ws_client, test_user, monkeypatch):
-    """`?token=` puts a live JWT into URLs — proxy logs, browser history and
+    """`?token=` puts a live JWT into URLs • proxy logs, browser history and
     Referer headers all keep it. It stays a legacy fallback that must be
     switched on with WS_ALLOW_QUERY_TOKEN=true; with it off (the shipped
-    default) a *valid* token in the query string is rejected, while the
-    supported cookie path keeps working."""
+    default) the query token is ignored.
+
+    "Ignored" now means different things on the two kinds of socket, so both are
+    checked:
+
+    - **Public feed** • the token is dropped, so the caller is simply anonymous
+      and the connection is allowed (it carries nothing private anyway).
+    - **Personal feed** • the token is the *only* thing authorising delivery, so
+      ignoring it means the connection is refused. This is where the property
+      actually matters, and it is asserted with a token that is otherwise valid.
+    """
+    from unittest.mock import AsyncMock, patch
+
     from app.config import settings
 
     monkeypatch.setattr(settings, "ws_allow_query_token", False)
     token = token_for(test_user.id)
 
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with ws_client.websocket_connect(f"/ws/trades?token={token}"):
-            pass
-    assert exc.value.code == 1008
+    with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
+        mock_pubsub.subscribe_global_trades = AsyncMock()
+        # Public feed: a valid token in the URL is not honoured, but the socket
+        # itself is public and connects.
+        with ws_client.websocket_connect(f"/ws/trades?token={token}") as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json()["type"] == "pong"
 
-    # Same token, cookie path — accepted.
+    # Personal feed: same ignored query token, but nothing else identifies the
+    # caller, so it must be refused.
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with ws_client.websocket_connect(f"/ws/notifications/{test_user.id}?token={token}"):
+            pass
+    assert exc.value.code == 4001
+
+    # Same token, cookie path • accepted.
     ws_client.cookies.set("access_token", token)
     with ws_client.websocket_connect("/ws/trades"):
         pass
@@ -220,9 +249,122 @@ async def test_origin_allowlist_applies_outside_production(monkeypatch):
     assert allowed.status_code == 200
 
     # Browsers omit Origin on same-origin GETs and non-browser clients never
-    # send it — those requests must not be collateral damage.
+    # send it • those requests must not be collateral damage.
     no_origin = await middleware.dispatch(Request(_middleware_scope(None)), call_next)
     assert no_origin.status_code == 200
+
+
+# ── 4b. Token refresh must not share the credential-decision bucket ────────────
+
+
+def test_refresh_has_its_own_rate_limit_bucket():
+    """`/auth/refresh` must not be capped like a password-reset request.
+
+    It used to fall through to `AUTH_FAST` (3/min), a bucket sized for endpoints
+    that send an email or reveal whether an account exists. A signed-in client
+    that hit a burst of 401s • a flaky network, a laptop waking from sleep with an
+    expired access token, several components refetching at once • was therefore
+    429'd and locked out of rotating its own live session.
+    """
+    from app.api.middleware import _get_auth_limit_type
+    from app.services.rate_limit_service import LimitType, RateLimitService
+
+    assert _get_auth_limit_type("/api/v1/auth/refresh") is LimitType.AUTH_REFRESH
+
+    refresh_limit, _window = RateLimitService._LIMITS[LimitType.AUTH_REFRESH]
+    fast_limit, _fast_window = RateLimitService._LIMITS[LimitType.AUTH_FAST]
+    assert refresh_limit > fast_limit
+
+    # The abuse-sensitive endpoints keep their tight caps.
+    assert (
+        _get_auth_limit_type("/api/v1/auth/forgot-password")
+        is LimitType.AUTH_FAST
+    )
+    assert (
+        _get_auth_limit_type("/api/v1/auth/login") is LimitType.AUTH_DECISION
+    )
+
+
+# ── 4c. Auth cookies must survive a real cookie jar ───────────────────────────
+
+
+def test_auth_cookies_are_accepted_by_a_standard_cookie_jar():
+    """The issued cookies must actually be sent back on the next request.
+
+    Every other test injects the token with `client.cookies.set(...)`, which
+    skips `Set-Cookie` parsing entirely • so nothing here would have caught the
+    dev build tagging its cookies `Domain=localhost`. RFC 6265 stores reject
+    that attribute outright (Python's `http.cookiejar`, and so httpx/requests,
+    silently discard the cookie), which made a successful login look like an
+    anonymous one on the following request.
+
+    Cookie scope is host-based and ignores ports, so no `Domain` attribute is
+    needed for `localhost:3000 → localhost:8000`; this asserts the real thing •
+    that a standards-compliant jar keeps the cookie and replays it.
+    """
+    import email
+    import http.cookiejar
+    from urllib.request import Request as UrlRequest
+
+    from starlette.responses import Response
+
+    from app.config import settings
+    from app.deps import clear_auth_cookies, set_auth_cookies
+
+    was_prod = settings.app_env
+    settings.app_env = "development"
+    try:
+        resp = Response()
+        set_auth_cookies(resp, access_token="ACCESS", refresh_token="REFRESH")
+
+        set_cookie_headers = [
+            v.decode() for k, v in resp.raw_headers
+            if k.decode().lower() == "set-cookie"
+        ]
+        assert len(set_cookie_headers) == 2, set_cookie_headers
+
+        # No Domain attribute on either cookie.
+        for header in set_cookie_headers:
+            assert "domain=" not in header.lower(), header
+            assert "httponly" in header.lower(), header
+            assert "samesite=lax" in header.lower(), header
+
+        # Feed them to a real jar the way a real client does, then ask what it
+        # would send on a follow-up request to the same host.
+        jar = http.cookiejar.CookieJar()
+        message = email.message_from_string(
+            "".join(f"Set-Cookie: {h}\n" for h in set_cookie_headers)
+        )
+        response = type("R", (), {"info": lambda _self: message})()
+
+        def _request(host: str) -> UrlRequest:
+            req = UrlRequest(f"http://{host}/api/v1/auth/me")
+            req.add_unredirected_header("Host", host)
+            return req
+
+        jar.extract_cookies(response, _request("localhost:8000"))
+        assert {c.name for c in jar} == {"access_token", "refresh_token"}
+
+        follow_up = _request("localhost:8000")
+        jar.add_cookie_header(follow_up)
+        sent = follow_up.get_header("Cookie")
+        assert sent and "access_token=ACCESS" in sent, sent
+        assert "refresh_token=REFRESH" in sent, sent
+
+        # clear_auth_cookies must mirror what set_auth_cookies wrote, or the
+        # browser keeps a cookie the server believes it deleted.
+        clear = Response()
+        clear_auth_cookies(clear)
+        deletions = [
+            v.decode() for k, v in clear.raw_headers
+            if k.decode().lower() == "set-cookie"
+        ]
+        assert len(deletions) == 2
+        for header in deletions:
+            assert "Max-Age=0" in header or "max-age=0" in header, header
+            assert "domain=" not in header.lower(), header
+    finally:
+        settings.app_env = was_prod
 
 
 # ── 5. Login timing equalisation ──────────────────────────────────────────────
@@ -236,7 +378,7 @@ def test_dummy_password_hash_is_cached_bcrypt():
     second = dummy_password_hash()
     assert first is second  # generated once, not per call
     assert first.startswith("$2")
-    # Any password fails against it — it is a hash of a random secret.
+    # Any password fails against it • it is a hash of a random secret.
     assert verify_password("whatever", first) is False
 
 
@@ -288,7 +430,7 @@ async def test_amm_buy_writes_trade_row_and_usdc_volume(db_session, test_user, t
         await db_session.execute(select(Market).where(Market.id == test_market.id))
     ).scalar_one()
     # Volume must grow by the USDC SPENT (10), never by the share count the
-    # AMM handed out — volume is a dollar figure everywhere it is displayed.
+    # AMM handed out • volume is a dollar figure everywhere it is displayed.
     assert market.total_volume == volume_before + Decimal(10)
     assert market.num_trades == num_trades_before + 1
 

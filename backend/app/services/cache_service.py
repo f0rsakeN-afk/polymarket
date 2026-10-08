@@ -2,7 +2,7 @@
 Cache service with tag-based invalidation.
 
 Pattern: tag each cache key with market/user scopes so we can invalidate
-just the affected keys — not blanket invalidate everything.
+just the affected keys • not blanket invalidate everything.
 
 Usage:
     await cache_set_market(market_id, data, ttl=300)
@@ -134,7 +134,7 @@ async def cache_get_orderbook(market_id: str) -> dict | None:
 async def cache_invalidate_orderbook(market_id: str):
     """Drop the cached orderbook for a market.
 
-    Called on fills, cancels and expiries — all three mutate pending orders.
+    Called on fills, cancels and expiries • all three mutate pending orders.
     Placement rebuilds eagerly instead; invalidation here is the backstop.
     """
     r = await get_redis()

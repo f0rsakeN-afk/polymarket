@@ -20,12 +20,12 @@ class BinaryAMM:
 
     price(YES) = yes_shares / (yes_shares + no_shares)
     price(NO)  = no_shares  / (yes_shares + no_shares)
-    (prices always sum to 1 — which is exactly what the split/merge
+    (prices always sum to 1 • which is exactly what the split/merge
     primitives require, since 1 USDC mints one YES + one NO pair.)
 
     NOTE ON THE INVARIANT: this is NOT an x*y = k constant-product pool, and
     no such invariant can hold here. price is a *ratio of reserves*, and a
-    buy only ever grows one side — for x*y = k to survive, buying YES would
+    buy only ever grows one side • for x*y = k to survive, buying YES would
     have to shrink the NO reserve, which the operation does not do. The
     quantity yes_shares * no_shares therefore *rises* on a buy and falls on a
     sell. The real invariant this class defends is the no-arbitrage one
@@ -43,7 +43,7 @@ class BinaryAMM:
       - Reserve R grows by S → the outcome's price RISES.
 
     Selling S shares of the outcome:
-      - Receives C = S * (R / T) * (1 - fee_rate) — the PRE-trade price
+      - Receives C = S * (R / T) * (1 - fee_rate) • the PRE-trade price
       - Reserve R shrinks by S → the outcome's price FALLS.
 
     Why buy charges at the POST-trade price while sell credits the PRE-trade
@@ -56,7 +56,7 @@ class BinaryAMM:
     i.e. the only thing a round trip can ever cost is the fees. Charging the
     pre-trade spot price on a buy (the old behaviour) charged ZERO price
     impact, so buying pushed the price up and selling immediately handed the
-    buyer the higher price — a buy→sell loop returned MORE than it cost and
+    buyer the higher price • a buy→sell loop returned MORE than it cost and
     drained the pool. That is the bug this formula fixes.
     """
 
@@ -87,7 +87,7 @@ class BinaryAMM:
         collateral: Decimal,
         min_shares_out: Decimal | None = None,
     ) -> AMMQuote:
-        """Core buy logic — mutates pool state and returns quote.
+        """Core buy logic • mutates pool state and returns quote.
 
         Shares are sized from the post-trade price, so price impact is paid
         by the buyer on the whole order (see the class docstring for the
@@ -150,7 +150,7 @@ class BinaryAMM:
         shares: Decimal,
         min_collateral_out: Decimal | None = None,
     ) -> AMMQuote:
-        """Core sell logic — mutates pool state and returns quote."""
+        """Core sell logic • mutates pool state and returns quote."""
         if shares <= 0:
             raise ValueError("Shares must be positive")
         total = self.yes_shares + self.no_shares

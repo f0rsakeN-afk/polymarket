@@ -88,7 +88,7 @@ const LiveXAxisInner = memo(function LiveXAxisInner({
     return formatTime(timeMs);
   }, [tooltipData, xScale, formatTime]);
 
-  // Spring-animated pill position — matches TooltipIndicator's spring config
+  // Spring-animated pill position • matches TooltipIndicator's spring config
   // so the pill and crosshair line move in lockstep
   const pillX = tooltipData ? tooltipData.x + margin.left : 0;
   const animatedPillX = useSpring(pillX, crosshairSpringConfig);
@@ -126,7 +126,7 @@ const LiveXAxisInner = memo(function LiveXAxisInner({
         </div>
       ))}
 
-      {/* Time pill at crosshair — spring-animated to match crosshair line */}
+      {/* Time pill at crosshair • spring-animated to match crosshair line */}
       {isHovering && pillLabel && (
         <motion.div
           className="absolute z-50"

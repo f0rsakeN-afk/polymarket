@@ -120,7 +120,7 @@ export function SplitMergeForm() {
           onKeyDown={handleKeyDown}
         />
         {mode === "split" && parsedAmount > availableBalance && (
-          <p className="text-[10px] text-red-700 mt-1">Insufficient balance — max ${availableBalance.toFixed(2)}</p>
+          <p className="text-[10px] text-red-700 mt-1">Insufficient balance • max ${availableBalance.toFixed(2)}</p>
         )}
         {mode === "split" && selectedMarket && parsedAmount > 0 && (
           <p className="text-[10px] text-muted-foreground mt-1">

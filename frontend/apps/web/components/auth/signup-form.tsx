@@ -150,7 +150,7 @@ export function SignupForm() {
         <div className="text-foreground">
           <PolygonMark />
         </div>
-        <span className="text-sm font-medium text-foreground tracking-tight">Polymarket</span>
+        <span className="text-sm font-medium text-foreground tracking-tight">PredictX</span>
       </div>
 
       <Card className="w-full max-w-sm border-border/60 bg-card/80 backdrop-blur-sm shadow-none">

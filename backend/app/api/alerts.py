@@ -11,7 +11,7 @@ from app.deps import get_current_user
 from app.models.alert import Alert
 from app.schemas.alert import AlertCreate, AlertResponse
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 

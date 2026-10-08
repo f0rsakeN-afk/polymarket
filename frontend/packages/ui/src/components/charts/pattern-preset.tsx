@@ -23,7 +23,7 @@ export interface PatternPresetOptions {
   radius?: number;
   complement?: boolean;
   fill?: string;
-  /** Dot grid only — when false, render hollow dots (stroke only). Default: true */
+  /** Dot grid only • when false, render hollow dots (stroke only). Default: true */
   dotFill?: boolean;
   tileBackground?: string;
 }

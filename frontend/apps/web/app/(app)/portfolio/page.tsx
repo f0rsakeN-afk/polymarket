@@ -43,7 +43,7 @@ function formatPnL(v: number) {
 }
 
 function formatTime(iso: string | null | undefined) {
-  if (!iso) return "—"
+  if (!iso) return "•"
   const d = new Date(iso)
   const now = new Date()
   const diff = (now.getTime() - d.getTime()) / 1000
@@ -75,7 +75,7 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
       </Badge>
     )
   }
-  // multi-outcome markets — show as secondary badge
+  // multi-outcome markets • show as secondary badge
   return (
     <Badge
       variant="secondary"

@@ -1,6 +1,6 @@
-# Polymarket Backend
+# PredictX Backend
 
-FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery — a prediction market backend with an AMM-based trading engine, real-time WebSocket updates, and Stripe deposit integration.
+FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery • a prediction market backend with an AMM-based trading engine, real-time WebSocket updates, and Stripe deposit integration.
 
 ---
 
@@ -12,7 +12,7 @@ FastAPI + asyncpg + SQLAlchemy asyncio + Redis + Celery — a prediction market 
 # 1. Install dependencies
 uv sync
 
-# 2. Create .env — the app refuses to boot with the placeholder secrets
+# 2. Create .env • the app refuses to boot with the placeholder secrets
 cp .env.example .env
 for v in JWT_SECRET SECRET_KEY TOTP_ENCRYPTION_KEY; do
   sed -i "s|^$v=.*|$v=$(openssl rand -hex 32)|" .env
@@ -20,12 +20,12 @@ done
 # .env ships with host-side URLs (postgres → localhost:5433, redis → localhost:6380);
 # docker-compose.dev.yml overrides them with the in-network service names.
 
-# 3. Start PostgreSQL + Redis (Docker) — ports 5433/6380 per .env
+# 3. Start PostgreSQL + Redis (Docker) • ports 5433/6380 per .env
 docker compose -f docker-compose.dev.yml up -d postgres redis
 
 # No compose plugin? Equivalent plain docker commands:
 #   docker run -d --name pm-postgres -p 5433:5432 \
-#     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=polymarket \
+#     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=PredictX \
 #     postgres:16-alpine
 #   docker run -d --name pm-redis -p 6380:6379 \
 #     redis:7-alpine redis-server --appendonly yes --requirepass devpass
@@ -47,7 +47,7 @@ curl localhost:8000/health/ready    # db + redis checks, 200 only when both are 
 ```
 
 **Startup ordering:** the API never serves before Postgres accepts connections. Two
-layers enforce it — `depends_on: condition: service_healthy` in Compose for the first
+layers enforce it • `depends_on: condition: service_healthy` in Compose for the first
 `up`, and a retry loop in the app's lifespan (`Waiting for Postgres...` every 2s,
 60s budget) that also covers a dependency restarting later. While it waits the process
 holds `Application startup in progress` and `/health` does not answer; if the budget
@@ -80,16 +80,16 @@ pip install locust websocket-client
 # Web UI
 locust -f scripts/locustfile.py --host=http://localhost:8000
 
-# Headless — 50k users, 100/sec ramp, 60s
+# Headless • 50k users, 100/sec ramp, 60s
 locust -f scripts/locustfile.py --host=http://localhost:8000 \
     --users=50000 --spawn-rate=100 --run-time=60s --headless
 
-# REST API only — 10k users
+# REST API only • 10k users
 locust -f scripts/locustfile.py --host=http://localhost:8000 \
     --users=10000 --spawn-rate=200 --run-time=60s --headless \
     --class-picker RestAPIUser
 
-# WebSocket only — 50k connections
+# WebSocket only • 50k connections
 locust -f scripts/locustfile.py --host=http://localhost:8000 \
     --users=50000 --spawn-rate=500 --run-time=30s --headless \
     --class-picker WebSocketUser
@@ -118,7 +118,7 @@ uv run alembic check
 
 `scripts/seed.py` loads deterministic sample data. It is **not** baked into the images
 (`scripts/` is in `.dockerignore`) and not mounted by the dev compose file, so run it
-on the host against the published DB ports — not inside a container.
+on the host against the published DB ports • not inside a container.
 
 ```bash
 # Migrations must be applied first (idempotent: skips rows that already exist)
@@ -138,13 +138,13 @@ SEED_PASSWORD=otherpass uv run python -m scripts.seed
 What it creates: 10 users + wallets + notification prefs, 17 markets with outcomes,
 liquidity pools and LP shares, FAQs, disputes, flags, ~1400 trades, 30-day price
 history, transactions, treasury, notifications, alerts, comments, positions, pending
-orders, referrals, refresh tokens and sessions. Re-running it is safe — every block
+orders, referrals, refresh tokens and sessions. Re-running it is safe • every block
 checks for existing rows first.
 
 ```bash
 # Spot-check the result
 curl "localhost:8000/api/v1/markets/" | head -c 300
-docker exec pm-postgres psql -U postgres -d polymarket -c "SELECT count(*) FROM users;"
+docker exec pm-postgres psql -U postgres -d PredictX -c "SELECT count(*) FROM users;"
 ```
 
 ### Celery
@@ -165,10 +165,10 @@ uv run celery -A app.workers.celery_app inspect stats
 ### Code Quality
 
 ```bash
-# Lint (ruff is a dev dependency — `uv run ruff` resolves from the dev group)
+# Lint (ruff is a dev dependency • `uv run ruff` resolves from the dev group)
 uv run ruff check app/ tests/ --fix
 
-# Type check (run via uvx — pyright is intentionally not a project dependency)
+# Type check (run via uvx • pyright is intentionally not a project dependency)
 uvx pyright app/
 
 # Format
@@ -181,7 +181,7 @@ uv run ruff format app/ tests/
 # Copy env
 cp .env.example .env
 
-# Secrets are validated at startup — the API refuses to boot while
+# Secrets are validated at startup • the API refuses to boot while
 # JWT_SECRET / SECRET_KEY / TOTP_ENCRYPTION_KEY still equal
 # "change-me-in-production" (app/app.py lifespan). Generate real values:
 for v in JWT_SECRET SECRET_KEY TOTP_ENCRYPTION_KEY; do
@@ -255,10 +255,10 @@ Health: http://localhost:8000/health · http://localhost:8000/health/ready
 | Service | Replicas | Workers Each | Total WS Capacity |
 |---------|----------|--------------|-------------------|
 | `api` | 4 | 4 | 50k WebSocket connections |
-| `celery_worker` | 2 | 8 concurrency | — |
-| `celery_beat` | 1 | — | — |
-| `postgres` | 1 | — | — |
-| `redis` | 1 | — | — |
+| `celery_worker` | 2 | 8 concurrency | • |
+| `celery_beat` | 1 | • | • |
+| `postgres` | 1 | • | • |
+| `redis` | 1 | • | • |
 
 ### Resource Limits (per container)
 
@@ -266,8 +266,8 @@ Health: http://localhost:8000/health · http://localhost:8000/health/ready
 |---------|--------|-----------------|
 | `api` | 2GB max / 512MB reserved | 65536 |
 | `celery_worker` | 1GB | 65536 |
-| `postgres` | 1GB | — |
-| `redis` | 768MB | — |
+| `postgres` | 1GB | • |
+| `redis` | 768MB | • |
 
 ### Files
 
@@ -284,18 +284,18 @@ backend/
 
 ```bash
 # Dev image (uvicorn --reload, full dependency set incl. psycopg2 + test tools)
-docker build -f Dockerfile.dev -t polymarket-backend-dev .
+docker build -f Dockerfile.dev -t PredictX-backend-dev .
 
 # Prod image (multi-stage: uv sync --frozen --no-dev, non-root appuser, HEALTHCHECK)
-docker build -t polymarket-backend-prod .
+docker build -t PredictX-backend-prod .
 
 # Smoke-run outside Compose (needs a reachable postgres/redis)
-docker run --rm --env-file .env -p 6000:8000 polymarket-backend-dev
-docker run --rm --env-file .env -p 6001:8000 polymarket-backend-prod
+docker run --rm --env-file .env -p 6000:8000 PredictX-backend-dev
+docker run --rm --env-file .env -p 6001:8000 PredictX-backend-prod
 ```
 
 Notes:
-- `.dockerignore` excludes `scripts/`, `tests/`, `*.sh`, `deploy/` and `.env` —
+- `.dockerignore` excludes `scripts/`, `tests/`, `*.sh`, `deploy/` and `.env` •
   secrets never reach the image, and seeding runs on the host.
 - Both images fail fast on placeholder secrets; set them in `.env` first.
 - Only `Dockerfile.dev` is meant for local iteration; `Dockerfile` is what
@@ -306,7 +306,7 @@ Notes:
 ```bash
 # 1. Copy and fill env
 cp .env.example .env
-# Edit .env — set all *change-me* secrets
+# Edit .env • set all *change-me* secrets
 
 # 2. Build and start
 docker compose -f docker-compose.prod.yml up --build -d
@@ -324,11 +324,11 @@ docker compose -f docker-compose.prod.yml up -d --scale api=8
 
 ### Nginx Config Highlights
 
-- **Load balancing**: `least_conn` — routes to the least busy worker
+- **Load balancing**: `least_conn` • routes to the least busy worker
 - **WebSocket**: `Upgrade` + `Connection: upgrade` headers forwarded
 - **WS keepalive**: 7-day timeout for long-lived connections
 - **Rate limiting**: 60 req/min per IP on `/`, 5 req/min on `/auth/**`
-- **No buffering**: `proxy_buffering off` on WS — critical for real-time
+- **No buffering**: `proxy_buffering off` on WS • critical for real-time
 
 ### Redis Pub/Sub with Multiple Workers
 
@@ -372,12 +372,12 @@ Each `api` container runs its own Redis pub/sub listener (started in FastAPI lif
 - **Pessimistic Locking**: All write operations use `SELECT ... FOR UPDATE` with strict lock ordering (market → pool → wallet) to prevent deadlocks
 - **Distributed Singleflight**: Redis `SETNX` lock prevents thundering herd on market price reads across all workers
 - **Circuit Breaker**: Redis operations protected by a state machine (closed → open → half-open) with 5-failure threshold and 30s recovery
-- **Decimal Math**: All financial calculations use Python `Decimal` — never floating point for money
+- **Decimal Math**: All financial calculations use Python `Decimal` • never floating point for money
 - **Idempotency**: Orders via `client_order_id` unique constraint; Stripe deposits via `reference_id` check
 
 ---
 
-## AMM Engine — Constant Product Market Maker
+## AMM Engine • Constant Product Market Maker
 
 The core of the trading system is a **BinaryAMM** implementing the constant product formula `x * y = k` for binary (YES/NO) markets.
 
@@ -579,7 +579,7 @@ def apply_trade(self, outcome, collateral):
 
 ## Orderbook
 
-The orderbook is implemented as a **live aggregation query** over pending limit orders, not a separate matching engine. There is no central limit order book (CLOB) — the AMM is the counterparty to every trade.
+The orderbook is implemented as a **live aggregation query** over pending limit orders, not a separate matching engine. There is no central limit order book (CLOB) • the AMM is the counterparty to every trade.
 
 ### How It Works
 
@@ -657,7 +657,7 @@ yes_shares += amount / current_yes_price
 no_shares  += amount / current_no_price
 ```
 
-Wait — the actual implementation adds equal collateral to both sides:
+Wait • the actual implementation adds equal collateral to both sides:
 
 ```
 yes_shares += amount
@@ -757,7 +757,7 @@ Client                  Backend                  Stripe
   │                        │  Create Transaction    │
 ```
 
-**Note:** The deposit endpoint is currently **mocked** — it generates `pi_<uuid>_secret` as the client_secret without actually calling Stripe. In production, you would integrate with `stripe.PaymentIntent.create()`.
+**Note:** The deposit endpoint is currently **mocked** • it generates `pi_<uuid>_secret` as the client_secret without actually calling Stripe. In production, you would integrate with `stripe.PaymentIntent.create()`.
 
 ### Withdrawal Flow
 
@@ -917,9 +917,9 @@ All operations are protected by `asyncio.Lock` to prevent race conditions betwee
 ## Redis Pub/Sub System
 
 Redis serves three roles in this system:
-1. **Cache** — Market prices stored as hashes with TTL
-2. **Pub/Sub** — Real-time event distribution across workers
-3. **Celery Broker** — Task queue for background jobs
+1. **Cache** • Market prices stored as hashes with TTL
+2. **Pub/Sub** • Real-time event distribution across workers
+3. **Celery Broker** • Task queue for background jobs
 
 ### Channel Architecture
 
@@ -1019,7 +1019,7 @@ Request B comes in (same time) → cache miss
 - **Broker**: Redis (configurable, typically DB 1)
 - **Serializer**: JSON
 - **Concurrency**: 4 workers
-- **Task acknowledgments**: Late (`task_acks_late=True`) — tasks are re-delivered if the worker crashes
+- **Task acknowledgments**: Late (`task_acks_late=True`) • tasks are re-delivered if the worker crashes
 
 ### Scheduled Tasks (Celery Beat)
 
@@ -1027,7 +1027,7 @@ Request B comes in (same time) → cache miss
 |----------|------|-------------|
 | Every 30s | `expire_stale_orders` | Finds limit/FOK orders with `expires_at <= now`, marks them expired, releases locked collateral, publishes `order:expired` event |
 | Every 60s | `sync_amm_prices` | Reads all active markets with their pools, writes `yes_price`/`no_price`/`updated_at` to Redis hashes (5min TTL). Acts as a fallback cache warmer if price updates are missed. |
-| Every 5min | `check_market_resolution` | Finds active markets where `closes_at <= now`. Currently just logs a warning — resolution requires manual admin action. |
+| Every 5min | `check_market_resolution` | Finds active markets where `closes_at <= now`. Currently just logs a warning • resolution requires manual admin action. |
 
 ### On-Demand Tasks
 
@@ -1090,10 +1090,10 @@ Logout:
 ### Auth Dependencies
 
 ```python
-# Requires authentication — returns 401 if missing/invalid
+# Requires authentication • returns 401 if missing/invalid
 async def get_current_user(request, db) -> User
 
-# Optional authentication — returns None if missing
+# Optional authentication • returns None if missing
 async def get_optional_user(request, db) -> User | None
 ```
 
@@ -1133,7 +1133,7 @@ if existing_tx:
 
 ### Stripe to Wallet Mapping
 
-The Stripe PaymentIntent's `metadata.user_id` field is used to identify which Polymarket user to credit. The amount is converted from cents to dollars (`amount_cents / 100`).
+The Stripe PaymentIntent's `metadata.user_id` field is used to identify which PredictX user to credit. The amount is converted from cents to dollars (`amount_cents / 100`).
 
 ---
 
@@ -1141,7 +1141,7 @@ The Stripe PaymentIntent's `metadata.user_id` field is used to identify which Po
 
 ### How It Works
 
-1. Each user has a unique `referral_code` (auto-generated on registration — first 8 chars of a UUID4, uppercased)
+1. Each user has a unique `referral_code` (auto-generated on registration • first 8 chars of a UUID4, uppercased)
 2. A referrer shares their code
 3. New user registers with `referral_code` in the request body
 4. A Referral record is created with `status="pending"`
@@ -1218,7 +1218,7 @@ check_price_alerts(market_id, outcome, current_price):
 ¹ Markets awaiting review (`pending_review`) or already `rejected` are hidden from
 the public catalogue: they 404 for everyone except the user who submitted them and
 admins, and are excluded from `GET /` (filtering by those statuses there returns
-422 — use the admin endpoint below).
+422 • use the admin endpoint below).
 
 ² Any email-verified user can submit a market; it enters the review queue and only
 becomes publicly visible and tradable once an admin approves it. Admins skip the
@@ -1228,15 +1228,15 @@ queue and publish immediately. Unverified users get 403.
 
 | Status | Meaning |
 |--------|---------|
-| `pending_review` | Submitted by a regular user, awaiting admin approval — not listed, not tradable |
-| `rejected` | Admin declined the submission — still visible to its submitter only |
+| `pending_review` | Submitted by a regular user, awaiting admin approval • not listed, not tradable |
+| `rejected` | Admin declined the submission • still visible to its submitter only |
 | `active` | Published and tradable (admins' own submissions land here directly) |
 | `closed` | No new orders, awaiting resolution |
 | `resolving` | Resolution proposed, settlement pending |
 | `dispute_window` | A dispute was filed; outcome under review |
 | `resolved` | Final |
 
-### Admin — market review queue (`/api/v1/admin`)
+### Admin • market review queue (`/api/v1/admin`)
 
 | Method | Path | Auth | Query/Body | Response |
 |--------|------|------|------------|----------|
@@ -1246,7 +1246,7 @@ queue and publish immediately. Unverified users get 403.
 
 Approval is a compare-and-set on the status: if another admin decided on the same
 market first you get 409. Approving a market whose `closes_at` already passed is
-rejected (422 `MARKET_ALREADY_CLOSED`) — it would go live dead.
+rejected (422 `MARKET_ALREADY_CLOSED`) • it would go live dead.
 
 ### Orders (`/api/v1/orders`)
 
@@ -1318,7 +1318,7 @@ rejected (422 `MARKET_ALREADY_CLOSED`) — it would go live dead.
 |--------|------|------|----------|
 | GET | `/{slug}/activity` | No | `{market_stats, top_holders_by_outcome[], recent_trades[], recent_comments[]}` |
 
-### Treasury (`/api/v1/treasury`) — admin only
+### Treasury (`/api/v1/treasury`) • admin only
 
 | Method | Path | Auth | Query | Response |
 |--------|------|------|-------|----------|
@@ -1334,7 +1334,7 @@ rejected (422 `MARKET_ALREADY_CLOSED`) — it would go live dead.
 
 Signature verification is real: 401 for a missing/malformed/mismatched signature or
 a timestamp outside the 300s window (and for an unconfigured
-`STRIPE_WEBHOOK_SECRET` — it fails closed), 422 only when the body is correctly
+`STRIPE_WEBHOOK_SECRET` • it fails closed), 422 only when the body is correctly
 signed but isn't a usable Stripe event. Deposits are idempotent on the payment
 intent, so redeliveries never double-credit.
 
@@ -1505,7 +1505,7 @@ Redis distributes to ALL subscribed workers
 | `SECRET_KEY` | `change-me-in-production` | Application secret |
 | `DEBUG` | `false` | Enable debug mode |
 | `CORS_ORIGINS` | `*` | Comma-separated CORS origins |
-| `DATABASE_URL` | `postgresql+asyncpg://...:5433/polymarket` (.env) | Primary database |
+| `DATABASE_URL` | `postgresql+asyncpg://...:5433/PredictX` (.env) | Primary database |
 | `DATABASE_REPLICA_URL` | (empty) | Read replica (falls back to primary) |
 | `DB_POOL_SIZE` | `50` | Connection pool size |
 | `DB_MAX_OVERFLOW` | `30` | Max overflow connections |
@@ -1610,7 +1610,7 @@ wscat -c ws://localhost:8000/ws/markets/<MARKET_ID>
 
 ### WebSocket connections timing out
 
-- Nginx default keepalive is 65s — WS routes use `proxy_read_timeout 7d` to handle long connections
+- Nginx default keepalive is 65s • WS routes use `proxy_read_timeout 7d` to handle long connections
 - If using Docker, make sure `api` container has `nofile` limit raised (set in docker-compose.prod.yml)
 
 ### "Connection limit exceeded" errors on WebSocket
@@ -1633,7 +1633,7 @@ cat celerybeat-schedule
 
 ### Redis connection errors
 
-- Circuit breaker opens after 5 consecutive Redis failures — auto-recovers after 30s
+- Circuit breaker opens after 5 consecutive Redis failures • auto-recovers after 30s
 - Check Redis is running: `redis-cli -p 6380 -a $REDIS_PASSWORD ping`
 
 ### PostgreSQL connection pool exhausted

@@ -178,7 +178,7 @@ export function ringOptions(
 ) {
   const oneLevelCenterR = radius / maxDepth;
   if (focusDepth === 0) {
-    // Root view — segments fill from the center, no navigation hub gap.
+    // Root view • segments fill from the center, no navigation hub gap.
     return { centerR: 0, ringWidth: oneLevelCenterR };
   }
   // Hub shrinks on drill-down; shrinks further when focus moves deeper.
@@ -263,7 +263,7 @@ function pointGeometry(source: ArcGeometry): ArcGeometry {
   return { a0: mid, a1: mid, innerR: pin, outerR: pin };
 }
 
-/** Zoom morph — lerps matching arcs; entering/exiting arcs collapse to a point. */
+/** Zoom morph • lerps matching arcs; entering/exiting arcs collapse to a point. */
 export function transitionGeometry(
   arc: ArcDatum,
   fromFocus: Focus,
@@ -299,7 +299,7 @@ export function clockwiseFraction(angle: number): number {
   return normalized / TWO_PI;
 }
 
-/** Ring-chart-style enter delay (seconds) — scale from center. */
+/** Ring-chart-style enter delay (seconds) • scale from center. */
 export interface SunburstSegmentEnterDelays {
   delay: number;
 }
@@ -309,7 +309,7 @@ export interface SunburstEnterTiming {
   maxDelay: number;
 }
 
-/** Matches ring chart expand — each ring/segment grows from the chart center. */
+/** Matches ring chart expand • each ring/segment grows from the chart center. */
 export function buildSunburstEnterTiming(
   arcs: ArcDatum[],
   staggerScale = 1
@@ -373,7 +373,7 @@ export function buildRevealSchedule(
   };
 }
 
-/** @deprecated Ring sweep reveal — use expand + sweep enter instead. */
+/** @deprecated Ring sweep reveal • use expand + sweep enter instead. */
 export function segmentRevealFromRingSweep(
   ringProgress: number,
   a0: number,
@@ -498,7 +498,7 @@ export function hoverGrowForPathSegment(
 }
 
 /**
- * Max radial thickness for a hovered segment — matches one expanded ring at the
+ * Max radial thickness for a hovered segment • matches one expanded ring at the
  * first drill level (e.g. Enterprise under Product).
  */
 export function maxHoverSegmentThickness(

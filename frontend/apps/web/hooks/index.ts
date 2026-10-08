@@ -1,4 +1,4 @@
-// API hooks barrel — comment exports only to avoid conflicts
+// API hooks barrel • comment exports only to avoid conflicts
 // use-markets exports: useMarkets, useMarket, useMarketActivity, useGlobalTrades, useMarketTrades, useComments, usePostComment, useEditComment, useDeleteComment, useFAQs, useRelatedMarkets, useCreateMarket, useResolveMarket, usePriceHistory, useMarketCategories, useClaimWinnings
 // use-trades exports: useSimpleGlobalTrades, useSimpleMarketTrades
 // use-comments exports: useComments, useCommentReplies, usePostComment, useEditComment, useDeleteComment

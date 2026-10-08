@@ -34,10 +34,11 @@ from app.services.cache_service import (
     cache_invalidate_orderbook,
     cache_set_orderbook,
 )
+from app.services.market_service import MarketService
 from app.services.matching_engine import MatchingEngine
 from app.websocket.manager import redis_pubsub
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 
 async def _enqueue_limit_sweep_now() -> None:
@@ -47,7 +48,7 @@ async def _enqueue_limit_sweep_now() -> None:
     markets that were marked dirty by the trade that moved them (see
     `websocket.manager.publish_price_update`). Without this call a resting
     limit order whose price just got crossed still waits up to half a minute
-    — invisible in a demo, real money when the market runs away.
+    • invisible in a demo, real money when the market runs away.
 
     The NX key collapses any burst of fills into at most one queued sweep per
     second, so volatility cannot flood the broker with one message per trade.
@@ -62,11 +63,26 @@ async def _enqueue_limit_sweep_now() -> None:
         check_limit_order_execution.delay()
 
 
+def _is_finite(value) -> bool:
+    """True only for a finite number.
+
+    Book levels arrive as Decimal, float or str depending on the writer, and
+    None for a missing price. NaN and infinities must not become a price.
+    """
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    return parsed == parsed and parsed not in (float("inf"), float("-inf"))
+
+
 @dataclass
 class OrderResult:
     order_id: str
     status: str  # 'pending' | 'partial' | 'filled' | 'cancelled' | 'expired'
-    #            # or 'duplicate' — returned when a client_order_id that was
+    #            # or 'duplicate' • returned when a client_order_id that was
     #            # already placed is re-submitted (idempotency hit). The
     #            # duplicate result references the EXISTING order; no new row
     #            # is written to the orders table for it.
@@ -93,6 +109,92 @@ class OrderService:
         if total == 0:
             return 0.5, 0.5
         return float(pool.yes_shares) / total, float(pool.no_shares) / total
+
+    @staticmethod
+    def outcome_prices_from_book(
+        book: dict,
+        outcomes,
+    ) -> dict[str, float]:
+        """Per-outcome mid prices from the order book, keyed by outcome name.
+
+        This is the price source for markets with 3+ outcomes: one binary pool
+        cannot price mutually exclusive outcomes, but the book is already
+        per-outcome. Mid of best bid/ask, or the single side when only one is
+        present.
+
+        Outcome names are matched case-insensitively because the book keys are
+        lower-cased, and returned with the canonical casing from the outcome
+        list so the front end can match them directly.
+
+        An outcome with no usable side is omitted rather than defaulted to 0:
+        a fabricated zero is a wrong price, and the front end treats a missing
+        key as a gap.
+        """
+        prices: dict[str, float] = {}
+        books = (book or {}).get("outcomes") or {}
+
+        for outcome in outcomes:
+            name = getattr(outcome, "name", None)
+            if not name:
+                continue
+            entry = books.get(name.lower())
+            if not entry:
+                continue
+
+            bids = [float(b.price) for b in (entry.get("bids") or []) if _is_finite(b.price)]
+            asks = [float(a.price) for a in (entry.get("asks") or []) if _is_finite(a.price)]
+            best_bid = max(bids) if bids else None
+            best_ask = min(asks) if asks else None
+
+            if best_bid is not None and best_ask is not None:
+                prices[name] = (best_bid + best_ask) / 2
+            elif best_ask is not None:
+                prices[name] = best_ask
+            elif best_bid is not None:
+                prices[name] = best_bid
+
+        return prices
+
+    @staticmethod
+    async def _resolve_pool(
+        db: AsyncSession,
+        market: Market,
+        outcome: Outcome,
+        parimutuel: bool,
+        lock: bool = False,
+    ) -> LiquidityPool:
+        """The pool row an order on `outcome` mutates.
+
+        A market_id-only lookup used to be safe because market_id was UNIQUE.
+        With per-outcome rows it matches several and raises
+        MultipleResultsFound, so the lookup is explicit:
+
+          parimutuel -> this outcome's own pool (outcome_id = outcome.id)
+          binary      -> the single pool with outcome_id IS NULL
+
+        `lock=True` takes row locks for the order path, where the shares are
+        about to be mutated.
+        """
+        stmt = select(LiquidityPool).where(
+            LiquidityPool.market_id == market.id,
+            LiquidityPool.outcome_id == outcome.id
+            if parimutuel
+            else LiquidityPool.outcome_id.is_(None),
+        )
+        if lock:
+            stmt = stmt.with_for_update()
+
+        pool = (await db.execute(stmt)).scalar_one_or_none()
+        if pool is None:
+            if parimutuel:
+                raise ValidationError(
+                    f"No liquidity pool for outcome '{outcome.name}'",
+                    error_code="MARKET_NO_LIQUIDITY",
+                )
+            raise ValidationError(
+                "Market has no liquidity", error_code="MARKET_NO_LIQUIDITY"
+            )
+        return pool
 
     @staticmethod
     async def compute_quote(
@@ -122,27 +224,42 @@ class OrderService:
         if not outcome:
             raise ValidationError(f"Invalid outcome '{outcome_name}'", error_code="INVALID_OUTCOME")
 
-        pool_result = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id)
+        all_outcomes_q = await db.execute(
+            select(Outcome)
+            .where(Outcome.market_id == market.id)
+            .order_by(Outcome.outcome_index)
         )
-        pool = pool_result.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
+        outcomes_q = list(all_outcomes_q.scalars().all())
+        parimutuel = MarketService.is_parimutuel(outcomes_q)
 
-        amm = BinaryAMM(
-            yes_shares=pool.yes_shares,
-            no_shares=pool.no_shares,
-            fee_rate=pool.fee_rate,
-        )
+        # Pool resolution matches execute_order: a parimutuel market has no
+        # NULL-outcome pool at all, so looking only for one would report "no
+        # liquidity" on a market that has plenty - one pool per outcome.
+        pool = await OrderService._resolve_pool(db, market, outcome, parimutuel)
 
-        price_before = float(amm.price(outcome_name))
+        if parimutuel:
+            # Built over ALL outcome pools so `total` is the market total and the
+            # complement is correct.
+            amm, _ = MarketService.build_outcome_amm(
+                await MarketService.load_outcome_pools(db, market.id), outcome.id
+            )
+            amm_side = "yes"
+        else:
+            amm = BinaryAMM(
+                yes_shares=pool.yes_shares,
+                no_shares=pool.no_shares,
+                fee_rate=pool.fee_rate,
+            )
+            amm_side = "yes" if outcome_name.lower() == "yes" else "no"
+
+        price_before = float(amm.price(amm_side))
 
         if side == "buy":
-            amm.buy(outcome_name, amount)
+            amm.buy(amm_side, amount)
         else:
-            amm.sell(outcome_name, amount)
+            amm.sell(amm_side, amount)
 
-        price_after = float(amm.price(outcome_name))
+        price_after = float(amm.price(amm_side))
         slippage = abs(price_after - price_before)
 
         quote_id = str(uuid.uuid4())
@@ -180,7 +297,7 @@ class OrderService:
         user: User,
         data: OrderRequest,
     ):
-        # data.amount is already Decimal (PositiveMoney) — keep Decimal end-to-end (C5 fix)
+        # data.amount is already Decimal (PositiveMoney) • keep Decimal end-to-end (C5 fix)
         amount = data.amount if isinstance(data.amount, Decimal) else Decimal(str(data.amount))
         if data.price is not None and data.price <= 0:
             raise ValidationError("Price must be > 0", error_code="INVALID_PRICE")
@@ -207,12 +324,10 @@ class OrderService:
         if not outcome:
             raise ValidationError(f"Invalid outcome '{data.outcome}'")
 
-        pool = await db.execute(
-            select(LiquidityPool).where(LiquidityPool.market_id == market.id).with_for_update()
+        # Pool resolution, scoped by outcome. See OrderService._resolve_pool.
+        pool = await OrderService._resolve_pool(
+            db, market, outcome, MarketService.is_parimutuel(all_outcomes), lock=True
         )
-        pool = pool.scalar_one_or_none()
-        if not pool:
-            raise ValidationError("Market has no liquidity", error_code="MARKET_NO_LIQUIDITY")
 
         wallet = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
@@ -221,7 +336,7 @@ class OrderService:
         if not wallet:
             raise ValidationError("Wallet not found")
 
-        # ── Step 2: Idempotency check (inside lock — no race) ──
+        # ── Step 2: Idempotency check (inside lock • no race) ──
 
         if data.client_order_id:
             existing = await db.execute(
@@ -255,15 +370,15 @@ class OrderService:
                 r = await get_redis()
                 raw = await redis_cb.call(lambda: r.get(f"quote:{user.id}:{data.quote_id}"))
             except Exception:
-                raise ValidationError("Quote validation unavailable — please retry", error_code="QUOTE_UNAVAILABLE")
+                raise ValidationError("Quote validation unavailable • please retry", error_code="QUOTE_UNAVAILABLE")
             if not raw:
-                raise ValidationError("Quote not found — please refresh", error_code="QUOTE_NOT_FOUND")
+                raise ValidationError("Quote not found • please refresh", error_code="QUOTE_NOT_FOUND")
             try:
                 quote = json.loads(raw)
             except Exception:
-                raise ValidationError("Quote corrupted — please refresh", error_code="QUOTE_CORRUPTED")
+                raise ValidationError("Quote corrupted • please refresh", error_code="QUOTE_CORRUPTED")
             if quote.get("expires_at", 0) < time.time():
-                raise ValidationError("Quote expired — please refresh", error_code="QUOTE_EXPIRED")
+                raise ValidationError("Quote expired • please refresh", error_code="QUOTE_EXPIRED")
             # Bind check: quote must belong to the same user placing the order.
             if quote.get("user_id") != str(user.id):
                 raise ValidationError("Quote does not belong to this user", error_code="QUOTE_FORBIDDEN")
@@ -297,7 +412,33 @@ class OrderService:
             fee_rate=pool.fee_rate,
         )
 
-        price_before = amm.price(data.outcome)
+        # ── Which AMM, and for which side ──
+        #
+        # Binary markets: one pool, and the outcome picks the YES or NO reserve.
+        #
+        # Parimutuel markets (no real Yes/No outcome pair - which includes
+        # two-way NAMED markets like "Trump vs Biden", not just 3+ ones): each
+        # outcome owns a pool whose yes_shares is that outcome's share count.
+        # The AMM is constructed per outcome with its own reserve and the market
+        # total, so it is always traded on the YES side - there is no second
+        # reserve to fall into. Previously the outcome NAME was passed in and the
+        # engine's `outcome == "yes"` test silently sent every other outcome to
+        # the NO reserve.
+        is_parimutuel = MarketService.is_parimutuel(all_outcomes)
+        outcome_pools: list = []
+        if is_parimutuel:
+            outcome_pools = await MarketService.load_outcome_pools(db, market.id)
+            # Rebuild the AMM over ALL outcome pools so `total` is the market
+            # total, not this outcome's book - that is what makes the complement
+            # correct and the prices sum to 1.
+            amm, _market_total = MarketService.build_outcome_amm(
+                outcome_pools, outcome.id
+            )
+            amm_side = "yes"
+        else:
+            amm_side = "yes" if data.outcome.lower() == "yes" else "no"
+
+        price_before = amm.price(amm_side)
         limit_price = data.price if isinstance(data.price, Decimal) else (Decimal(str(data.price)) if data.price is not None else None)
 
         matched_shares, matched_usdc, match_details = await MatchingEngine.match_order_against_book(
@@ -319,21 +460,29 @@ class OrderService:
         amm_slippage = Decimal(0)
         sell_proceeds_amm = Decimal(0)
 
-        # For BUY: remaining shares to fill via AMM = remaining USDC budget / AMM price
-        # For SELL: remaining shares = amount - matched_shares (already computed above)
-        # C6 fix: price 0 is invalid — reject instead of silent 0
-        if data.side == "buy":
-            if price_before <= 0:
-                raise ValidationError("AMM price is 0 — cannot compute buy size")
-            buy_remaining_shares = remaining_usdc / price_before
-        else:
-            buy_remaining_shares = Decimal(0)
+        # "The book did not fill this order" - the honest test for whether there is
+        # a remainder at all.
+        #
+        # Deliberately not keyed off a shares-to-buy figure derived from the AMM
+        # price: with no AMM leg to size against, that figure is always 0, and it
+        # would silently skip remainder handling for every multi-outcome order -
+        # straight into the `amm.buy(...)` leg below, which is exactly the
+        # wrong-price fill this guards against.
+        has_remainder = (remaining_shares if data.side == "sell" else remaining_usdc) > 0
 
-        if (remaining_shares if data.side == "sell" else buy_remaining_shares) > 0:
-            if data.order_type in ("limit", "fill_or_kill"):
-                # Check post_only BEFORE AMM fills — post_only means don't cross the spread
-                if data.post_only and limit_price is not None:
-                    current_amm_price = float(amm.price(data.outcome))
+        # C6 fix: price 0 is invalid • reject instead of a silent 0-sized fill
+        if has_remainder and data.side == "buy" and amm_side:
+            if price_before <= 0:
+                raise ValidationError("AMM price is 0 • cannot compute buy size")
+
+        if has_remainder:
+            # Multi-outcome markets have no AMM leg, so their remainder must be
+            # handled here too - otherwise a market order falls straight through
+            # to `amm.buy(...)` below and gets filled against the NO reserve.
+            if data.order_type in ("limit", "fill_or_kill") or amm_side is None:
+                # Check post_only BEFORE AMM fills • post_only means don't cross the spread
+                if data.post_only and limit_price is not None and amm_side:
+                    current_amm_price = float(amm.price(amm_side))
                     limit_price_f = float(limit_price)
                     if data.side == "buy" and current_amm_price > limit_price_f:
                         raise ValidationError(
@@ -348,16 +497,28 @@ class OrderService:
                             error_code="POST_ONLY_WOULD_CROSS",
                         )
 
-                amm_price_f = float(price_before)
+                amm_price_f = float(price_before) if amm_side else 0.0
                 limit_price_f = float(limit_price) if limit_price else 0
                 if data.side == "buy":
-                    can_fill_amm = amm_price_f <= limit_price_f
+                    can_fill_amm = bool(amm_side) and amm_price_f <= limit_price_f
                 else:
-                    can_fill_amm = amm_price_f >= limit_price_f
+                    can_fill_amm = bool(amm_side) and amm_price_f >= limit_price_f
 
                 if not can_fill_amm:
-                    # AMM price is worse than limit — skip AMM leg, leave as pending
-                    if data.order_type == "fill_or_kill":
+                    # A market order has no price to rest at, so on a market with
+                    # no AMM leg it cannot be deferred - it has to fail rather
+                    # than fill at a meaningless price or linger unpriced.
+                    no_amm_market_order = amm_side is None and data.order_type == "market"
+                    if data.order_type == "fill_or_kill" or no_amm_market_order:
+                        if amm_side is None:
+                            raise ValidationError(
+                                f"Market order could not be fully filled from the book. "
+                                f"'{data.outcome}' is priced by the order book alone: this "
+                                f"market has {len(all_outcomes)} outcomes and no AMM reserve "
+                                f"to price a remainder against. Book matched "
+                                f"{float(matched_shares)}/{float(amount)} shares.",
+                                error_code="ORDER_NOT_FILLABLE",
+                            )
                         raise ValidationError(
                             f"Fill-or-kill could not be fully filled. "
                             f"Book matched: {float(matched_shares)}/{float(amount)} shares, "
@@ -395,7 +556,7 @@ class OrderService:
                     # The locked budget is a real movement of the user's
                     # available balance, so it gets a ledger row like every
                     # other one. Without it the reservation is invisible in the
-                    # transaction history — the user sees "10 USDC locked"
+                    # transaction history • the user sees "10 USDC locked"
                     # with no corresponding entry explaining it.
                     db.add(Transaction(
                         user_id=user.id,
@@ -419,7 +580,7 @@ class OrderService:
 
                     # COMMIT HERE. This branch used to `return` from inside
                     # execute_order, above the single commit at the end of the
-                    # fill path — so `get_db` closed the session and rolled the
+                    # fill path • so `get_db` closed the session and rolled the
                     # order and the locked funds straight back out. Resting
                     # limit orders were never persisted: the client got a 200
                     # saying "pending" for an order that did not exist, with an
@@ -438,7 +599,7 @@ class OrderService:
                         shares=matched_shares,
                         price=limit_price or Decimal(0),
                         price_before=price_before,
-                        # No AMM leg ran, so the price is unchanged — report
+                        # No AMM leg ran, so the price is unchanged • report
                         # that rather than zeros.
                         price_after=price_before,
                         yes_price_after=(
@@ -460,9 +621,9 @@ class OrderService:
                         "required": float(remaining_usdc),
                     })
                 # remaining_shares = number of shares to buy, remaining_usdc = USDC to pay
-                quote = amm.buy(data.outcome, remaining_usdc)
+                quote = amm.buy(amm_side, remaining_usdc)
                 wallet.balance -= remaining_usdc
-                # The spend enters the pool's escrow — it funds the shares the
+                # The spend enters the pool's escrow • it funds the shares the
                 # AMM just minted to the buyer (and the LPs who backed them).
                 pool.credit_collateral(remaining_usdc)
                 amm_shares = quote.shares_out
@@ -485,7 +646,7 @@ class OrderService:
                         f"Requested: {float(remaining_shares)}",
                         error_code="INSUFFICIENT_SHARES",
                     )
-                quote = amm.sell(data.outcome, remaining_shares)
+                quote = amm.sell(amm_side, remaining_shares)
                 cost_basis = tmp_pos.average_price * remaining_shares
                 sell_proceeds_amm = quote.collateral_in
                 realized_pnl = sell_proceeds_amm - cost_basis
@@ -493,7 +654,7 @@ class OrderService:
                 tmp_pos.realized_pnl += realized_pnl
                 wallet.balance += sell_proceeds_amm
                 # Sell proceeds come *out* of the escrow: shares go in,
-                # dollars come out. Strict debit — a shortfall means the
+                # dollars come out. Strict debit • a shortfall means the
                 # ledger is broken and the trade must roll back, not mint.
                 pool.debit_collateral(sell_proceeds_amm)
                 amm_shares = remaining_shares
@@ -506,13 +667,17 @@ class OrderService:
             pool.protocol_fees += protocol_fee
 
             pool.yes_shares = amm.yes_shares
+            # no_shares is derived for a parimutuel outcome (the complement of
+            # the market total), so writing it back is harmless for binary and
+            # keeps the binary pair consistent. The authoritative field for a
+            # parimutuel outcome is yes_shares.
             pool.no_shares = amm.no_shares
 
         total_shares = matched_shares + amm_shares
         total_usdc_spent = matched_usdc + (remaining_usdc if data.side == "buy" else Decimal(0))
 
         # FOK atomicity: if FOK couldn't fill the full amount, raise instead of
-        # creating a pending order. Compare in the order's own units — `amount`
+        # creating a pending order. Compare in the order's own units • `amount`
         # is a USDC budget for BUY and a share count for SELL, so comparing
         # shares against a USDC budget (the old check) would misfire.
         if data.order_type == "fill_or_kill":
@@ -591,7 +756,7 @@ class OrderService:
                 position.shares_held = total_shares_pos
             else:
                 avg_price = total_cost / total_shares if total_shares > 0 else Decimal(0)
-                # Upsert: atomic INSERT ON CONFLICT DO UPDATE — eliminates race between SELECT and INSERT
+                # Upsert: atomic INSERT ON CONFLICT DO UPDATE • eliminates race between SELECT and INSERT
                 await db.execute(
                     text("""
                         INSERT INTO positions (id, user_id, market_id, outcome_id, shares_held, average_price, realized_pnl, settled_at, created_at, updated_at)
@@ -629,7 +794,7 @@ class OrderService:
             db.add(t)
 
         # AMM (non-book) fill leg. Must key off `amm_shares`, not
-        # `remaining_shares` — that variable is pinned to 0 for BUY orders
+        # `remaining_shares` • that variable is pinned to 0 for BUY orders
         # (their budget remainder is tracked by `remaining_usdc`), so keying
         # off it silently dropped the trade row for every market BUY.
         if amm_shares > 0:
@@ -701,8 +866,28 @@ class OrderService:
 
         try:
             yes_price, no_price = OrderService._get_market_prices(pool)
+            # For a parimutuel market the single binary yes/no pair says nothing
+            # about any outcome, so attach a real price per outcome taken from
+            # the outcome pools. Without it the front end has no value to draw a
+            # per-outcome line from and every outcome except the first sits
+            # frozen. ALL outcomes are priced, not just the traded one, so every
+            # line moves on every frame.
+            outcome_prices: dict[str, float] | None = None
+            if is_parimutuel:
+                by_id = MarketService.outcome_prices(
+                    await MarketService.load_outcome_pools(db, market.id)
+                )
+                outcome_prices = {
+                    o.name: float(by_id.get(str(o.id), Decimal(0)))
+                    for o in all_outcomes
+                    if str(o.id) in by_id
+                }
             await redis_pubsub.publish_price_update(
-                str(market.id), yes_price, no_price, float(market.total_volume)
+                str(market.id),
+                yes_price,
+                no_price,
+                float(market.total_volume),
+                outcome_prices=outcome_prices,
             )
             await redis_pubsub.publish_market_event(str(market.id), "trade:new", {
                 "outcome": data.outcome,
@@ -734,7 +919,7 @@ class OrderService:
             pass
 
         # The fill above moved this market's price, so resting limit orders
-        # waiting on it may now be fillable — don't make them wait for the
+        # waiting on it may now be fillable • don't make them wait for the
         # 30s beat sweep (see _enqueue_limit_sweep_now for the throttling).
         try:
             await _enqueue_limit_sweep_now()
@@ -775,7 +960,7 @@ class OrderService:
         order_id: str,
     ):
         # Lock order + wallet together in deterministic order to prevent deadlocks.
-        # Accept both "pending" and "partial" — partial orders also have
+        # Accept both "pending" and "partial" • partial orders also have
         # remaining_amount that needs to be released back to the wallet.
         result = await db.execute(
             select(Order, Wallet)
@@ -796,7 +981,7 @@ class OrderService:
         order.executed_at = datetime.now(UTC)
 
         # Only BUY orders lock funds, and remaining_amount already tracks the
-        # unspent USDC remainder — release exactly that (never amount-spent).
+        # unspent USDC remainder • release exactly that (never amount-spent).
         if order.side == "buy":
             wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.remaining_amount)
 

@@ -4,8 +4,10 @@ import { useInfiniteQuery } from "@tanstack/react-query"
 import { listPositions } from "@/lib/api/positions"
 import { queryKeys } from "@/lib/api/queryKeys"
 import type { Position } from "@/hooks/api/types/order"
+import { useAuthGate } from "./use-auth-gate"
 
 export function usePositions() {
+  const { enabled } = useAuthGate()
   return useInfiniteQuery({
     queryKey: queryKeys.positions(),
     queryFn: ({ pageParam }) => listPositions({ page: pageParam, page_size: 20 }),
@@ -17,5 +19,6 @@ export function usePositions() {
       hasMore: data.pages[data.pages.length - 1]?.data?.has_more ?? false,
     }),
     staleTime: 10_000,
+    enabled,
   })
 }

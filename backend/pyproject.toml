@@ -1,7 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Polymarket-style prediction market"
+description = "PredictX-style prediction market"
 readme = "README.md"
 requires-python = ">=3.13.0"
 
@@ -29,7 +29,7 @@ dependencies = [
     "sentry-sdk>=2.69.1",
 ]
 
-# Dev-only packages — excluded from the production image via `uv sync --no-dev`,
+# Dev-only packages • excluded from the production image via `uv sync --no-dev`,
 # which keeps pytest/pip-audit (and their transitive trees) out of the runtime
 # venv entirely.
 [dependency-groups]
@@ -53,7 +53,7 @@ ignore = ["E501", "S110", "BLE001", "S311"]
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["S311", "S608", "S106"]
 # Tests assert constantly (S101) and use placeholder credentials in fixtures
-# (S105/S106) — enforce imports, unused code and real bugs, not test style.
+# (S105/S106) • enforce imports, unused code and real bugs, not test style.
 "tests/*" = ["S101", "S105", "S106"]
 "migrations/*" = ["ALL"]
 "app/config.py" = ["S105", "S106"]

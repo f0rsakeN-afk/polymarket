@@ -21,7 +21,7 @@ import { Scatter, type ScatterProps } from "./scatter";
 import { ScatterChartInner } from "./scatter-chart-shell";
 
 export interface ScatterChartProps {
-  /** Data array — each item should have a date field and numeric values */
+  /** Data array • each item should have a date field and numeric values */
   data: Record<string, unknown>[];
   /** Key in data for the x-axis (date). Default: "date" */
   xDataKey?: string;

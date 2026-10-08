@@ -1,7 +1,7 @@
 """Multi-node WebSocket fan-out, and the per-process state behind it.
 
 Two API nodes are just two processes sharing one Redis. The claim under test
-is that a price published on node A reaches a socket attached to node B —
+is that a price published on node A reaches a socket attached to node B •
 which the architecture gets for free, because publishers write to Redis
 pub/sub and *every* node runs its own `listen()` loop that fans those messages
 out to its own local sockets.
@@ -11,7 +11,7 @@ believed, not known, and it was believed wrongly: the earlier audit claimed
 two nodes would silently drop each other's broadcasts. They do not.
 
 The per-process registries (`_ip_connections`, `_user_connections`) are a
-different story — see the counter tests at the bottom for what is genuinely
+different story • see the counter tests at the bottom for what is genuinely
 process-local and what that means for the caps.
 """
 import asyncio
@@ -75,7 +75,7 @@ async def test_a_price_published_on_one_node_reaches_a_socket_on_another():
                     break
 
             assert socket_on_b.sent, (
-                "node B's socket received nothing from node A's publish — "
+                "node B's socket received nothing from node A's publish • "
                 "fan-out is NOT reaching other nodes"
             )
             payload = socket_on_b.sent[0]
@@ -91,7 +91,7 @@ async def test_a_price_published_on_one_node_reaches_a_socket_on_another():
 
 @pytest.mark.asyncio
 async def test_local_registries_stay_local():
-    """Each node only ever tracks its own sockets — that is correct, not a bug,
+    """Each node only ever tracks its own sockets • that is correct, not a bug,
     and it is what makes the Redis fan-out above necessary."""
     node_a, node_b = ConnectionManager(), ConnectionManager()
     market_id = str(uuid4())
@@ -114,7 +114,7 @@ async def test_local_registries_stay_local():
 @pytest.mark.asyncio
 async def test_publish_before_subscribe_is_not_delivered():
     """Redis pub/sub is not a queue. A node that subscribes late misses what it
-    wasn't listening for — which is why the REST refetch-on-reconnect exists.
+    wasn't listening for • which is why the REST refetch-on-reconnect exists.
     This test documents the limit rather than pretending the bus replays."""
     bus = RedisPubSub()
     await bus.connect()
@@ -122,7 +122,7 @@ async def test_publish_before_subscribe_is_not_delivered():
         market_id = str(uuid4())
         await bus.publish_price_update(market_id, 0.9, 0.1, 5.0)
         await asyncio.sleep(0.05)
-        # Nothing was subscribed, so a late subscriber gets nothing — asserted
+        # Nothing was subscribed, so a late subscriber gets nothing • asserted
         # here only to make the semantics explicit; there is no assertion on a
         # socket because none exists on this node.
         assert market_id  # no-op, keeps the intent readable
@@ -148,7 +148,7 @@ async def test_connection_caps_are_enforced_per_process():
     """Documents the real multi-node semantics rather than implying a global
     cap: the limit is 5 per user *per node*. Four nodes means twenty sockets.
 
-    Per-node is the deliberate choice — each node caps the resources it is
+    Per-node is the deliberate choice • each node caps the resources it is
     actually holding, which is what protects it. A global cap would need a
     Redis round-trip on every connect and disconnect, and a counter that leaks
     when a node dies takes the user's quota down with it.
@@ -162,7 +162,7 @@ async def test_connection_caps_are_enforced_per_process():
     rejected = await node.connect(FakeSocket(), str(uuid4()), user_id=user_id)
     assert rejected is False
 
-    # A second "node" starts from zero — that is the multi-node caveat, stated
+    # A second "node" starts from zero • that is the multi-node caveat, stated
     # as an assertion so it can't be quietly forgotten.
     other_node = ConnectionManager()
     assert await other_node.connect(FakeSocket(), str(uuid4()), user_id=user_id) is True
@@ -195,8 +195,8 @@ async def test_counters_do_not_leak_forever():
     """Counters must be *removed*, not zeroed.
 
     They used to be left at 0 forever, which meant every distinct client IP a
-    node ever saw stayed in the dict for the life of the process — an unbounded
-    memory leak proportional to unique clients — and a socket that died without
+    node ever saw stayed in the dict for the life of the process • an unbounded
+    memory leak proportional to unique clients • and a socket that died without
     a clean `disconnect()` left a permanently elevated count, locking that user
     out of websockets with no way to recover.
     """

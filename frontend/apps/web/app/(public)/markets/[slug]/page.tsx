@@ -2,8 +2,8 @@ import { MarketDetailClient } from "./MarketDetailClient"
 
 export async function generateMetadata() {
   return {
-    title: "Market | Polymarket",
-    description: "Trade on this prediction market on Polymarket.",
+    title: "Market | PredictX",
+    description: "Trade on this prediction market on PredictX.",
   }
 }
 

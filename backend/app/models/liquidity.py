@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from sqlalchemy import Column, ForeignKey, Index, Numeric, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index, Numeric, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -16,7 +16,7 @@ class EscrowShortfallError(RuntimeError):
 
     Raised rather than absorbed on purpose. A caller that catches it and pays
     a partial amount has silently converted "owed $100" into "paid $60, owed
-    nothing" — the remainder is unreachable, because nothing records it as
+    nothing" • the remainder is unreachable, because nothing records it as
     still owed and nothing retries it. Failing the transaction keeps the
     obligation intact and leaves it claimable.
     """
@@ -31,10 +31,35 @@ def _decimal(value) -> Decimal:
 
 class LiquidityPool(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "liquidity_pools"
-    __table_args__ = (Index("ix_liquidity_pools_market_id", "market_id"),)
+    __table_args__ = (
+        Index("ix_liquidity_pools_market_id", "market_id"),
+        # One row per (market, outcome). outcome_id is NULL for the binary pool.
+        Index("ix_liquidity_pools_market_outcome", "market_id", "outcome_id", unique=True),
+        # Exactly one binary pool per market. A plain UNIQUE(market_id) cannot
+        # express this: NULLs do not conflict in Postgres, so without this a
+        # second binary pool for the same market would be insertable and every
+        # `scalar_one_or_none()` pool lookup would raise MultipleResultsFound.
+        Index(
+            "uq_liquidity_pools_market_binary",
+            "market_id",
+            unique=True,
+            postgresql_where=text("outcome_id IS NULL"),
+        ),
+    )
 
     market_id = Column(
-        UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), unique=True, nullable=False
+        UUID(as_uuid=True), ForeignKey("markets.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL = the market's single binary pool (2 outcomes: Yes/No).
+    # Set    = this outcome's parimutuel pool (3+ mutually exclusive outcomes).
+    #
+    # Parimutuel pricing: price_i = shares_i / SUM(shares over the market's
+    # outcome pools), so the outcome prices sum to 1 and buying one outcome
+    # raises its price while lowering the others. BinaryAMM is reused unchanged,
+    # constructed per outcome with yes_shares=shares_i and
+    # no_shares=total-shares_i.
+    outcome_id = Column(
+        UUID(as_uuid=True), ForeignKey("outcomes.id", ondelete="CASCADE"), nullable=True
     )
     yes_shares = Column(Numeric(20, 8), default=0, nullable=False)
     no_shares = Column(Numeric(20, 8), default=0, nullable=False)
@@ -49,7 +74,7 @@ class LiquidityPool(Base, UUIDMixin, TimestampMixin):
     # ── Escrow ledger ─────────────────────────────────────────────────────
     # `collateral` is the pool's USDC escrow: the single source of truth for
     # how much money this pool can pay out. `protocol_fees` is a *sub-ledger
-    # inside it* — dollars recorded as owed to the treasury, not extra money.
+    # inside it* • dollars recorded as owed to the treasury, not extra money.
     #
     # Invariant (asserted by tests/test_ledger.py):
     #     sum of user claims the pool owes  <=  collateral  (+ fees recorded)
@@ -61,7 +86,7 @@ class LiquidityPool(Base, UUIDMixin, TimestampMixin):
     def credit_collateral(self, amount) -> Decimal:
         """Move USDC *into* the escrow (AMM buy, split, book-fee withhold, deposit).
 
-        Returns the amount credited. Rejects negatives — money only ever
+        Returns the amount credited. Rejects negatives • money only ever
         enters through an explicit debit of a wallet elsewhere.
         """
         amount = _decimal(amount)
@@ -78,7 +103,7 @@ class LiquidityPool(Base, UUIDMixin, TimestampMixin):
         less than it is about to record as paid destroys the difference: nothing
         marks it unpaid and nothing retries it. An obligation smaller than the
         balance is the only case worth supporting, and it is expressed by the
-        caller computing `min(owed, available)` *before* calling this — so the
+        caller computing `min(owed, available)` *before* calling this • so the
         unpaid remainder stays visible in whatever ledger the caller owns.
 
         `collateral` is never driven below zero. Too little money raises
@@ -91,13 +116,13 @@ class LiquidityPool(Base, UUIDMixin, TimestampMixin):
         available = _decimal(self.collateral or 0)
         if amount > available:
             raise EscrowShortfallError(
-                f"pool {self.id}: collateral shortfall — owe {amount}, hold {available}"
+                f"pool {self.id}: collateral shortfall • owe {amount}, hold {available}"
             )
         self.collateral = available - amount
         return amount
 
     def can_cover(self, amount) -> bool:
-        """True if the escrow can fund `amount` in full. A read-only probe —
+        """True if the escrow can fund `amount` in full. A read-only probe •
         callers that need to branch on it must not debit in the same breath."""
         return _decimal(amount) <= _decimal(self.collateral or 0)
 

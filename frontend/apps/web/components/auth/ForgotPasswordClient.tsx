@@ -62,7 +62,7 @@ export function ForgotPasswordClient() {
     <div className="flex min-h-dvh flex-col items-center justify-center px-4 py-12">
       <div className="mb-8 flex flex-col items-center gap-2">
         <div className="text-foreground"><PolygonMark /></div>
-        <span className="text-sm font-medium text-foreground tracking-tight">Polymarket</span>
+        <span className="text-sm font-medium text-foreground tracking-tight">PredictX</span>
       </div>
 
       <Card className="w-full max-w-sm border-border/60 bg-card/80 backdrop-blur-sm shadow-none">
@@ -81,7 +81,7 @@ export function ForgotPasswordClient() {
           {sent ? (
             <div className="space-y-4">
               <div className="rounded-md border border-border/60 bg-muted/50 px-4 py-6 text-sm text-muted-foreground text-center">
-                Check your inbox — we sent a password reset code to{" "}
+                Check your inbox • we sent a password reset code to{" "}
                 <strong className="text-foreground">{submittedEmail}</strong>.
                 <br />
                 Didn&apos;t receive it? Check your spam folder.

@@ -50,10 +50,15 @@ export function TradesPageClient() {
   }, [])
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight">Trade Feed</h1>
-        <p className="mt-1 text-muted-foreground">Recent trades across all markets</p>
+    <div className="container mx-auto max-w-7xl px-4 py-6 sm:py-8">
+      {/* mb-6 rather than mb-8, and the title scales: on a phone an 24px
+          heading plus 32px of margin pushed the table below the fold for a
+          page whose whole point is the table. */}
+      <div className="mb-5 sm:mb-8">
+        <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Trade Feed</h1>
+        <p className="mt-1 text-sm text-muted-foreground sm:text-base">
+          Recent trades across all markets
+        </p>
       </div>
 
       {pendingCount > 0 && (

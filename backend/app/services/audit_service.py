@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuthAuditEvent
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
 AuthEvent = Literal[
     "login_success",
@@ -42,7 +42,7 @@ class AuthAuditService:
         metadata: dict | None = None,
     ):
         """
-        Write an audit event. Never raises — failures are logged and swallowed.
+        Write an audit event. Never raises • failures are logged and swallowed.
         """
         try:
             audit_event = AuthAuditEvent(

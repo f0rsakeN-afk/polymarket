@@ -38,7 +38,7 @@ function formatDate(iso: string) {
   })
 }
 
-/** Stable color from username — seeded by first char, maps to a hue */
+/** Stable color from username • seeded by first char, maps to a hue */
 const DEPTH_COLORS = [
   "border-primary/40",
   "border-blue-400/40",
@@ -48,7 +48,7 @@ const DEPTH_COLORS = [
 
 function Avatar({ username }: { username: string }) {
   const initials = username.slice(0, 2).toUpperCase()
-  // Hue from first char — gives each user a consistent identity color
+  // Hue from first char • gives each user a consistent identity color
   const hue = username.charCodeAt(0) * 37 % 360
   return (
     <div

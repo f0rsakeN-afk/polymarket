@@ -8,13 +8,13 @@ from app.api.exceptions import NotFoundError
 from app.api.responses import success_response
 from app.database import get_db_replica
 from app.models.comment import Comment
-from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.position import Position
 from app.models.trade import Trade
 from app.models.user import User
+from app.services.market_service import MarketService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/markets", tags=["market_activity"])
 
 
@@ -38,10 +38,7 @@ async def get_market_activity(
         raise NotFoundError("Market not found")
 
     # Market stats
-    pool_result = await db.execute(
-        select(LiquidityPool).where(LiquidityPool.market_id == market.id)
-    )
-    pool = pool_result.scalar_one_or_none()
+    pool = await MarketService.load_binary_pool(db, market.id)
 
     if pool:
         total = float(pool.yes_shares) + float(pool.no_shares)
@@ -50,8 +47,22 @@ async def get_market_activity(
         yes_liquidity = float(pool.yes_shares)
         no_liquidity = float(pool.no_shares)
     else:
-        yes_price = no_price = 0.5
-        yes_liquidity = no_liquidity = 0.0
+        # Parimutuel market: no binary pool exists. Report the leading outcome
+        # against the rest rather than a yes/no split drawn from an arbitrary
+        # pool, and total liquidity across every outcome pool so it reflects the
+        # whole market instead of one outcome's slice.
+        outcome_prices = MarketService.outcome_prices(
+            await MarketService.load_outcome_pools(db, market.id)
+        )
+        if outcome_prices:
+            yes_price = max(outcome_prices.values())
+            no_price = 1 - yes_price
+        else:
+            yes_price = no_price = 0.5
+        yes_liquidity = sum(
+            float(p.yes_shares) for p in await MarketService.load_all_pools(db, market.id)
+        )
+        no_liquidity = 0.0
 
     market_stats = {
         "total_volume": str(market.total_volume),
@@ -117,7 +128,7 @@ async def get_market_activity(
                 "realized_pnl": str(pos.realized_pnl),
             })
 
-    # Recent trades — capped query, use cursor-based pagination for large datasets
+    # Recent trades • capped query, use cursor-based pagination for large datasets
     trades_result = await db.execute(
         select(Trade, User.username)
         .join(User, Trade.user_id == User.id)
@@ -138,7 +149,7 @@ async def get_market_activity(
         for t, username in trades_result.all()
     ]
 
-    # Recent comments — capped query
+    # Recent comments • capped query
     comments_result = await db.execute(
         select(Comment, User.username)
         .join(User, Comment.user_id == User.id)

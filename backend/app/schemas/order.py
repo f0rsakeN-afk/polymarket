@@ -67,5 +67,9 @@ class PositionResponse(BaseModel):
     average_price: MoneyField
     realized_pnl: MoneyField
     unrealized_pnl: MoneyField
+    # The position's own current price. On a parimutuel market this is that
+    # outcome's share of the market, not a yes/no value derived from a pool it
+    # has nothing to do with.
+    current_price: MoneyField | None = None
 
     model_config = {"from_attributes": True}

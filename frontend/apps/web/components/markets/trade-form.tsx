@@ -33,6 +33,9 @@ interface TradeFormProps {
   marketId: string
   currentYesPrice: number
   currentNoPrice: number
+  /** Live per-outcome prices, keyed by lower-cased outcome name.
+   *  Required for 3+ outcome markets, which the book prices alone. */
+  outcomePrices?: Record<string, number>
   outcomes?: Outcome[]
   marketStatus: string
   onSubmit: (order: PlaceOrderInput) => Promise<void>
@@ -64,7 +67,7 @@ function NotLoggedIn() {
 function MarketClosedBanner({ status }: { status: string }) {
   return (
     <div role="alert" className="rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700">
-      Market is <span className="font-medium">{status}</span> — trading is disabled
+      Market is <span className="font-medium">{status}</span> • trading is disabled
     </div>
   )
 }
@@ -72,7 +75,7 @@ function MarketClosedBanner({ status }: { status: string }) {
 function InsufficientBalanceBanner({ balance }: { balance: number }) {
   return (
     <div role="alert" className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-600">
-      Insufficient balance — you have{" "}
+      Insufficient balance • you have{" "}
       <span className="font-medium">${balance.toFixed(2)}</span> available
     </div>
   )
@@ -143,6 +146,7 @@ function TradeForm({
   marketId,
   currentYesPrice,
   currentNoPrice,
+  outcomePrices,
   outcomes,
   marketStatus,
   onSubmit,
@@ -150,13 +154,20 @@ function TradeForm({
   const { data: currentUser } = useCurrentUser()
   const { data: wallet } = useWallet()
 
-  const isMultiOutcome = outcomes && outcomes.length > 2
+  // Parimutuel = no real YES/NO pair, decided by outcome NAME. Counting
+  // outcomes would treat a two-way named market as binary and preselect
+  // "yes" • an outcome that market does not have.
+  const isMultiOutcome = useMemo(() => {
+    if (!outcomes || outcomes.length === 0) return false
+    const names = outcomes.map((o) => o.name.toLowerCase())
+    return !(names.includes("yes") && names.includes("no"))
+  }, [outcomes])
   const [outcome, setOutcome] = useState<string>(
     isMultiOutcome ? (outcomes?.[0]?.name?.toLowerCase() ?? "yes") : "yes"
   )
   const [side, setSide] = useState<"buy" | "sell">("buy")
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
-  // Params the cached quote was fetched for — render gates on match so a
+  // Params the cached quote was fetched for • render gates on match so a
   // stale quote never shows for different inputs (no sync clear in effect).
   const [quoteMeta, setQuoteMeta] = useState<{ marketId: string; outcome: string; side: "buy" | "sell"; amount: number } | null>(null)
   const [quoteLoading, setQuoteLoading] = useState(false)
@@ -165,7 +176,7 @@ function TradeForm({
   const clientOrderId = useMemo(() => crypto.randomUUID(), [])
 
   // Backend quotes expire after 5s (OrderService.QUOTE_TTL) and
-  // place_order rejects a stale quote_id with "Quote expired — please refresh".
+  // place_order rejects a stale quote_id with "Quote expired • please refresh".
   // Drop the quote at its real expiry so we neither show nor send a dead quote.
   useEffect(() => {
     if (!quote) return
@@ -204,12 +215,14 @@ function TradeForm({
   const maxSlippage = useWatch({ control, name: "max_slippage" })
   const postOnly = useWatch({ control, name: "post_only" })
 
+  // Multi-outcome markets are priced by the order book alone (one binary AMM
+  // pool cannot express mutually exclusive outcome prices), so the parent
+  // supplies a per-outcome map. Falling back to 0 here showed the user a
+  // zero price and let them submit against it; falling back to the binary price
+  // would be a different-but-still-wrong quote. Show nothing instead.
+  const namedOutcomePrice = outcomePrices?.[outcome];
   const effectivePrice = isMultiOutcome
-    ? outcome === "yes"
-      ? currentYesPrice
-      : outcome === "no"
-      ? currentNoPrice
-      : 0  // multi-outcome named prices require per-outcome price map from parent
+    ? (namedOutcomePrice ?? 0)
     : outcome === "yes"
     ? currentYesPrice
     : currentNoPrice
@@ -228,7 +241,7 @@ function TradeForm({
   const displayPrice =
     orderType === "limit"
       ? price ?? effectivePrice
-      : // Backend quote has no flat `price` — `price_after` is the post-slippage estimate.
+      : // Backend quote has no flat `price` • `price_after` is the post-slippage estimate.
         quoteVisible && quote
         ? quote.price_after
         : effectivePrice
@@ -247,7 +260,7 @@ function TradeForm({
     if (!amount || Number(amount) <= 0 || orderType !== "market") {
       return
     }
-    // Live quote already covers exactly these inputs — a new one is only needed
+    // Live quote already covers exactly these inputs • a new one is only needed
     // once it expires (TTL effect clears `quote`, flipping this back to false).
     if (quoteMatchesInputs) {
       return
@@ -281,7 +294,7 @@ function TradeForm({
     [setValue]
   )
 
-  // Stable curried handlers — avoid creating new fn per render in lists
+  // Stable curried handlers • avoid creating new fn per render in lists
   const makeOutcomeHandler = useCallback((name: string) => () => handleOutcomeClick(name), [handleOutcomeClick])
 
   const handleSideClick = useCallback(
@@ -335,7 +348,7 @@ function TradeForm({
               <OutcomeButton
                 key={o.id}
                 label={o.name}
-                price={i === 0 ? currentYesPrice : i === 1 ? currentNoPrice : 0}
+                price={outcomePrices?.[o.name.toLowerCase()] ?? 0}
                 selected={outcome === o.name.toLowerCase()}
                 color={i % 2 === 0 ? "green" : "red"}
                 onClick={makeOutcomeHandler(o.name.toLowerCase())}
@@ -405,7 +418,7 @@ function TradeForm({
 
         <Field>
           <FieldLabel htmlFor="max_slippage">
-            Slippage Tolerance — {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
+            Slippage Tolerance • {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
           </FieldLabel>
           <FieldContent>
             <Input

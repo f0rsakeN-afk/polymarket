@@ -11,7 +11,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models.referral import Referral
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/referrals", tags=["referrals"])
 
 
@@ -69,7 +69,7 @@ async def get_referral_stats(
     )
     referrals = result.scalars().all()
 
-    # Aggregate stats across all referrals (not just this page) — single query
+    # Aggregate stats across all referrals (not just this page) • single query
     stats_result = await db.execute(
         select(
             func.count().filter(Referral.status == "completed"),

@@ -78,7 +78,7 @@ class UserResponse(BaseModel):
 # ─── 2FA schemas ─────────────────────────────────────────────────────────────
 
 class TwoFactorSetupResponse(BaseModel):
-    uri: str  # Only return URI — QR code handles provisioning; manual entry key shown once on confirm screen
+    uri: str  # Only return URI • QR code handles provisioning; manual entry key shown once on confirm screen
 
 
 class TwoFactorEnableRequest(BaseModel):

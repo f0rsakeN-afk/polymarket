@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-// Accept both string (form/API) and number (parseFloat result) — backend Decimal coerces either
+// Accept both string (form/API) and number (parseFloat result) • backend Decimal coerces either
 const positiveMoney = z.union([z.string(), z.number()])
 
 export const depositSchema = z.object({

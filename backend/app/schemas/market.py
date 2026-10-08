@@ -10,6 +10,14 @@ class OutcomeResponse(BaseModel):
     id: str
     name: str
     outcome_index: int
+    # This outcome's own price.
+    #
+    # The API used to expose only a single yes_price/no_price pair per market,
+    # which is meaningless for a market with more than two outcomes - the front
+    # end had nothing to show but that one pair, and mapped it onto outcomes
+    # that had nothing to do with it. On a binary market this is 1 - the other
+    # outcome's price.
+    price: float | None = None
 
     model_config = {"from_attributes": True}
 

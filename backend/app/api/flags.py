@@ -13,7 +13,7 @@ from app.models.market import Market
 from app.schemas.flag import FlagCreateRequest, FlagResponse, ResolveFlagRequest
 from app.services.notification_service import NotificationService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/flags", tags=["flags"])
 
 

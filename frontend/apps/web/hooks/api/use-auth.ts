@@ -18,7 +18,7 @@ import { apiErrorMessage } from "@/lib/api/client"
 // NOTE: `useCurrentUser` deliberately lives in `@/hooks/use-auth` (the root
 // file), where it is defined with `retry: false` and `staleTime: 0`. It used
 // to be redefined here with looser options: two hooks, two behaviours, same
-// cache key — whoever imported which one got a different refetch policy. One
+// cache key • whoever imported which one got a different refetch policy. One
 // definition, re-exported from `hooks/index.ts`.
 
 export function useLogin() {
@@ -99,7 +99,7 @@ export function useRegister() {
       referralCode?: string
     }) => registerApi.register(email, username, password, referralCode),
     onSuccess: (res) => {
-      sileo.success({ title: res.message ?? "Account created — check your email to verify" })
+      sileo.success({ title: res.message ?? "Account created • check your email to verify" })
     },
     onError: (err) => {
       sileo.error({ title: apiErrorMessage(err, "Registration failed") })

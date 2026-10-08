@@ -39,7 +39,7 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
         Index("ix_transactions_user_id", "user_id"),
         Index("ix_transactions_user_created", "user_id", "created_at"),
         Index("ix_transactions_wallet_id", "wallet_id"),
-        # Idempotency guards (partial unique indexes — NULL reference_ids ignored):
+        # Idempotency guards (partial unique indexes • NULL reference_ids ignored):
         # - one withdrawal per idempotency key (concurrent double-submit safe)
         # - one deposit per Stripe payment_intent_id (webhook double-delivery safe)
         Index(

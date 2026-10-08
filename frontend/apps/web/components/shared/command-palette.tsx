@@ -1,10 +1,17 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@workspace/ui/components/command"
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "@workspace/ui/components/command"
 import { Kbd } from "@workspace/ui/components/kbd"
 import { Badge } from "@workspace/ui/components/badge"
-import { cn } from "@workspace/ui/lib/utils"
 import { SearchIcon, ClockIcon, XIcon } from "lucide-react"
 
 export interface CommandItem {
@@ -33,15 +40,20 @@ const KBD_SHORTCUTS = [
   { key: "esc", label: "close" },
 ]
 
-function CommandPaletteItem({ item, isSelected, onSelect }: { item: CommandItem; isSelected: boolean; onSelect: () => void }) {
+function CommandPaletteItem({ item, onSelect }: { item: CommandItem; onSelect: () => void }) {
+  // cmdk scores the `value` prop together with `keywords`, so hand it the full
+  // searchable text. Selection highlighting needs no manual state: the
+  // CommandItem primitive styles itself from cmdk's data-selected attribute.
+  const keywords = [item.description, ...(item.keywords ?? [])].filter(
+    (k): k is string => Boolean(k)
+  )
+
   return (
     <CommandItem
-      value={item.id}
+      value={item.label}
+      keywords={keywords}
       onSelect={onSelect}
-      className={cn(
-        "flex items-center gap-3 py-2.5 px-3 cursor-pointer",
-        isSelected && "bg-muted"
-      )}
+      className="flex items-center gap-3 py-2.5 px-3 cursor-pointer"
     >
       {item.icon && (
         <span className="flex size-5 items-center justify-center rounded-sm bg-muted p-1">{item.icon}</span>
@@ -69,7 +81,6 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const [recent, setRecent] = useState<string[]>(recentSearches)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -77,7 +88,8 @@ export function CommandPalette({
   const closePalette = useCallback(() => { setOpen(false); setSearch("") }, [])
   const handleOpenChange = useCallback((o: boolean) => { setOpen(o); if (!o) setSearch("") }, [])
 
-  // Group items by category
+  // Group items by category. Filtering is left entirely to cmdk, which scores
+  // each item's value+keywords and hides non-matches itself.
   const groupedItems = useMemo(() => {
     const groups: Record<string, CommandItem[]> = {}
     items.forEach((item) => {
@@ -87,34 +99,13 @@ export function CommandPalette({
     return groups
   }, [items])
 
-  // Filter items based on search
-  const filteredItems = useMemo(() => {
-    if (!search.trim()) return items
-    const q = search.toLowerCase()
-    return items.filter(
-      (item) =>
-        item.label.toLowerCase().includes(q) ||
-        item.description?.toLowerCase().includes(q) ||
-        item.keywords?.some((k) => k.toLowerCase().includes(q))
-    )
-  }, [items, search])
-
-  const filteredGrouped = useMemo(() => {
-    if (!search.trim()) return groupedItems
-    const groups: Record<string, CommandItem[]> = {}
-    filteredItems.forEach((item) => {
-      if (!groups[item.category]) groups[item.category] = []
-      groups[item.category]!.push(item)
-    })
-    return groups
-  }, [filteredItems, groupedItems, search])
-
-  const flatFiltered = useMemo(
-    () => (search.trim() ? filteredItems : []),
-    [search, filteredItems]
-  )
-
-  // Keyboard shortcut to open
+  // ⌘K / Ctrl+K toggles the palette.
+  //
+  // The listener stays registered at every viewport - a tablet with a keyboard
+  // case, or an iPad with a hardware keyboard attached, genuinely can fire
+  // Ctrl+K, and refusing it there would be a regression. Only the *hint* is
+  // hidden on touch (see the Kbd below); a shortcut that stops working the
+  // moment the hint disappears would be a worse bug than a stray one.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -141,44 +132,13 @@ export function CommandPalette({
     [recent, maxRecent, onRecentSearchChange]
   )
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const count = flatFiltered.length
-
-      switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault()
-          setSelectedIndex((i) => (i + 1) % count)
-          break
-        case "ArrowUp":
-          e.preventDefault()
-          setSelectedIndex((i) => (i - 1 + count) % count)
-          break
-        case "Enter":
-          e.preventDefault()
-          if (flatFiltered[selectedIndex]) {
-            handleSelect(flatFiltered[selectedIndex])
-          }
-          break
-        case "Escape":
-          e.preventDefault()
-          setOpen(false)
-          setSearch("")
-          break
-      }
-    },
-    [flatFiltered, selectedIndex, handleSelect]
-  )
-
   const handleSearchChange = useCallback((value: string) => {
     setSearch(value)
-    setSelectedIndex(0)
   }, [])
 
   const handleRecentClick = useCallback(
     (label: string) => {
       setSearch(label)
-      setSelectedIndex(0)
       inputRef.current?.focus()
     },
     []
@@ -186,93 +146,96 @@ export function CommandPalette({
 
   return (
     <>
-      {/* Trigger button */}
+      {/*
+        Visually hidden at every size.
+
+        The trigger is no longer part of the header's visible affordances - the
+        header search field and the mobile drawer cover navigation. `hidden` with
+        no breakpoint means it is gone everywhere.
+
+        Rendered rather than unmounted, so the ⌘K/Ctrl+K shortcut keeps working:
+        CSS `hidden` also removes the button from the tab order and the
+        accessibility tree, so it is genuinely absent to users, while the
+        keydown listener below stays live for anyone who still reaches for the
+        shortcut. Removing the component would silently kill the keyboard path
+        with nothing left to indicate it existed.
+      */}
       <button
         onClick={openPalette}
-        className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
+        className="hidden shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50"
       >
         <SearchIcon className="size-4" />
-        <span className="hidden sm:inline">Search...</span>
-        <Kbd className="ml-2 hidden sm:inline-flex size-5 text-[10px]">⌘K</Kbd>
+        <span>Search...</span>
+        <Kbd className="ml-2 inline-flex size-5 text-[10px]">⌘K</Kbd>
       </button>
 
       {/* Dialog */}
       <CommandDialog open={open} onOpenChange={handleOpenChange}>
         <div className="relative">
-          <CommandInput
-            ref={inputRef as React.RefObject<HTMLInputElement>}
-            value={search}
-            onValueChange={handleSearchChange}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            className="border-0! bg-transparent! pb-2!"
-          />
-          <button
-            onClick={closePalette}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted"
-            aria-label="Close"
-          >
-            <XIcon className="size-4" />
-          </button>
-        </div>
+            <CommandInput
+              ref={inputRef as React.RefObject<HTMLInputElement>}
+              value={search}
+              onValueChange={handleSearchChange}
+              placeholder={placeholder}
+              className="border-0! bg-transparent! pb-2!"
+            />
+            <button
+              onClick={closePalette}
+              className="absolute right-3 top-1/2 -translate-y-0.5 p-1 rounded hover:bg-muted"
+              aria-label="Close"
+            >
+              <XIcon className="size-4" />
+            </button>
+          </div>
 
-        <div className="border-t border-border/50" />
+          <div className="border-t border-border/50" />
 
-        {/* Keyboard shortcuts hint */}
-        <div className="flex items-center gap-4 px-3 py-2 border-b border-border/50">
-          {KBD_SHORTCUTS.map((s) => (
-            <div key={s.key} className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <Kbd className="size-4 text-[10px]">{s.key}</Kbd>
-              <span>{s.label}</span>
-            </div>
-          ))}
-        </div>
+          {/* Keyboard shortcuts hint */}
+          <div className="flex items-center gap-4 px-3 py-2 border-b border-border/50">
+            {KBD_SHORTCUTS.map((s) => (
+              <div key={s.key} className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <Kbd className="size-4 text-[10px]">{s.key}</Kbd>
+                <span>{s.label}</span>
+              </div>
+            ))}
+          </div>
 
-        <CommandList className="max-h-[320px]">
-          {!search.trim() && recent.length > 0 && (
-            <>
-              <CommandGroup heading="Recent">
-                {recent.map((label) => (
-                  <CommandItem
-                    key={label}
-                    value={label}
-                    onSelect={() => handleRecentClick(label)}
-                    className="flex items-center gap-2 py-2 cursor-pointer"
-                  >
-                    <ClockIcon className="size-4 text-muted-foreground" />
-                    <span>{label}</span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-              <CommandSeparator />
-            </>
-          )}
-
-          {search.trim() && filteredItems.length === 0 && (
+          <CommandList className="max-h-[320px]">
+            {/* cmdk renders CommandEmpty only when its own filtered count is 0,
+                so it needs no conditional of its own. */}
             <CommandEmpty>{emptyMessage}</CommandEmpty>
-          )}
 
-          {Object.entries(filteredGrouped).map(([category, categoryItems]) => (
-            <CommandGroup key={category} heading={category}>
-              {categoryItems.map((item) => {
-                const flatIdx = flatFiltered.indexOf(item)
-                const isSelected = !search.trim() ? false : flatIdx === selectedIndex
-                return (
+            {!search.trim() && recent.length > 0 && (
+              <>
+                <CommandGroup heading="Recent">
+                  {recent.map((label) => (
+                    <CommandItem
+                      key={label}
+                      value={label}
+                      onSelect={() => handleRecentClick(label)}
+                      className="flex items-center gap-2 py-2 cursor-pointer"
+                    >
+                      <ClockIcon className="size-4 text-muted-foreground" />
+                      <span>{label}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+                <CommandSeparator />
+              </>
+            )}
+
+            {Object.entries(groupedItems).map(([category, categoryItems]) => (
+              <CommandGroup key={category} heading={category}>
+                {categoryItems.map((item) => (
                   <CommandPaletteItem
                     key={item.id}
                     item={item}
-                    isSelected={isSelected}
                     onSelect={() => handleSelect(item)}
                   />
-                )
-              })}
-            </CommandGroup>
-          ))}
-
-          {!search.trim() && Object.keys(groupedItems).length === 0 && (
-            <CommandEmpty>{emptyMessage}</CommandEmpty>
-          )}
-        </CommandList>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
       </CommandDialog>
     </>
   )

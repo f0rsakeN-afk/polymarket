@@ -36,7 +36,7 @@ export interface Transaction {
   type: TransactionType
   /**
    * SIGNED decimal string: negative = money out, positive = money in.
-   * Derive the display sign from this — never from `type`.
+   * Derive the display sign from this • never from `type`.
    */
   amount: string
   balance_after: string

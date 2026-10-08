@@ -3,6 +3,13 @@
   "display": "React Library",
   "extends": "./base.json",
   "compilerOptions": {
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // base.json uses NodeNext, which requires explicit `.js` extensions on every
+    // relative import. These packages are only ever consumed by a bundler
+    // (Next/Turbopack), which resolves extensionless paths, so NodeNext made
+    // `tsc` reject ~436 imports that the bundler handles fine. This matches what
+    // nextjs.json already does for the app.
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
   }
 }

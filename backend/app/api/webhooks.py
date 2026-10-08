@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.wallet import Transaction, Wallet
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 STRIPE_TOLERANCE = 300  # 5 minutes
@@ -24,10 +24,10 @@ async def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) 
 
     Contract:
       * returns the parsed event as a **plain dict** (stripe's typed objects
-        are not mappings — ``event.get(...)`` would raise — so we flatten at
+        are not mappings • ``event.get(...)`` would raise • so we flatten at
         this boundary and the rest of the handler works with plain JSON);
       * raises :class:`UnauthorizedError` (401) when the delivery cannot be
-        authenticated — signature missing/malformed/mismatched, timestamp
+        authenticated • signature missing/malformed/mismatched, timestamp
         outside the tolerance window, or no secret configured (fail closed:
         an unverifiable delivery must never be trusted);
       * raises :class:`ValidationError` (422) only once the signature has been
@@ -35,17 +35,17 @@ async def verify_stripe_signature(payload: bytes, sig_header: str, secret: str) 
 
     ``stripe.Webhook.construct_event`` verifies the signature *before* it
     parses JSON, so a parse failure can only happen for an authentically
-    signed body — that ordering is what lets us distinguish 401 from 422.
+    signed body • that ordering is what lets us distinguish 401 from 422.
     """
     if not secret:
         # Misconfiguration must not become "accept everything".
-        logger.error("STRIPE_WEBHOOK_SECRET is not configured — rejecting webhook")
+        logger.error("STRIPE_WEBHOOK_SECRET is not configured • rejecting webhook")
         raise UnauthorizedError("Webhook signing secret is not configured")
 
     try:
         body = payload.decode("utf-8")
     except UnicodeDecodeError:
-        # Cannot even feed it to the verifier — treat as unauthenticated.
+        # Cannot even feed it to the verifier • treat as unauthenticated.
         raise UnauthorizedError("Invalid Stripe signature")
 
     try:
@@ -77,7 +77,7 @@ async def stripe_webhook(
 ):
     payload = await request.body()
 
-    # Raises UnauthorizedError (401) / ValidationError (422) — handled globally.
+    # Raises UnauthorizedError (401) / ValidationError (422) • handled globally.
     event = await verify_stripe_signature(
         payload, stripe_signature or "", settings.stripe_webhook_secret
     )
@@ -113,19 +113,19 @@ async def stripe_webhook(
             logger.info(f"Stripe deposit already processed: {payment_intent_id}")
             return success_response({"status": "already_processed"})
 
-        # Credit wallet — lock row to prevent concurrent webhook double-credit
+        # Credit wallet • lock row to prevent concurrent webhook double-credit
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user_id).with_for_update()
         )
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
-            # Return 500 so Stripe retries — the wallet should exist for any active user
+            # Return 500 so Stripe retries • the wallet should exist for any active user
             logger.error(f"Wallet not found for user {user_id}")
             raise HTTPException(status_code=500, detail="Wallet not found, will retry")
 
         amount = (Decimal(amount_cents) / Decimal(100)).quantize(Decimal("0.01"))  # cents to dollars, Decimal-safe
 
-        # Build transaction record BEFORE updating balance — balance_after is set
+        # Build transaction record BEFORE updating balance • balance_after is set
         # after the amount is added so the record is always consistent.
         tx = Transaction(
             user_id=user_id,
@@ -139,7 +139,7 @@ async def stripe_webhook(
         )
         db.add(tx)
 
-        # Apply balance change — if this fails (e.g. constraint), tx record
+        # Apply balance change • if this fails (e.g. constraint), tx record
         # is rolled back along with it. No orphaned credit.
         wallet.balance += amount
 
@@ -161,7 +161,7 @@ async def stripe_webhook(
             if existing.scalar_one_or_none():
                 logger.info(f"Stripe deposit already processed (race): {payment_intent_id}")
                 return success_response({"status": "already_processed"})
-            # Not a dup — re-raise so Stripe retries
+            # Not a dup • re-raise so Stripe retries
             raise HTTPException(status_code=500, detail="Failed to process deposit, will retry") from exc
 
         logger.info(f"Deposit credited: user={user_id} amount={amount} PI={payment_intent_id}")

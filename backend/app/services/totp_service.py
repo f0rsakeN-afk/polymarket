@@ -9,7 +9,7 @@ from app.config import settings
 class TOTPService:
     """
     TOTP 2FA using pyotp (RFC 6238 compliant).
-    Encryption key is separate from JWT_SECRET — rotated independently.
+    Encryption key is separate from JWT_SECRET • rotated independently.
     """
 
     @staticmethod
@@ -18,7 +18,7 @@ class TOTPService:
         return pyotp.random_base32()
 
     @staticmethod
-    def get_totp_uri(secret: str, email: str, issuer: str = "Polymarket") -> str:
+    def get_totp_uri(secret: str, email: str, issuer: str = "PredictX") -> str:
         """Return an otpauth:// URI for QR code scanning (Google Authenticator, Authy, etc.)."""
         totp = pyotp.TOTP(secret)
         return totp.provisioning_uri(name=email, issuer_name=issuer)

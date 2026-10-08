@@ -293,7 +293,7 @@ async def test_create_dispute(client: AsyncClient, admin_user, test_user, test_m
 async def test_get_disputes_for_market(client: AsyncClient, admin_user, test_user, test_market):
     client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
-    # Endpoint requires admin — use admin token
+    # Endpoint requires admin • use admin token
     client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.get(f"/api/v1/disputes/market/{test_market.id}")
     assert resp.status_code == 200
@@ -344,9 +344,9 @@ async def test_create_reply_depth_limit_exceeded(client: AsyncClient, admin_user
     c2 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L1", "parent_id": c1["id"]})).json()["data"]
     c3 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L2", "parent_id": c2["id"]})).json()["data"]
     c4 = (await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L3", "parent_id": c3["id"]})).json()["data"]
-    # c4 is depth=3 (MAX_DEPTH) — the deepest allowed reply
+    # c4 is depth=3 (MAX_DEPTH) • the deepest allowed reply
     assert c4["depth"] == 3
-    # r5 is depth=4 — exceeds limit, must be rejected
+    # r5 is depth=4 • exceeds limit, must be rejected
     r5 = await client.post(f"/api/v1/markets/{test_market.slug}/comments", json={"content": "L4", "parent_id": c4["id"]})
     assert r5.status_code == 422
 
@@ -598,7 +598,7 @@ async def test_delete_comment_already_deleted(client: AsyncClient, test_user, te
     comment_id = c_resp.json()["data"]["id"]
 
     await client.delete(f"/api/v1/markets/{test_market.slug}/comments/{comment_id}")
-    # Soft-delete is idempotent — second delete returns 200 (comment found but already deleted)
+    # Soft-delete is idempotent • second delete returns 200 (comment found but already deleted)
     resp = await client.delete(f"/api/v1/markets/{test_market.slug}/comments/{comment_id}")
     assert resp.status_code == 200
 

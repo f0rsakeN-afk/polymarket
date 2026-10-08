@@ -15,7 +15,7 @@ from app.models.order import Order
 from app.schemas.order import OrderRequest, QuoteRequest
 from app.services.order_service import OrderService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 
@@ -96,7 +96,7 @@ async def get_order(order_id: str, request: Request, db: AsyncSession = Depends(
 @router.get("/", summary="List orders")
 async def list_orders(
     request: Request,
-    cursor: str | None = Query(None, max_length=512, description="Cursor for keyset pagination — order created_at ISO string"),
+    cursor: str | None = Query(None, max_length=512, description="Cursor for keyset pagination • order created_at ISO string"),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     side: str | None = None,

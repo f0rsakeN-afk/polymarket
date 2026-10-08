@@ -11,9 +11,9 @@ from starlette.types import ASGIApp
 from app.config import settings
 from app.services.rate_limit_service import LimitType, RateLimitService
 
-logger = logging.getLogger("polymarket")
+logger = logging.getLogger("PredictX")
 
-# Trusted proxy chain — only honour X-Forwarded-For when the request came from one of these.
+# Trusted proxy chain • only honour X-Forwarded-For when the request came from one of these.
 # In Docker/K8s: set TRUSTED_PROXY_IPS="10.0.0.0/8,172.16.0.0/12" etc.
 _TRUSTED_PROXIES: list[str] = [
     ip.strip()
@@ -38,7 +38,7 @@ def _get_client_ip(request: Request) -> str:
     configured proxy IP (TRUSTED_PROXY_IPS). Anything else is ignored:
     the header is attacker-controlled, so honouring it lets a client rotate
     fake IPs to bypass every rate limit and poison the audit trail with
-    arbitrary source addresses. This is deliberately fail-closed — set
+    arbitrary source addresses. This is deliberately fail-closed • set
     TRUSTED_PROXY_IPS to the nginx/container proxy address in production,
     otherwise every request appears to come from that proxy and shares one
     rate-limit bucket.
@@ -52,7 +52,7 @@ def _get_client_ip(request: Request) -> str:
 
     if forwarded and not _TRUSTED_PROXIES and settings.app_env == "production":
         logger.warning(
-            "TRUSTED_PROXY_IPS is empty but X-Forwarded-For was presented — "
+            "TRUSTED_PROXY_IPS is empty but X-Forwarded-For was presented • "
             "header ignored (fail-closed). Set TRUSTED_PROXY_IPS to the proxy "
             "address so per-user rate limiting works behind nginx."
         )
@@ -62,6 +62,16 @@ def _get_client_ip(request: Request) -> str:
 
 def _get_auth_limit_type(path: str) -> LimitType:
     """Map auth path to its limit type."""
+    # Silent token rotation is its own bucket, not AUTH_FAST. AUTH_FAST is 3/min
+    # because every endpoint in it sends an email or reveals whether an account
+    # exists • the tight cap is the point. `/auth/refresh` does neither: it is a
+    # cookie-to-cookie rotation that a signed-in client performs silently, and
+    # 3/min meant a burst of 401s (a flaky network, a laptop waking from sleep
+    # with an expired access token, several components refetching at once) got
+    # the client 429'd and locked out of recovering its own live session. It
+    # still gets its own generous-but-bounded budget, keyed per IP.
+    if path == "/api/v1/auth/refresh":
+        return LimitType.AUTH_REFRESH
     # High-cost decisions: verify code, login, reset password
     if path in (
         "/api/v1/auth/login",
@@ -78,7 +88,7 @@ def _get_auth_limit_type(path: str) -> LimitType:
 # Security headers applied to every response
 # Hard cap on request body size, enforced in RateLimitMiddleware before the
 # body is buffered. Largest legitimate payload is a market description (5000
-# chars) or dispute evidence (5000 chars) — 256 KiB leaves a wide margin.
+# chars) or dispute evidence (5000 chars) • 256 KiB leaves a wide margin.
 _MAX_BODY_BYTES = 256 * 1024
 
 SECURITY_HEADERS = {
@@ -90,11 +100,34 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'none'",  # Prevent XSS and data injection
 }
 
+# The CSP above is right for JSON API responses but breaks the interactive docs:
+# they are HTML pages that pull Swagger UI's CSS/JS from jsdelivr and fetch
+# /openapi.json at runtime. Under `default-src 'none'` the browser blocks all
+# three, `SwaggerUIBundle` never gets defined, and /docs renders as a blank
+# page (HTML still returns 200, so it looks like a server problem).
+# These routes get a CSP naming exactly what Swagger UI needs and nothing more.
+# Unreachable in production anyway • app.py sets docs_url/redoc_url to None there.
+_DOCS_CSP = (
+    "default-src 'none'; "
+    "script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'none'"
+)
+
+_DOCS_PATHS = ("/docs", "/redoc", "/docs/oauth2-redirect")
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
+        headers = SECURITY_HEADERS
+        if request.url.path.startswith(_DOCS_PATHS):
+            headers = {**SECURITY_HEADERS, "Content-Security-Policy": _DOCS_CSP}
+        for header, value in headers.items():
             response.headers[header] = value
         # HSTS only when running as production
         if settings.app_env == "production":
@@ -150,12 +183,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # can't rely on an environment being set to "development" to slip past it.
         # localhost/127.0.0.1 are always allowed for local development.
         # Non-browser clients (curl, server-to-server) send no Origin and are
-        # unaffected — they are handled by SameSite + the JSON content-type rule.
+        # unaffected • they are handled by SameSite + the JSON content-type rule.
         origin = request.headers.get("origin")
         if origin:
             is_allowed = False
             if not self._allowed_origins:
-                # No ALLOWED_ORIGINS configured — deny all cross-origin requests
+                # No ALLOWED_ORIGINS configured • deny all cross-origin requests
                 is_allowed = False
             elif "*" in self._allowed_origins:
                 is_allowed = True
@@ -223,7 +256,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 content={
                     "success": False,
                     "error": (
-                        f"Too many requests — try again in {retry_after}s"
+                        f"Too many requests • try again in {retry_after}s"
                         if retry_after
                         else "Too many requests"
                     ),

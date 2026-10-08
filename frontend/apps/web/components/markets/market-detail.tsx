@@ -22,11 +22,17 @@ import { LiveTradeTicker } from "./live-trade-ticker"
 import { SkeletonMarketDetail } from "@/components/shared/skeletons"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
-import type { PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
+import type { Trade } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  buildLivePricePoint,
+  buildOutcomePrices,
+  patchMarketPrices,
+  type MarketPriceCache,
+} from "@/lib/live-price"
 import { apiErrorMessage } from "@/lib/api/client"
 
-// visx/d3 chart code splits into its own chunk and never SSR-renders —
+// visx/d3 chart code splits into its own chunk and never SSR-renders •
 // the detail page paints text/orderbook first, charts hydrate after.
 function ChartFallback() {
   return <div className="h-[220px] animate-pulse rounded-md bg-muted/60" aria-hidden="true" />
@@ -73,41 +79,44 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const { data: priceHistoryData } = usePriceHistory(slug)
 
   // useOrderBook already uses queryKeys.orderBook(slug) = ["orderbook", slug]
-  // which is the same key the WS 'orderbook:update' message writes to — no extra fetch on WS events
+  // which is the same key the WS 'orderbook:update' message writes to • no extra fetch on WS events
   const { data: orderbookData } = useOrderBook(slug)
   // Derive first outcome's bids/asks for the header display (same select as before)
   const headerOutcome = useMemo(() => {
-    if (!orderbookData?.outcomes) return null
-    return Object.values(orderbookData.outcomes)[0] ?? null
+    if (!orderbookData?.data?.outcomes) return null
+    return Object.values(orderbookData.data.outcomes)[0] ?? null
   }, [orderbookData])
 
   /**
-   * Per-outcome mid price from the orderbook.
-   * GET /markets/{slug} does NOT put a price on `outcomes` — only the market-level
-   * yes_price/no_price. Multi-outcome markets therefore have no price anywhere else,
-   * so we derive it here (best bid/ask midpoint) instead of reading a field that
-   * was never there.
+   * Per-outcome price, from the API's `outcomes[].price` when present.
+   *
+   * buildOutcomePrices holds the ordering and the reasoning: the API price is
+   * authoritative and the orderbook midpoint is only a fallback, because a
+   * resting book is often empty on a thin market and must not blank out a price
+   * the backend already knows. Deriving the price purely from the orderbook was
+   * the original defect - with no orders resting, every outcome fell back to
+   * the same even split, which is why the page showed "Yes 75 / No 25" for an
+   * eight-way market.
    */
-  const outcomePrices = useMemo(() => {
-    const map: Record<string, number> = {}
-    for (const [name, book] of Object.entries(orderbookData?.outcomes ?? {})) {
-      const bids = (book.bids ?? []).map((b) => Number(b.price)).filter((p) => Number.isFinite(p))
-      const asks = (book.asks ?? []).map((a) => Number(a.price)).filter((p) => Number.isFinite(p))
-      const bestBid = bids.length ? Math.max(...bids) : NaN
-      const bestAsk = asks.length ? Math.min(...asks) : NaN
-      if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) map[name] = (bestBid + bestAsk) / 2
-      else if (Number.isFinite(bestAsk)) map[name] = bestAsk
-      else if (Number.isFinite(bestBid)) map[name] = bestBid
-    }
-    return map
-  }, [orderbookData])
+  const outcomePrices = useMemo(
+    () =>
+      buildOutcomePrices(
+        market?.outcomes,
+        orderbookData?.data?.outcomes as never
+      ),
+    [orderbookData, market?.outcomes]
+  )
 
   /** Orderbook keys are lower-cased outcome names; fall back to an even split. */
   const priceFor = useCallback(
     (outcomeName: string, fallback: number) => outcomePrices[outcomeName.toLowerCase()] ?? fallback,
     [outcomePrices]
   )
-  // WS-only points — chart renders history + seeds + these, capped at 200
+
+  // outcomePrices is already keyed by lower-cased outcome name (the orderbook's
+  // own key shape), which is exactly what trade-form selects by, so it passes
+  // straight through.
+  // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
 
@@ -122,24 +131,36 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     }
     if (msg.type === "market:price_update") {
       const now = Math.floor(Date.now() / 1000)
-      setWsPoints((prev) => {
-        const point: Record<string, number | string> = { time: now }
-        if (msg.outcome_prices) {
-          const prices = Object.values(msg.outcome_prices)
-          // value = first outcome price for animation
-          point["value"] = prices[0] ?? 0
-          for (const [name, price] of Object.entries(msg.outcome_prices)) {
-            point[name] = price
-          }
-        } else if (msg.yes_price != null && msg.no_price != null) {
-          // Binary: value=YES for smooth YES line animation, YES/NO keys for the two colored lines
-          point["value"] = msg.yes_price
-          point["Yes"] = msg.yes_price
-          point["No"] = msg.no_price
-        }
-        const next = [...prev, point as LiveLinePoint]
-        return next.slice(-200)
-      })
+
+      // Build the point OUTSIDE the state updater. React may invoke an updater
+      // more than once (StrictMode double-invokes), so side effects inside it
+      // are not safe. Both helpers are pure and unit-tested in lib/live-price.
+      const point = buildLivePricePoint(msg, now)
+
+      // A partial frame yields null and is dropped: a point with no `value`
+      // renders as 0 and drags the live tip to the floor.
+      if (point) {
+        setWsPoints((prev) => [...prev, point as LiveLinePoint].slice(-200))
+      }
+
+      // Push the new price into the cached market.
+      //
+      // Without this the chart moved but `market.yes_price` did not, so the big
+      // YES/NO numbers and - worse - `currentYesPrice`/`currentNoPrice`, which
+      // price the order form, kept quoting the last HTTP fetch. `useMarket` has
+      // staleTime but NO refetchInterval and nothing else invalidates it, so the
+      // form could sit on a stale price indefinitely while the chart disagreed.
+      //
+      // setQueryData (not invalidateQueries) keeps it instantaneous, with no
+      // network round-trip.
+      queryClient.setQueryData(
+        queryKeys.market(slug),
+        (prev) =>
+          patchMarketPrices(
+            prev as MarketPriceCache | undefined,
+            msg
+          ) as typeof prev
+      )
     }
     if (msg.type === "market:resolved") {
       sileo.info({
@@ -181,20 +202,26 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const { yesOutcome, noOutcome, outcomeList } = useMemo(() => {
     const outcomes = market?.outcomes ?? []
-    const yes = outcomes.find((o) => o.name.toLowerCase() === "yes")
-    const no = outcomes.find((o) => o.name.toLowerCase() === "no")
     return {
-      yesOutcome: yes ?? outcomes[0],
-      noOutcome: no ?? outcomes[1],
+      // Matched by name, never by position. The previous
+      // `yes ?? outcomes[0]` / `no ?? outcomes[1]` fallbacks made this pair
+      // non-null for EVERY market with two or more outcomes, so `isBinary`
+      // below was always true - and an eight-way market like
+      // "euro-2024-winner" rendered as "Yes 75 / No 25" taken from the binary
+      // pool's yes_price/no_price, which for a market with no Yes or No outcome
+      // are meaningless seed values, not anybody's price.
+      yesOutcome: outcomes.find((o) => o.name.toLowerCase() === "yes"),
+      noOutcome: outcomes.find((o) => o.name.toLowerCase() === "no"),
       outcomeList: outcomes,
     }
   }, [market])
 
+  // Binary only when the outcomes really are the YES/NO pair.
   const isBinary = !!(yesOutcome && noOutcome)
 
   const outcomeNames = useMemo(() => outcomeList.map((o) => o.name), [outcomeList])
 
-  // Stable seed clock — captured once per market so re-renders don't shift the chart
+  // Stable seed clock • captured once per market so re-renders don't shift the chart
   const [seedTime] = useState(() => Math.floor(Date.now() / 1000))
 
   // Two seed points from current market prices so the chart renders immediately
@@ -228,20 +255,31 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     return [seedPoint, seedPoint2] as LiveLinePoint[]
   }, [market, outcomeList, isBinary, seedTime, priceFor])
 
-  // Historical points from fetched price history — shown behind seeds/live data
+  // Historical points from fetched price history • shown behind seeds/live data
   const historicalPoints = useMemo(() => {
     if (!priceHistoryData || priceHistoryData.length === 0) return [] as LiveLinePoint[]
 
-    return priceHistoryData.map((p: PriceHistoryPoint) => {
-      const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000 }
-      // value drives the first LiveLine (YES for binary)
-      const firstOutcome = p.outcomes[0]
-      point["value"] = Number(firstOutcome?.price ?? 0)
-      for (const o of p.outcomes) {
-        point[o.name] = Number((o as unknown as { price?: string }).price ?? 0)
+    // Skip samples with no usable price. Defaulting to 0 here (as `?? 0` did)
+    // put real market history on the floor, which is exactly the "chart dives
+    // to zero" symptom; a missing price is missing, not zero.
+    const points: LiveLinePoint[] = []
+    for (const p of priceHistoryData) {
+      const outcomes = p.outcomes ?? []
+      const value = Number(outcomes[0]?.price)
+      if (!Number.isFinite(value)) continue
+
+      const point: Record<string, number | string> = {
+        time: new Date(p.timestamp).getTime() / 1000,
+        // value drives the first LiveLine (YES for binary)
+        value,
       }
-      return point as LiveLinePoint
-    })
+      for (const o of outcomes) {
+        const price = Number((o as unknown as { price?: string }).price)
+        if (Number.isFinite(price)) point[o.name] = price
+      }
+      points.push(point as LiveLinePoint)
+    }
+    return points
   }, [priceHistoryData])
 
   const priceHistory = useMemo(
@@ -314,10 +352,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-4">
-
+    <div className="grid gap-4 sm:gap-6 lg:grid-cols-4">
       {/* Main content */}
-      <div className="space-y-6 lg:col-span-3">
+      <div className="min-w-0 space-y-4 sm:space-y-6 lg:col-span-3">
         {/* Resolution banner */}
         {market.status === "resolved" && (
           <div role="status" className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
@@ -369,14 +406,22 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             )}
             <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
           </div>
-          <h1 className="text-2xl font-bold leading-tight tracking-tight">{market.question}</h1>
+          {/*
+            Fluid type rather than one fixed size. A prediction-market question
+            can be a short "Will X?" or two full sentences, and on a 360px phone
+            a 24px heading for the latter overflows into two very short ragged
+            lines. Scales with the viewport and stops before it dominates.
+          */}
+          <h1 className="text-lg font-bold leading-tight tracking-tight sm:text-xl lg:text-2xl">
+            {market.question}
+          </h1>
           {market.description && (
-            <p className="text-sm text-muted-foreground leading-relaxed">{market.description}</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">{market.description}</p>
           )}
         </div>
 
         {/* Price chart */}
-        <div className="relative rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="relative min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 sm:p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {isBinary
@@ -426,20 +471,32 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               <span className="text-xs text-muted-foreground tabular-nums">Vol ${market.total_volume.toLocaleString()}</span>
             </div>
           </div>
-          <div className="h-[220px]">
+          {/* Chart height scales a little: 220px was generous on a phone and cramped on
+            a desktop. The right margin holds the Y-axis labels, which are
+            widened at sm so they don't clip. */}
+          <div className="h-[200px] sm:h-[240px]">
             {priceHistory.length === 0 ? (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Loading chart...</div>
             ) : (
             <LiveLineChart
               data={priceHistory}
-              // value = first outcome's latest price (drives smooth interpolation)
-              value={priceHistory.at(-1)?.["value"] as number ?? Number(market.yes_price ?? 0)}
+              // value = first outcome's latest price (drives smooth interpolation).
+              // Fall back to the market price, not 0: a 0 here hands the chart a
+              // real zero and the line dives to the floor on the first frame.
+              value={(priceHistory.at(-1)?.["value"] as number | undefined) ?? Number(market.yes_price ?? 0.5)}
               // valueNo = second outcome's latest price (drives secondary line for binary)
-              valueNo={isBinary ? (priceHistory.at(-1)?.["No"] as number ?? Number(market.no_price ?? 0)) : undefined}
+              valueNo={
+                isBinary
+                  ? ((priceHistory.at(-1)?.["No"] as number | undefined) ?? Number(market.no_price ?? 0.5))
+                  : undefined
+              }
               window={60}
               numXTicks={5}
-              height={220}
-              margin={{ top: 16, right: 36, bottom: 40, left: 48 }}
+              // Matches the container's h-[200px] sm:h-[240px]; a mismatch here
+              // silently overrides the CSS height because ParentSize drives the
+              // SVG from this prop.
+              height={200}
+              margin={{ top: 16, right: 40, bottom: 32, left: 40 }}
               multiOutcome={!isBinary}
             >
               <LiveXAxis />
@@ -459,19 +516,31 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </LiveLineChart>
             )}
           </div>
-          {/* Live Trade Ticker — below chart so it never covers axes */}
+          {/* Live Trade Ticker • below chart so it never covers axes */}
           <div className="mt-3">
             <LiveTradeTicker marketId={market.id} />
           </div>
         </div>
 
-        {/* Stats */}
+        {/* Stats. Two-up on phones rather than one-per-row: four stacked cards
+            pushed the chart and tabs a full screen down. Values get
+            break-words because a formatted volume can be long. */}
         {stats && (
-          <section aria-label="Market statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="list">
+          <section
+            aria-label="Market statistics"
+            className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-4"
+            role="list"
+          >
             {stats.map(({ label, value }) => (
-              <div key={label} role="listitem" className="rounded-xl border border-border bg-card p-3 text-center">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-                <div className="text-sm font-semibold tabular-nums">{value}</div>
+              <div
+                key={label}
+                role="listitem"
+                className="rounded-xl border border-border bg-card p-2.5 text-center sm:p-3"
+              >
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {label}
+                </div>
+                <div className="break-words text-sm font-semibold tabular-nums">{value}</div>
               </div>
             ))}
           </section>
@@ -489,18 +558,23 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             )}
           </TabsList>
 
-          <div className="space-y-3 p-4">
-            <TabsContent value="orderbook" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+          <div className="space-y-3 p-3 sm:p-4">
+            {/*
+              Panels scroll internally, but the height is viewport-relative on
+              small screens: a fixed 400px inside a phone's shorter viewport
+              left the page itself scrolling and the sticky header fighting it.
+            */}
+            <TabsContent value="orderbook" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <OrderBook slug={slug} />
             </TabsContent>
-            <TabsContent value="trades" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="trades" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <TradeFeed
                 trades={combinedTrades}
                 loading={tradesLoading}
               />
             </TabsContent>
 
-            <TabsContent value="positions" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="positions" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               {holderOutcomes.length > 0 ? (
                 <div className={holderOutcomes.length > 1 ? "grid gap-6 sm:grid-cols-2" : ""}>
                   {holderOutcomes.map(([outcomeName, holders]) => (
@@ -527,12 +601,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               )}
             </TabsContent>
 
-            <TabsContent value="discussion" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="discussion" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <CommentForm slug={slug} />
               <CommentList slug={slug} />
             </TabsContent>
 
-            <TabsContent value="faqs" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="faqs" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               {faqs && faqs.length > 0 ? (
                 <div className="space-y-3">
                   {faqs.map((faq, i) => (
@@ -550,15 +624,27 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         </Tabs>
       </div>
 
-      {/* Right sidebar */}
-      <aside aria-label="Trading panel" className="space-y-4">
+      {/*
+          Right sidebar. Stacks below the main column until `lg`. `min-w-0`
+          matters: grid items default to min-width:auto, so without it the
+          order book's fixed-width rows force this column wider than its track
+          and push a horizontal scrollbar onto the page.
+        */}
+      <aside aria-label="Trading panel" className="min-w-0 space-y-4">
         {/* Trade card */}
-        <section aria-labelledby="trade-heading" className="rounded-xl border border-border bg-card p-5">
+        <section
+          aria-labelledby="trade-heading"
+          className="rounded-xl border border-border bg-card p-4 sm:p-5"
+        >
           <h2 id="trade-heading" className="mb-4 text-sm font-semibold text-foreground">Place Trade</h2>
           <TradeForm
             marketId={market.id}
             currentYesPrice={Number(market.yes_price)}
             currentNoPrice={Number(market.no_price)}
+            // Live book-derived price per outcome. Multi-outcome markets have no
+            // AMM price at all, so without this the form quoted 0 for the third
+            // and later outcomes.
+            outcomePrices={outcomePrices}
             outcomes={outcomes}
             marketStatus={market.status}
             onSubmit={handleTrade}
