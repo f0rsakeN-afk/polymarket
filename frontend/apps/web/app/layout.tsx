@@ -7,7 +7,6 @@ import "sileo/styles.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Providers } from "@/components/providers"
 import { Toaster } from "@/components/toaster"
-import { AppCommandMenu } from "@/components/shared/app-command-menu"
 import { cn } from "@workspace/ui/lib/utils"
 import { config } from "@/lib/config"
 
@@ -23,23 +22,23 @@ const baseUrl = config.siteUrl
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: "Polymarket — Decentralized Prediction Markets",
-    template: "%s | Polymarket",
+    default: "PredictX • Decentralized Prediction Markets",
+    template: "%s | PredictX",
   },
   description:
-    "Trade on real-world outcomes with Polymarket — a decentralized prediction market platform. Create positions on politics, sports, crypto, finance, and more.",
+    "Trade on real-world outcomes with PredictX • a decentralized prediction market platform. Create positions on politics, sports, crypto, finance, and more.",
   keywords: [
     "prediction market",
     "decentralized exchange",
     "crypto trading",
-    "polymarket alternative",
+    "PredictX alternative",
     "outcome betting",
     "real world assets",
     "trading platform",
   ],
-  authors: [{ name: "Polymarket" }],
-  creator: "Polymarket",
-  publisher: "Polymarket",
+  authors: [{ name: "PredictX" }],
+  creator: "PredictX",
+  publisher: "PredictX",
   robots: {
     index: true,
     follow: true,
@@ -55,18 +54,18 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: baseUrl,
-    siteName: "Polymarket",
-    title: "Polymarket — Decentralized Prediction Markets",
+    siteName: "PredictX",
+    title: "PredictX • Decentralized Prediction Markets",
     description:
       "Trade on real-world outcomes. Create positions on politics, sports, crypto, finance, and more.",
-    images: [{ url: "/api/og", width: 1200, height: 630, alt: "Polymarket" }],
+    images: [{ url: "/api/og", width: 1200, height: 630, alt: "PredictX" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Polymarket — Decentralized Prediction Markets",
+    title: "PredictX • Decentralized Prediction Markets",
     description: "Trade on real-world outcomes. Create positions on politics, sports, crypto, finance, and more.",
     images: ["/api/og"],
-    creator: "@Polymarket",
+    creator: "@PredictX",
   },
   alternates: {
     canonical: baseUrl,
@@ -93,7 +92,11 @@ export default function RootLayout({
         <ThemeProvider>
           <Providers>
             <Toaster />
-            <AppCommandMenu />
+            {/* One command palette for the whole app: it lives in the Header
+                (components/shared/header.tsx). Mounting a second one here
+                rendered a duplicate ⌘K trigger *and* a duplicate ⌘K keydown
+                listener, so the shortcut toggled two palettes against each
+                other — one opening as the other closed. */}
             <a
               href="#main-content"
               className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-ring"

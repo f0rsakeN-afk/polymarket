@@ -147,20 +147,22 @@ export function CommandPalette({
   return (
     <>
       {/*
-        Desktop-only trigger. Hidden below `lg` (1024px) so phones AND tablets
-        don't get a search affordance that leads to a ⌘K-driven palette they
-        can't keyboard-navigate. `sm:` is 640px, which a portrait tablet clears,
-        so it would not have done the job.
+        Visually hidden at every size.
 
-        Rendered but hidden rather than conditionally mounted: CSS `hidden`
-        removes it from the tab order and the accessibility tree, so it is
-        genuinely absent to assistive tech - but the ⌘K listener below stays
-        live, so a tablet with a hardware keyboard can still open the palette
-        the way a desktop user does.
+        The trigger is no longer part of the header's visible affordances - the
+        header search field and the mobile drawer cover navigation. `hidden` with
+        no breakpoint means it is gone everywhere.
+
+        Rendered rather than unmounted, so the ⌘K/Ctrl+K shortcut keeps working:
+        CSS `hidden` also removes the button from the tab order and the
+        accessibility tree, so it is genuinely absent to users, while the
+        keydown listener below stays live for anyone who still reaches for the
+        shortcut. Removing the component would silently kill the keyboard path
+        with nothing left to indicate it existed.
       */}
       <button
         onClick={openPalette}
-        className="hidden shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 lg:inline-flex"
+        className="hidden shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50"
       >
         <SearchIcon className="size-4" />
         <span>Search...</span>
