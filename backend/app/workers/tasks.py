@@ -44,6 +44,62 @@ logger = logging.getLogger("PredictX")
 _thread_local = threading.local()
 
 
+def _is_retryable_email_error(exc: BaseException) -> bool:
+    """Whether retrying an email send could plausibly succeed.
+
+    A bad API key, a missing key, or a validation error is a configuration or
+    caller fault: identical on every attempt. Only a rate limit or a
+    server-side fault clears on its own, so only those are worth a retry.
+
+    SMTP is checked by class name rather than by import, so this stays a pure
+    function with no dependency on which transport happens to be configured.
+    """
+    # Resend distinguishes these itself; fall back to the class name so a
+    # version without the subclasses still classifies correctly.
+    name = type(exc).__name__
+
+    # Resend has its own rate-limit subclass; the class-name check below covers
+    # it too, so no import is needed here (and no dependency on resend being
+    # installed for this function to work).
+
+    # smtplib: every SMTPException subclass carries smtp_code, and they all
+    # inherit OSError - so this must be checked before the OSError branch below,
+    # or a permanent auth failure (535) would look like a dropped connection.
+    # Transient: 421 (service unavailable), 450/451 (busy), 452 (out of
+    # storage), and any 4xx (temporary local failure). 5xx is not: 535 is a
+    # rejected credential and 552 is a full mailbox, neither of which clears.
+    if "SMTP" in name and hasattr(exc, "smtp_code"):
+        code = exc.smtp_code
+        if code in {421, 450, 451, 452}:
+            return True
+        return isinstance(code, int) and 400 <= code < 500
+
+    if name == "RateLimitError":
+        return True
+
+    # ResendError and its subclasses (ApplicationError, ValidationError,
+    # InvalidApiKeyError, ...) all carry the HTTP code. Matching on the class
+    # name alone would miss the subclasses, whose names do not contain
+    # "ResendError" - so check the whole MRO.
+    if any(cls.__name__ == "ResendError" for cls in type(exc).__mro__):
+        code = getattr(exc, "code", None)
+        try:
+            code_int = int(code)
+        except (TypeError, ValueError):
+            # No usable code. A rate limit is worth one retry on the strength of
+            # its name alone; anything else is an unknown fault, and guessing
+            # "retryable" is what produced the traceback flood.
+            return name == "RateLimitError"
+        # 429 and 5xx are transient; 401/403/422 fail identically forever.
+        return code_int == 429 or 500 <= code_int < 600
+
+    # Connection-level errors: the host blipped, retrying is reasonable.
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+
+    return False
+
+
 def celery_run(coro):
     """
     Run a coroutine from a Celery thread.
@@ -1344,6 +1400,23 @@ def send_email(self, to_email: str, subject: str, body: str):
         "subject": subject,
     }))
     start = time.perf_counter()
+
+    # No transport configured at all. Not an error: a fresh checkout has no
+    # RESEND_API_KEY, and retrying an absent key three times just produces three
+    # identical tracebacks per notification.
+    if not settings.smtp_host and not settings.resend_api_key:
+        logger.warning(json.dumps({
+            "event": "email_skipped",
+            "task_id": task_id,
+            "task_name": self.name,
+            "to_email": to_email,
+            "reason": (
+                "no email transport configured - set RESEND_API_KEY or "
+                "SMTP_HOST to send mail"
+            ),
+        }))
+        return "skipped"
+
     try:
         if settings.smtp_host:
             # Mailtrap / SMTP fallback
@@ -1372,7 +1445,7 @@ def send_email(self, to_email: str, subject: str, body: str):
             logger.info(f"Email sent via Resend to {to_email}: {subject}")
     except Exception as exc:
         duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(json.dumps({
+        logger.error(json.dumps({
             "event": "task_error",
             "task_id": task_id,
             "task_name": self.name,
@@ -1380,16 +1453,40 @@ def send_email(self, to_email: str, subject: str, body: str):
             "error_type": type(exc).__name__,
             "error_message": str(exc)[:200],
         }))
+
+        # Retry only what a retry can fix.
+        #
+        # This used to retry everything, so a bad API key - a permanent
+        # configuration fault that no number of attempts resolves - burned
+        # max_retries with a 60s delay between each and raised an unpicklable
+        # Resend exception through Celery each time. Retryable is a rate limit
+        # or a server-side fault; everything else is reported and dropped.
+        if not _is_retryable_email_error(exc):
+            logger.error(json.dumps({
+                "event": "email_failed_permanently",
+                "task_id": task_id,
+                "task_name": self.name,
+                "to_email": to_email,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:200],
+                "suggested_action": (
+                    getattr(exc, "suggested_action", "") or
+                    "check RESEND_API_KEY / SMTP settings"
+                ),
+            }))
+            return "failed_permanently"
+
         raise self.retry(exc=exc)
-    finally:
-        duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(json.dumps({
-            "event": "task_complete",
-            "task_id": task_id,
-            "task_name": self.name,
-            "duration_ms": round(duration_ms, 2),
-            "result": "sent",
-        }))
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(json.dumps({
+        "event": "task_complete",
+        "task_id": task_id,
+        "task_name": self.name,
+        "duration_ms": round(duration_ms, 2),
+        "result": "sent",
+    }))
+    return "sent"
 
 
 @shared_task(
