@@ -6,7 +6,8 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 > Written from `backend/tests/`, `backend/pytest.ini`, `.github/workflows/ci.yml`,
 > `backend/scripts/{locustfile.py,audit_escrow.py,backup_db.sh}`.
 >
-> **Current state: 387 tests across 22 files. Zero frontend tests.** See `frontend.md` §10.
+> **Current state: 511 backend tests across 30 files, plus 118 frontend tests across
+> 11 files.** See `frontend.md` §10.
 
 ---
 
@@ -14,9 +15,9 @@ that make it trustworthy, the CI pipeline, the load-test harness, and the honest
 
 | | Count | Worth quoting? |
 |---|---|---|
-| Backend tests | **387** across **22** files | Yes • with the *why*, see below |
-| Test files | 22 | Yes, if asked what's covered |
-| Frontend tests | **0** | **Yes • volunteer it** |
+| Backend tests | **511** across **30** files | Yes • with the *why*, see below |
+| Test files | 30 backend, 11 frontend | Yes, if asked what's covered |
+| Frontend tests | **118** across **11** files | Yes • the client gap is closing, and the shape matters more than the count |
 
 **Never quote a raw count alone.** The panel's next question is always "do they actually test the
 interesting parts?" So the answer is the *shape*: 20 tests in `test_ledger.py` pin the escrow
@@ -24,7 +25,7 @@ invariant, `test_concurrency.py` fires parallel orders at one market, `test_escr
 every invariant *and* that a healthy pool reports zero violations, and `test_task_integration.py`
 drives the Celery tasks with no broker at all.
 
-That's a defence. "387 tests" is a number.
+That's a defence. "511 tests" is a number.
 
 ---
 
@@ -116,7 +117,7 @@ request** so the handlers genuinely interleave.
 > itself worth explaining.
 
 ```bash
-cd backend && .venv/bin/pytest tests/test_concurrency.py -q
+cd backend && uv run pytest tests/test_concurrency.py -q
 ```
 
 ### 5.2 `test_ledger.py` • "what stops you paying a winner partially?"
@@ -124,7 +125,7 @@ Contains the test that settlement **refuses rather than underpaying**, and that 
 payout leaving positions claimable.
 
 ```bash
-cd backend && .venv/bin/pytest tests/test_ledger.py -q
+cd backend && uv run pytest tests/test_ledger.py -q
 ```
 
 ### 5.3 `test_websocket.py -k heartbeat` • the test that guards dead code
@@ -308,7 +309,7 @@ Today it isn't; that's a gap.
 
 ## 11. One-paragraph summary, for reading aloud
 
-> Correctness is demonstrated with 387 tests across 22 files, and the design decision behind them is
+> Correctness is demonstrated with 511 tests across 30 files, and the design decision behind them is
 > that the test database is dropped and rebuilt from the Alembic migrations before every run • so a
 > stale schema can never make a failing test pass, and the migrations are exercised on every run too.
 > The tests authenticate through the real refresh-token and session-binding path rather than a test

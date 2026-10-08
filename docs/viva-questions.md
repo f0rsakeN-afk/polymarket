@@ -2222,13 +2222,15 @@ when lifecycle events can arrive out of order, compare identity rather than trus
 → `docs/frontend.md` §5.5.
 
 **★ Q8. Do you have frontend tests?**
-**Answer:** No, and that's the honest headline. Zero test files, no test runner in any package manifest,
-no test script, and no test task in the Turbo pipeline. The backend has 387 tests; the client has none.
-The two highest-risk files here are the API client, with its refresh state machine, and the WebSocket
-hook, with its reconnect and single-flight logic • and both are defended by dense comments explaining the
-exact bug each section prevents, which is a reasonable substitute for tests but genuinely isn't
-equivalent. The fix is to turn each of those comments into a test, starting with the two bugs I just
-described.
+**Answer:** 118 tests across 11 files, under Vitest with Testing Library. That was not
+always true — the honest version of this answer used to be "none", and the gap was
+real: the API client's refresh state machine and the WebSocket hook's reconnect
+single-flight logic were defended only by comments, which is not a substitute for a
+test. Both are now covered. The pattern worth naming is that the tests were written
+*from* those comments: each existing comment named the exact bug a section prevented,
+and each became a test that fails if the bug returns. What is still untested is set
+aside on purpose rather than padded — there is no component-render suite for the
+chart internals beyond the passthrough tests, and no end-to-end browser run.
 → `docs/frontend.md` §10.
 
 **Q9. How do you keep the charting library out of the initial bundle?**
@@ -2545,8 +2547,8 @@ pre-checking, which would itself race.
 | Frontend | Next.js 16.3.3 · React 19.2.8 · Turborepo · Bun · TanStack Query 5 · Tailwind v4 |
 | Frontend routing | 27 pages in 3 route groups; middleware renamed to `proxy.ts` in Next 16 |
 | WS client | 1 socket per tab, capped at 8 reconnect attempts, 30 s max backoff |
-| Frontend tests | **0** • the honest headline |
-| Test suite | **387** tests across 22 files; DB rebuilt from Alembic `head` every run |
+| Frontend tests | **118** across 11 files (Vitest + Testing Library) |
+| Test suite | **511** tests across 30 files; DB rebuilt from Alembic `head` every run |
 | WS heartbeat | 30 s ping sweep, reaps on `SEND_TIMEOUT_S` (2 s); `cause="heartbeat"` |
 | WS metrics | `ws_connections`, `ws_subscriptions` (per-worker gauges) + 4 counters |
 | Test infra | `pm-postgres` on 5433, `pm-redis` on 6380 • `docker start pm-postgres pm-redis` |

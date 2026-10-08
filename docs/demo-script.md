@@ -23,7 +23,7 @@ Keep this visible during the demo. Everything else in this document is detail.
 | **3. It's real money** | Wallet balance changes; transaction row appears | "Every balance change is an append-only ledger row with the balance after it." |
 | **4. It's live** | Second tab on the same market; trade appears | "One WebSocket per tab, fed by Redis pub/sub, so any of the 8 workers can push." |
 | **5. It's safe** | Two accounts order simultaneously | "One serialisation point with a fixed lock order • that's the answer to the hard question." |
-| **6. It's correct** | `pytest -q` output | "387 tests, DB rebuilt from migrations every run." |
+| **6. It's correct** | `pytest -q` output | "511 tests, DB rebuilt from migrations every run." |
 | **7. It's honest** | The gap list | "Here's what I know is wrong, and here's what I'd fix first." |
 
 **Phases 5–7 are what separate you.** Anyone can show a market list.
@@ -166,7 +166,7 @@ can't deadlock."*
 **Then prove it:**
 
 ```bash
-cd backend && .venv/bin/pytest tests/test_concurrency.py -q
+cd backend && uv run pytest tests/test_concurrency.py -q
 ```
 
 > If you only get to run one test file live, run **this** one. It fires parallel orders at one market
@@ -176,10 +176,10 @@ cd backend && .venv/bin/pytest tests/test_concurrency.py -q
 ### Phase 6 • it's correct (1 min)
 
 ```bash
-cd backend && .venv/bin/pytest -q
+cd backend && uv run pytest -q
 ```
 
-**Say:** *"387 tests across 22 files. The test database is dropped and rebuilt from the Alembic
+**Say:** *"511 tests across 30 files. The test database is dropped and rebuilt from the Alembic
 migrations on every single run, so a stale schema can never make a failing test pass."*
 
 ### Phase 7 • it's honest (2 min) ← do not skip

@@ -34,32 +34,87 @@ docs/       All project documentation (this is the only place docs live)
 
 ## Dev setup
 
-**Backend** (full commands in [`backend/README.md`](backend/README.md)):
+Prerequisites: Docker, Python 3.14+ with [uv](https://docs.astral.sh/uv/), Bun 1.3+.
+
+**One-time setup**
 
 ```bash
 cd backend
 cp .env.example .env          # fill in DB_PASSWORD, JWT_SECRET, TOTP_ENCRYPTION_KEY
-docker compose -f docker-compose.dev.yml up -d   # postgres :5433, redis :6380
+uv sync                       # install Python dependencies
+cd ../frontend && bun install # install JS dependencies
+```
+
+**Infrastructure** — Postgres on `:5433`, Redis on `:6380`:
+
+```bash
+cd backend
+docker compose -f docker-compose.dev.yml up -d
+```
+
+**Create the schema and fill it with demo data**
+
+```bash
+cd backend
+uv run alembic upgrade head    # apply migrations
+PYTHONPATH=. uv run python scripts/seed.py   # ~17 markets, 10 users, trades, charts
+```
+
+The seed is idempotent — it skips anything already present, so re-running it tops
+up rather than duplicating.
+
+**Run it** — three terminals:
+
+```bash
+cd backend && ./start.sh                       # API :8000 + celery worker + beat
+cd frontend && bun run dev                      # http://localhost:3000
+```
+
+`start.sh` runs Postgres/Redis check, then API, worker and beat together, logging
+to `backend/logs/{api,worker,beat}.log`. To run them separately instead:
+
+```bash
+cd backend
+uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --workers 8
+uv run celery -A app.workers.celery_app worker --loglevel=info
+uv run celery -A app.workers.celery_app beat   --loglevel=info
+```
+
+Then check it is alive:
+
+```bash
+curl localhost:8000/health     # {"status":"ok", ...}
+open http://localhost:3000
+```
+
+**Reset the database** — drops everything and rebuilds from migrations. Needed
+after any schema change:
+
+```bash
+cd backend
+docker compose -f docker-compose.dev.yml down -v    # also drops the volumes
+docker compose -f docker-compose.dev.yml up -d
 uv run alembic upgrade head
-./start.sh                    # API :8000 + celery worker + beat
-curl localhost:8000/health
+PYTHONPATH=. uv run python scripts/seed.py
 ```
 
-**Frontend** (separate terminal):
+**Tests** — the backend rebuilds its database from migrations on every run, so it
+needs Postgres and Redis up but nothing else:
 
 ```bash
-cd frontend
-bun install
-bun run dev                   # http://localhost:3000
+cd backend && uv run pytest -q                  # 511 tests
+uv run ruff check app tests scripts
+
+cd frontend/apps/web && bun run test            # 118 tests
+cd frontend && bun run typecheck && bun run lint
 ```
 
-**Tests:**
+Note: there is no `test` script at the `frontend/` root — it must be run from
+`frontend/apps/web`.
 
-```bash
-docker start pm-postgres pm-redis     # test infra on ports 5433 / 6380
-cd backend && .venv/bin/pytest -q     # 387 tests, DB rebuilt from migrations each run
-.venv/bin/ruff check app/ tests/
-```
+**No email key? Nothing breaks.** Leave `RESEND_API_KEY` and `SMTP_HOST` empty and
+email is skipped with one warning line per send instead of retrying. Only set one
+if you want mail actually delivered.
 
 ## Production
 

@@ -767,8 +767,9 @@ than being caught out.
 have caught. That is a good, honest framing: *"the comments are archaeology from bugs; the fix is to
 turn each comment into a test."*
 
-The backend, by contrast, has **22 test files / 387 test functions** • so the correct framing is
-*"coverage is deep on the money and concurrency paths, and absent on the client"*, not "we don't test".
+The client now has **118 tests across 11 files**, and the backend **511 across 30** • so the correct
+framing is *"the client gap was the honest headline, it has been closing from the comments outward"*,
+not "we don't test".
 
 ---
 
