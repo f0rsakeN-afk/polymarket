@@ -99,7 +99,13 @@ export function CommandPalette({
     return groups
   }, [items])
 
-  // Keyboard shortcut to open
+  // ⌘K / Ctrl+K toggles the palette.
+  //
+  // The listener stays registered at every viewport - a tablet with a keyboard
+  // case, or an iPad with a hardware keyboard attached, genuinely can fire
+  // Ctrl+K, and refusing it there would be a regression. Only the *hint* is
+  // hidden on touch (see the Kbd below); a shortcut that stops working the
+  // moment the hint disappears would be a worse bug than a stray one.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -140,14 +146,25 @@ export function CommandPalette({
 
   return (
     <>
-      {/* Trigger button */}
+      {/*
+        Desktop-only trigger. Hidden below `lg` (1024px) so phones AND tablets
+        don't get a search affordance that leads to a ⌘K-driven palette they
+        can't keyboard-navigate. `sm:` is 640px, which a portrait tablet clears,
+        so it would not have done the job.
+
+        Rendered but hidden rather than conditionally mounted: CSS `hidden`
+        removes it from the tab order and the accessibility tree, so it is
+        genuinely absent to assistive tech - but the ⌘K listener below stays
+        live, so a tablet with a hardware keyboard can still open the palette
+        the way a desktop user does.
+      */}
       <button
         onClick={openPalette}
-        className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
+        className="hidden shrink-0 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 lg:inline-flex"
       >
         <SearchIcon className="size-4" />
-        <span className="hidden sm:inline">Search...</span>
-        <Kbd className="ml-2 hidden sm:inline-flex size-5 text-[10px]">⌘K</Kbd>
+        <span>Search...</span>
+        <Kbd className="ml-2 inline-flex size-5 text-[10px]">⌘K</Kbd>
       </button>
 
       {/* Dialog */}

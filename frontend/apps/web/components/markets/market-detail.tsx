@@ -346,10 +346,9 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-4">
-
+    <div className="grid gap-4 sm:gap-6 lg:grid-cols-4">
       {/* Main content */}
-      <div className="space-y-6 lg:col-span-3">
+      <div className="min-w-0 space-y-4 sm:space-y-6 lg:col-span-3">
         {/* Resolution banner */}
         {market.status === "resolved" && (
           <div role="status" className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
@@ -401,14 +400,22 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             )}
             <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
           </div>
-          <h1 className="text-2xl font-bold leading-tight tracking-tight">{market.question}</h1>
+          {/*
+            Fluid type rather than one fixed size. A prediction-market question
+            can be a short "Will X?" or two full sentences, and on a 360px phone
+            a 24px heading for the latter overflows into two very short ragged
+            lines. Scales with the viewport and stops before it dominates.
+          */}
+          <h1 className="text-lg font-bold leading-tight tracking-tight sm:text-xl lg:text-2xl">
+            {market.question}
+          </h1>
           {market.description && (
-            <p className="text-sm text-muted-foreground leading-relaxed">{market.description}</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">{market.description}</p>
           )}
         </div>
 
         {/* Price chart */}
-        <div className="relative rounded-xl border border-border bg-card p-4 sm:p-5">
+        <div className="relative min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 sm:p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {isBinary
@@ -458,7 +465,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               <span className="text-xs text-muted-foreground tabular-nums">Vol ${market.total_volume.toLocaleString()}</span>
             </div>
           </div>
-          <div className="h-[220px]">
+          {/* Chart height scales a little: 220px was generous on a phone and cramped on
+            a desktop. The right margin holds the Y-axis labels, which are
+            widened at sm so they don't clip. */}
+          <div className="h-[200px] sm:h-[240px]">
             {priceHistory.length === 0 ? (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Loading chart...</div>
             ) : (
@@ -476,8 +486,11 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               }
               window={60}
               numXTicks={5}
-              height={220}
-              margin={{ top: 16, right: 36, bottom: 40, left: 48 }}
+              // Matches the container's h-[200px] sm:h-[240px]; a mismatch here
+              // silently overrides the CSS height because ParentSize drives the
+              // SVG from this prop.
+              height={200}
+              margin={{ top: 16, right: 40, bottom: 32, left: 40 }}
               multiOutcome={!isBinary}
             >
               <LiveXAxis />
@@ -503,13 +516,25 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
           </div>
         </div>
 
-        {/* Stats */}
+        {/* Stats. Two-up on phones rather than one-per-row: four stacked cards
+            pushed the chart and tabs a full screen down. Values get
+            break-words because a formatted volume can be long. */}
         {stats && (
-          <section aria-label="Market statistics" className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="list">
+          <section
+            aria-label="Market statistics"
+            className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-4"
+            role="list"
+          >
             {stats.map(({ label, value }) => (
-              <div key={label} role="listitem" className="rounded-xl border border-border bg-card p-3 text-center">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-                <div className="text-sm font-semibold tabular-nums">{value}</div>
+              <div
+                key={label}
+                role="listitem"
+                className="rounded-xl border border-border bg-card p-2.5 text-center sm:p-3"
+              >
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {label}
+                </div>
+                <div className="break-words text-sm font-semibold tabular-nums">{value}</div>
               </div>
             ))}
           </section>
@@ -527,18 +552,23 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             )}
           </TabsList>
 
-          <div className="space-y-3 p-4">
-            <TabsContent value="orderbook" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+          <div className="space-y-3 p-3 sm:p-4">
+            {/*
+              Panels scroll internally, but the height is viewport-relative on
+              small screens: a fixed 400px inside a phone's shorter viewport
+              left the page itself scrolling and the sticky header fighting it.
+            */}
+            <TabsContent value="orderbook" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <OrderBook slug={slug} />
             </TabsContent>
-            <TabsContent value="trades" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="trades" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <TradeFeed
                 trades={combinedTrades}
                 loading={tradesLoading}
               />
             </TabsContent>
 
-            <TabsContent value="positions" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="positions" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               {holderOutcomes.length > 0 ? (
                 <div className={holderOutcomes.length > 1 ? "grid gap-6 sm:grid-cols-2" : ""}>
                   {holderOutcomes.map(([outcomeName, holders]) => (
@@ -565,12 +595,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
               )}
             </TabsContent>
 
-            <TabsContent value="discussion" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="discussion" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               <CommentForm slug={slug} />
               <CommentList slug={slug} />
             </TabsContent>
 
-            <TabsContent value="faqs" role="tabpanel" className="nice-scroll max-h-[400px] overflow-y-auto">
+            <TabsContent value="faqs" role="tabpanel" className="nice-scroll max-h-[60vh] overflow-y-auto lg:max-h-[400px]">
               {faqs && faqs.length > 0 ? (
                 <div className="space-y-3">
                   {faqs.map((faq, i) => (
@@ -588,10 +618,18 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
         </Tabs>
       </div>
 
-      {/* Right sidebar */}
-      <aside aria-label="Trading panel" className="space-y-4">
+      {/*
+          Right sidebar. Stacks below the main column until `lg`. `min-w-0`
+          matters: grid items default to min-width:auto, so without it the
+          order book's fixed-width rows force this column wider than its track
+          and push a horizontal scrollbar onto the page.
+        */}
+      <aside aria-label="Trading panel" className="min-w-0 space-y-4">
         {/* Trade card */}
-        <section aria-labelledby="trade-heading" className="rounded-xl border border-border bg-card p-5">
+        <section
+          aria-labelledby="trade-heading"
+          className="rounded-xl border border-border bg-card p-4 sm:p-5"
+        >
           <h2 id="trade-heading" className="mb-4 text-sm font-semibold text-foreground">Place Trade</h2>
           <TradeForm
             marketId={market.id}
