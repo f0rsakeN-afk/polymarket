@@ -91,16 +91,17 @@ const NavLink = memo(function NavLink({ href, label, isActive }: { href: string;
       href={href}
       aria-current={isActive ? "page" : undefined}
       className={cn(
-        "relative px-3 py-1.5 text-xs font-medium transition-colors duration-200",
+        // border-b on the element itself, not an absolutely-positioned span with
+        // hardcoded `left-3 right-3`. The old underline was correct only because
+        // the horizontal padding happened to be 0.75rem; changing the padding
+        // would have left it visibly offset. A border tracks the box for free.
+        "-mb-px border-b-2 px-3 py-1.5 text-xs font-medium transition-colors duration-200",
         isActive
-          ? "text-primary"
-          : "text-muted-foreground hover:text-foreground"
+          ? "border-primary text-primary"
+          : "border-transparent text-muted-foreground hover:text-foreground"
       )}
     >
       {label}
-      {isActive && (
-        <span className="absolute bottom-0 left-3 right-3 h-px bg-foreground rounded-full" />
-      )}
     </Link>
   )
 })
@@ -174,33 +175,50 @@ export default function Header() {
         data-testid="app-header"
         className="sticky top-0 z-40 isolate border-b border-border bg-background/85 backdrop-blur-md supports-[not(backdrop-filter:blur(0))]:bg-background"
       >
-      <div className="container mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-4">
+      <div className="container mx-auto flex h-14 max-w-7xl items-center px-4">
         {/* Brand. Shrinks its label away on the narrowest phones so the wordmark
             never truncates mid-word or forces the controls off-screen. */}
-        <Link
-          href="/"
-          className="flex shrink-0 items-center gap-2 font-bold tracking-wide"
-          aria-label="PredictX home"
-        >
-          <PolygonIcon />
-          <span className="hidden min-[380px]:inline">PredictX</span>
-        </Link>
+        {/*
+          Three visual groups, left to right: brand, nav, then controls.
 
-        {/* Search: hidden below md, where the header has neither the room nor
-            the keyboard. The ⌘K palette (lg+) and the drawer cover those sizes. */}
-        <div className="relative hidden min-w-0 flex-1 md:block md:max-w-xs">
-          <SearchInput />
+          The nav sits directly beside the brand and the search moved into the
+          right cluster. It used to be brand | search | nav | icons, which left
+          the search floating in dead space and pressed the nav flush against
+          the icon cluster so "Trades" read as part of the same group as the
+          theme toggle. Brand + nav together is the conventional SaaS grouping
+          (Linear, Vercel, Stripe).
+
+          `gap-1` + `ml-1` on the nav is what creates the separation between the
+          left group and the right one; without an explicit gap the two groups
+          merge visually at any width where the search field is short.
+        */}
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/"
+            className="flex shrink-0 items-center gap-2 font-bold tracking-wide"
+            aria-label="PredictX home"
+          >
+            <PolygonIcon />
+            <span className="hidden min-[380px]:inline">PredictX</span>
+          </Link>
+
+          {/* Desktop nav. Sits inline with the brand, so the underline touches
+              the bar's bottom edge like a proper tab. */}
+          <nav aria-label="Primary" className="hidden items-center gap-1 md:flex">
+            {navLinks.map(({ href, label }) => (
+              <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
+            ))}
+          </nav>
         </div>
 
-        {/* Desktop nav */}
-        <nav aria-label="Primary" className="hidden items-center gap-1 md:flex">
-          {navLinks.map(({ href, label }) => (
-            <NavLink key={href} href={href} label={label} isActive={isActive(href)} />
-          ))}
-        </nav>
-
-        {/* Right: command menu + theme + bell + user + drawer trigger */}
+        {/* Controls, pushed right. */}
         <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+          {/* Search joins the control cluster. Hidden below md, where the bar has
+              neither the room nor the keyboard; the drawer covers those sizes. */}
+          <div className="relative mr-1 hidden w-44 shrink-0 lg:block xl:w-64">
+            <SearchInput />
+          </div>
+
           <AppCommandMenu />
           <ThemeToggle />
           <NotificationBell />

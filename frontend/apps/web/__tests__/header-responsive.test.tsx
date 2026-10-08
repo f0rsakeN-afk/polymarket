@@ -14,7 +14,14 @@ import type { ReactNode } from "react";
 
 // next/navigation's usePathname is what drives both the active nav state and
 // the drawer's "still open" derivation.
-const pathnameRef = vi.fn<string>(() => "/");
+// Typed explicitly: vi.fn<() => string> rather than vi.fn<string>, which in
+// vitest 3 takes the *return type of the mock itself* as its generic.
+let currentPath = "/";
+const pathnameRef = vi.fn(() => currentPath);
+const setPathname = (next: string) => {
+  currentPath = next;
+  pathnameRef();
+};
 vi.mock("next/navigation", () => ({
   usePathname: () => pathnameRef(),
 }));
@@ -128,14 +135,68 @@ describe("Header", () => {
 
     // Simulate a navigation that does not go through our own onClick (e.g. a
     // browser back/forward). The drawer must still close.
-    pathnameRef.mockReturnValue("/trades");
+    setPathname("/trades");
     await user.click(document.body);
 
     expect(screen.queryByRole("navigation", { name: "Mobile" })).not.toBeInTheDocument();
   });
 
+  it("groups brand and nav together, with controls pushed right", () => {
+    // Layout A: brand, then nav immediately beside it; controls right-aligned.
+    // The previous order was brand | search | nav | icons, which left the
+    // search floating and pressed the nav flush against the icon cluster.
+    renderHeader();
+
+    const header = screen.getByTestId("app-header");
+    const nav = screen.getByRole("navigation", { name: "Primary" });
+    const brand = screen.getByLabelText("PredictX home");
+
+    // Nav is a sibling of the brand inside one group, and appears after it.
+    const brandGroup = brand.parentElement!;
+    expect(brandGroup).toContainElement(nav);
+
+    // Controls are a later sibling, pushed right by ml-auto.
+    const controls = header.firstElementChild!.lastElementChild!;
+    expect(controls.className).toContain("ml-auto");
+    expect(controls).not.toBe(brandGroup);
+
+    // The search field lives in the controls cluster now, not between the
+    // brand and the nav.
+    expect(controls.querySelector('input[aria-label="Search markets"]')).not.toBeNull();
+    expect(brandGroup.querySelector('input[aria-label="Search markets"]')).toBeNull();
+  });
+
+  it("hides the search field below lg, where the palette and drawer take over", () => {
+    renderHeader();
+    const search = screen.getByLabelText("Search markets");
+    // lg: rather than md: - at md the right cluster has the nav competing with
+    // four controls and no room for a field that stays usable.
+    expect(search.parentElement!.className).toContain("lg:block");
+    expect(search.parentElement!.className).toContain("hidden");
+  });
+
+  it("anchors the active-tab underline to the element, not hardcoded offsets", () => {
+    setPathname("/trades");
+    renderHeader();
+
+    const active = screen
+      .getAllByRole("link")
+      .find((el) => el.getAttribute("aria-current") === "page")!;
+    const inactive = screen
+      .getAllByRole("link")
+      .find((el) => el.getAttribute("href") === "/markets")!;
+
+    // border-b on the element itself, so it tracks the box. The old absolutely
+    // positioned span used left-3/right-3, which was only correct while the
+    // padding happened to be 0.75rem.
+    expect(active.className).toContain("border-primary");
+    expect(inactive.className).toContain("border-transparent");
+    expect(active.className).not.toContain("absolute");
+    expect(active.querySelector("span")).toBeNull();
+  });
+
   it("marks the active route in the drawer", async () => {
-    pathnameRef.mockReturnValue("/trades");
+    setPathname("/trades");
     const user = userEvent.setup();
     renderHeader();
 
