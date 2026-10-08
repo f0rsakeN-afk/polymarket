@@ -82,8 +82,8 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const { data: orderbookData } = useOrderBook(slug)
   // Derive first outcome's bids/asks for the header display (same select as before)
   const headerOutcome = useMemo(() => {
-    if (!orderbookData?.outcomes) return null
-    return Object.values(orderbookData.outcomes)[0] ?? null
+    if (!orderbookData?.data?.outcomes) return null
+    return Object.values(orderbookData.data.outcomes)[0] ?? null
   }, [orderbookData])
 
   /**
@@ -95,7 +95,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
    */
   const outcomePrices = useMemo(() => {
     const map: Record<string, number> = {}
-    for (const [name, book] of Object.entries(orderbookData?.outcomes ?? {})) {
+    for (const [name, book] of Object.entries(orderbookData?.data?.outcomes ?? {})) {
       const bids = (book.bids ?? []).map((b) => Number(b.price)).filter((p) => Number.isFinite(p))
       const asks = (book.asks ?? []).map((a) => Number(a.price)).filter((p) => Number.isFinite(p))
       const bestBid = bids.length ? Math.max(...bids) : NaN
