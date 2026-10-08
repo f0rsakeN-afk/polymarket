@@ -1,1 +1,8 @@
 .env
+
+# Celery Beat's schedule database. Runtime state, not source: it is written on
+# every worker start, so tracking it produces a binary diff on each run and the
+# -shm/-wal siblings leak alongside it.
+backend/celerybeat-schedule
+backend/celerybeat-schedule-shm
+backend/celerybeat-schedule-wal
