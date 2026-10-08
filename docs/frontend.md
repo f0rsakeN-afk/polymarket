@@ -692,7 +692,28 @@ optimise; every image is inline SVG or generated at the edge."*
   the portfolio summary and notifications feed; `role="feed"` + `aria-label`; `role="alert"` on
   trade-form banners; `aria-busy` on the mark-all button.
 - **WebSocket status is exposed, not just coloured** — `role="status" aria-label="WebSocket Live"`
-  plus a visible "Live"/"Sync"/"Off" label.
+  plus a visible "Live"/"Syncing"/"Offline" label.
+
+  > **This one was broken, and the docs were confidently wrong about it.** The status indicator is
+  > rendered from `useMarketSocket().status`, but the hook registered its status handler through
+  > `ctx.subscribe()` — which puts it in `subs[marketId].handlers`, a registry drained *only* by
+  > `ws.onmessage`. Status frames are synthetic (`setStatus` pushes `{type:"__ws_status__"}` into
+  > `conn.statusHandlers`) and the server never sends that type, so the handler was **never invoked**.
+  > The visible value came from `useState(() => ctx.getStatus())`, a lazy initialiser evaluated once
+  > at mount — so the dot showed whatever the connection was doing at first paint and then never
+  > changed again. It reads as correct in a demo precisely because the first state is usually correct.
+  >
+  > Fixed with a separate `subscribeStatus` on the context, which registers in `conn.statusHandlers`
+  > and seeds the current value so a late subscriber isn't stuck on a stale reading. That also made
+  > the provider's "re-render on status change" effect redundant, so it and its `tick` state are
+  > gone — re-rendering the entire subtree twice per connect cycle was cost with no remaining
+  > benefit.
+  >
+  > Verified by a standalone harness that runs both registry shapes: the old one fails to deliver a
+  > status transition, the new one delivers connect / open / give-up, leaves market data flowing, and
+  > stops on unsubscribe. **This is the bug class the project is worst at catching** — the code is
+  > correct in isolation, the typechecker is happy, and nothing fails loudly. It was found by asking
+  > "which registry does this write to, and who reads that registry?" rather than by testing.
 - `aria-current="page"` on active nav links, `aria-pressed` on toggles, `aria-hidden` on decorative
   SVGs, focus-visible rings globally.
 - Charts are `aria-hidden` with a compensating text label on the wrapper card

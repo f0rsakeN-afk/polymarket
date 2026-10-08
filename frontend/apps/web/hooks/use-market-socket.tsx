@@ -275,19 +275,30 @@ function connect(conn: SharedConnection, firstMarketId: string) {
 interface MarketSocketCtx {
   subscribe: (marketId: string, handler: MessageHandler) => () => void
   getStatus: () => WSStatus
+  /**
+   * Subscribe to *connection status* changes.
+   *
+   * Deliberately not the same channel as `subscribe`. Status frames are
+   * synthetic — `setStatus` pushes `{type:"__ws_status__"}` into
+   * `conn.statusHandlers` and the server never sends that type — so a status
+   * handler registered through `subscribe` lands in `subs[marketId].handlers`,
+   * which is only ever drained by `ws.onmessage`. It would therefore never fire.
+   */
+  subscribeStatus: (handler: MessageHandler) => () => void
 }
 
 const NOOP_SUBSCRIBE = () => () => {}
 const NOOP_GET_STATUS = () => "disconnected" as WSStatus
+const NOOP_SUBSCRIBE_STATUS = () => () => {}
 
 const MarketSocketContext = createContext<MarketSocketCtx>({
   subscribe: NOOP_SUBSCRIBE,
   getStatus: NOOP_GET_STATUS,
+  subscribeStatus: NOOP_SUBSCRIBE_STATUS,
 })
 
 export function MarketSocketProvider({ children }: { children: React.ReactNode }) {
   const conn = useRef<SharedConnection>(getConnection())
-  const [, tick] = useState(0)
 
   const subscribe = useCallback((marketId: string, handler: MessageHandler) => {
     const c = conn.current
@@ -348,15 +359,28 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
 
   const getStatus = useCallback(() => conn.current.status, [])
 
-  const ctxValue = useMemo(() => ({ subscribe, getStatus }), [subscribe, getStatus])
-
-  // Track status changes to force re-render so hooks see fresh status
-  useEffect(() => {
+  // Status lives in its own registry — see the `subscribeStatus` doc comment.
+  const subscribeStatus = useCallback((handler: MessageHandler) => {
     const c = conn.current
-    const statusHandler: MessageHandler = () => tick((n) => n + 1)
-    c.statusHandlers.add(statusHandler)
-    return () => { c.statusHandlers.delete(statusHandler) }
+    c.statusHandlers.add(handler)
+    // Seed with the current value: a late subscriber must not sit at the
+    // initialiser's stale reading until the next transition happens.
+    handler({ type: "__ws_status__", status: c.status })
+    return () => {
+      c.statusHandlers.delete(handler)
+    }
   }, [])
+
+  const ctxValue = useMemo(
+    () => ({ subscribe, getStatus, subscribeStatus }),
+    [subscribe, getStatus, subscribeStatus]
+  )
+
+  // NOTE: there is deliberately no "re-render the provider on status change"
+  // effect here any more. It existed because the hook could not observe status
+  // itself, so a provider re-render was the only way to propagate it. Hooks now
+  // call `subscribeStatus` and hold their own state, so re-rendering the whole
+  // subtree twice per connect cycle (connecting → connected) was pure cost.
 
   // Recover a parked or sleeping socket when the network comes back. A laptop
   // resuming from sleep drops the socket silently — `online` and
@@ -411,11 +435,10 @@ export function useMarketSocket({
   const ctx = useContext(MarketSocketContext)
 
   const [status, setStatus] = useState<WSStatus>(() => ctx.getStatus())
+  // `onMessage` is almost always an inline arrow, so keeping it in a ref is what
+  // stops the subscribe effect below from re-running on every parent render.
   const onMessageRef = useRef(onMessage)
-  const marketIdRef = useRef(marketId)
-
   useEffect(() => { onMessageRef.current = onMessage }, [onMessage])
-  useEffect(() => { marketIdRef.current = marketId }, [marketId])
 
   useEffect(() => {
     if (!enabled || !marketId) return () => {}
@@ -426,7 +449,13 @@ export function useMarketSocket({
     }
 
     const unsubMsg = ctx.subscribe(marketId, (data) => onMessageRef.current(data))
-    const unsubStatus = ctx.subscribe(marketId, statusHandler)
+    // Status via the status registry, NOT `ctx.subscribe`. Going through
+    // `subscribe` put this handler in `subs[marketId].handlers`, which only
+    // `ws.onmessage` drains — and the server never sends `__ws_status__`, so the
+    // indicator never updated. It sat at whatever `getStatus()` returned on
+    // mount, which is exactly the kind of bug that looks fine in a demo because
+    // the first state you see is usually correct.
+    const unsubStatus = ctx.subscribeStatus(statusHandler)
 
     return () => {
       unsubMsg()

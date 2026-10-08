@@ -2190,6 +2190,26 @@ the only signals available. And the socket close is deferred by a zero-milliseco
 React's Strict Mode double-mounts in development and a registry that briefly empties would otherwise close
 and immediately reopen.
 
+**★ Q6b. The status indicator says "Live" — how do you know it's actually live?**
+**Answer:** Because it subscribes to the status registry directly, not the message channel — and
+getting that wrong is exactly the bug I hit. The hook originally registered its status handler
+through `ctx.subscribe()`, which puts it in the same registry as market messages. But status frames
+are synthetic: `setStatus` pushes `{type:"__ws_status__"}` into a *different* set, and the server
+never sends that type at all. So that handler was never invoked. The displayed value came from a lazy
+`useState` initialiser, which runs once at mount — the label showed whatever the connection was doing
+at first paint and never changed again.
+
+It's worth stressing how this survived: every line is individually correct, the typechecker is
+satisfied, there are no console errors, and in a demo it looks perfect — because the first reading is
+usually right. I found it by asking a mechanical question rather than reading for intent: *which
+registry does this write to, and which code drains that registry?* Nothing else in the app uses the
+word "status" on that path, so a visual read never flags it.
+
+The fix is a separate `subscribeStatus` on the context that registers in the status registry and
+seeds the current value immediately, so a late subscriber isn't stuck on a stale reading either. That
+also made the provider's re-render-on-status-change effect pointless, so it and its `tick` state are
+gone — it was re-rendering the entire subtree twice per connect cycle to update one label.
+
 **★ Q7. Tell me about a bug you fixed in the WebSocket client.**
 **Answer:** Two, and they're the same mistake. Closing a socket is asynchronous, so a socket that had
 already been replaced would fire its close event after its successor was live — and the handler nulled
@@ -2285,11 +2305,20 @@ is an inline SVG component. So I won't claim image optimisation as a feature.
 
 **Q18. What's your accessibility story?**
 **Answer:** Real rather than token. A skip link targeting a focusable main landmark, live regions for
-async state so screen readers hear updates, `aria-current` on active navigation, and — the one I'm
-proudest of — the WebSocket connection status is exposed as text, "Live", "Sync", "Off", not just a green
-dot. The gap: charts are hidden from assistive technology with a text label on the wrapper giving the
-current probabilities, but there's no data-table alternative, so a screen-reader user gets the summary and
-not the series.
+async state so screen readers hear updates, `aria-current` on active navigation, and the WebSocket
+connection status exposed as text — "Live", "Syncing", "Offline" — rather than only a coloured dot,
+because a colour alone tells a screen-reader user nothing about whether the prices they're reading are
+live. The gap: charts are hidden from assistive technology with a text label on the wrapper giving the
+current probabilities, but there's no data-table alternative, so a screen-reader user gets the summary
+and not the series.
+
+And the honest correction: **that status indicator was broken until I audited it, and the docs
+claimed it worked.** The hook subscribed its status handler through the market-message channel, but
+status frames are synthetic and go to a separate registry that only the socket's message handler ever
+drains — so the handler was never called, and the label sat at whatever the connection was doing at
+first paint. It looks right in a demo because the first reading usually *is* right. Fixed by giving
+status its own subscribe path that seeds the current value, which also let me delete the
+re-render-the-whole-provider hack it had been relying on. See `frontend.md` §9.
 
 **Q19. Do you support multiple languages?**
 **Answer:** No, and it's a non-goal rather than an oversight. There's no i18n layer, the language

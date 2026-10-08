@@ -10,7 +10,7 @@ wallets, positions, settlement at $1 per correct share, and realtime prices over
 | I want to… | Read |
 |---|---|
 | Understand the product with no jargon | [`docs/concepts.md`](docs/concepts.md) |
-| Rehearse for a viva / defence | [`docs/viva-questions.md`](docs/viva-questions.md) (321 questions + answers) |
+| Rehearse for a viva / defence | [`docs/viva-questions.md`](docs/viva-questions.md) (322 questions + answers) |
 | Run the live demo | [`docs/demo-script.md`](docs/demo-script.md) (7-phase script + troubleshooting) |
 | Understand testing & CI | [`docs/testing-and-ci.md`](docs/testing-and-ci.md) |
 | Know what the database actually stores and guarantees | [`docs/data-model.md`](docs/data-model.md) |

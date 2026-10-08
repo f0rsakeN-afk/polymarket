@@ -5,7 +5,7 @@ what to show, what to say while showing it, and what to do when something breaks
 
 > Companion docs: `docs/README.md` (index) · `concepts.md` (the story) · `data-model.md` ·
 > `trading-engine.md` · `platform-features.md` · `background-jobs.md` · `frontend.md` ·
-> `docker-concurrency-realtime.md` · `viva-questions.md` (321 questions).
+> `docker-concurrency-realtime.md` · `viva-questions.md` (322 questions).
 >
 > A demo is worth about as much as a viva. The rule that matters: **every thing you show must have a
 > sentence explaining why it matters.** A panel reads an unexplained screen as a screenshot.

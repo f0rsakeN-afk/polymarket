@@ -23,7 +23,7 @@ is usually the document.
 | [`testing-and-ci.md`](testing-and-ci.md) | **387 tests and what each file proves**, the fixtures that make them trustworthy, the 3 tests worth demoing live, the CI pipeline and its coverage gaps, the Locust harness, and the honest limits | Asked "how do you know it works?", or you're running the demo |
 | [`deployment.md`](deployment.md) | Production checklist: env vars, Alembic migration strategy, compose stack, health checks, Redis Sentinel, trusted proxies, beat schedule, log shipping | You're deploying or operating it |
 | [`demo-script.md`](demo-script.md) | **The runbook for the live demo** — start-up order, a 7-phase demo script with what to say, live-code targets, what to do when it breaks, and the final checklist | The day of the defence |
-| [`viva-questions.md`](viva-questions.md) | **321 questions across A–R, each with a full spoken-word answer** a non-programmer can deliver, plus a glossary and a numbers cheat sheet | Rehearsing — this is the drill sheet |
+| [`viva-questions.md`](viva-questions.md) | **322 questions across A–R, each with a full spoken-word answer** a non-programmer can deliver, plus a glossary and a numbers cheat sheet | Rehearsing — this is the drill sheet |
 
 ### Suggested reading order for a viva
 
