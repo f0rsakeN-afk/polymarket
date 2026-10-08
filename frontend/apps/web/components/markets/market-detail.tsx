@@ -22,11 +22,16 @@ import { LiveTradeTicker } from "./live-trade-ticker"
 import { SkeletonMarketDetail } from "@/components/shared/skeletons"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
 import type { PlaceOrderInput } from "@/lib/schemas/trading"
-import type { PriceHistoryPoint, Trade } from "@/hooks/api/types/market"
+import type { Trade } from "@/hooks/api/types/market"
 import { cn } from "@workspace/ui/lib/utils"
+import {
+  buildLivePricePoint,
+  patchMarketPrices,
+  type MarketPriceCache,
+} from "@/lib/live-price"
 import { apiErrorMessage } from "@/lib/api/client"
 
-// visx/d3 chart code splits into its own chunk and never SSR-renders —
+// visx/d3 chart code splits into its own chunk and never SSR-renders •
 // the detail page paints text/orderbook first, charts hydrate after.
 function ChartFallback() {
   return <div className="h-[220px] animate-pulse rounded-md bg-muted/60" aria-hidden="true" />
@@ -73,7 +78,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   const { data: priceHistoryData } = usePriceHistory(slug)
 
   // useOrderBook already uses queryKeys.orderBook(slug) = ["orderbook", slug]
-  // which is the same key the WS 'orderbook:update' message writes to — no extra fetch on WS events
+  // which is the same key the WS 'orderbook:update' message writes to • no extra fetch on WS events
   const { data: orderbookData } = useOrderBook(slug)
   // Derive first outcome's bids/asks for the header display (same select as before)
   const headerOutcome = useMemo(() => {
@@ -83,7 +88,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   /**
    * Per-outcome mid price from the orderbook.
-   * GET /markets/{slug} does NOT put a price on `outcomes` — only the market-level
+   * GET /markets/{slug} does NOT put a price on `outcomes` • only the market-level
    * yes_price/no_price. Multi-outcome markets therefore have no price anywhere else,
    * so we derive it here (best bid/ask midpoint) instead of reading a field that
    * was never there.
@@ -107,7 +112,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     (outcomeName: string, fallback: number) => outcomePrices[outcomeName.toLowerCase()] ?? fallback,
     [outcomePrices]
   )
-  // WS-only points — chart renders history + seeds + these, capped at 200
+  // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
 
@@ -122,24 +127,36 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     }
     if (msg.type === "market:price_update") {
       const now = Math.floor(Date.now() / 1000)
-      setWsPoints((prev) => {
-        const point: Record<string, number | string> = { time: now }
-        if (msg.outcome_prices) {
-          const prices = Object.values(msg.outcome_prices)
-          // value = first outcome price for animation
-          point["value"] = prices[0] ?? 0
-          for (const [name, price] of Object.entries(msg.outcome_prices)) {
-            point[name] = price
-          }
-        } else if (msg.yes_price != null && msg.no_price != null) {
-          // Binary: value=YES for smooth YES line animation, YES/NO keys for the two colored lines
-          point["value"] = msg.yes_price
-          point["Yes"] = msg.yes_price
-          point["No"] = msg.no_price
-        }
-        const next = [...prev, point as LiveLinePoint]
-        return next.slice(-200)
-      })
+
+      // Build the point OUTSIDE the state updater. React may invoke an updater
+      // more than once (StrictMode double-invokes), so side effects inside it
+      // are not safe. Both helpers are pure and unit-tested in lib/live-price.
+      const point = buildLivePricePoint(msg, now)
+
+      // A partial frame yields null and is dropped: a point with no `value`
+      // renders as 0 and drags the live tip to the floor.
+      if (point) {
+        setWsPoints((prev) => [...prev, point as LiveLinePoint].slice(-200))
+      }
+
+      // Push the new price into the cached market.
+      //
+      // Without this the chart moved but `market.yes_price` did not, so the big
+      // YES/NO numbers and - worse - `currentYesPrice`/`currentNoPrice`, which
+      // price the order form, kept quoting the last HTTP fetch. `useMarket` has
+      // staleTime but NO refetchInterval and nothing else invalidates it, so the
+      // form could sit on a stale price indefinitely while the chart disagreed.
+      //
+      // setQueryData (not invalidateQueries) keeps it instantaneous, with no
+      // network round-trip.
+      queryClient.setQueryData(
+        queryKeys.market(slug),
+        (prev) =>
+          patchMarketPrices(
+            prev as MarketPriceCache | undefined,
+            msg
+          ) as typeof prev
+      )
     }
     if (msg.type === "market:resolved") {
       sileo.info({
@@ -194,7 +211,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
 
   const outcomeNames = useMemo(() => outcomeList.map((o) => o.name), [outcomeList])
 
-  // Stable seed clock — captured once per market so re-renders don't shift the chart
+  // Stable seed clock • captured once per market so re-renders don't shift the chart
   const [seedTime] = useState(() => Math.floor(Date.now() / 1000))
 
   // Two seed points from current market prices so the chart renders immediately
@@ -228,20 +245,31 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     return [seedPoint, seedPoint2] as LiveLinePoint[]
   }, [market, outcomeList, isBinary, seedTime, priceFor])
 
-  // Historical points from fetched price history — shown behind seeds/live data
+  // Historical points from fetched price history • shown behind seeds/live data
   const historicalPoints = useMemo(() => {
     if (!priceHistoryData || priceHistoryData.length === 0) return [] as LiveLinePoint[]
 
-    return priceHistoryData.map((p: PriceHistoryPoint) => {
-      const point: Record<string, number | string> = { time: new Date(p.timestamp).getTime() / 1000 }
-      // value drives the first LiveLine (YES for binary)
-      const firstOutcome = p.outcomes[0]
-      point["value"] = Number(firstOutcome?.price ?? 0)
-      for (const o of p.outcomes) {
-        point[o.name] = Number((o as unknown as { price?: string }).price ?? 0)
+    // Skip samples with no usable price. Defaulting to 0 here (as `?? 0` did)
+    // put real market history on the floor, which is exactly the "chart dives
+    // to zero" symptom; a missing price is missing, not zero.
+    const points: LiveLinePoint[] = []
+    for (const p of priceHistoryData) {
+      const outcomes = p.outcomes ?? []
+      const value = Number(outcomes[0]?.price)
+      if (!Number.isFinite(value)) continue
+
+      const point: Record<string, number | string> = {
+        time: new Date(p.timestamp).getTime() / 1000,
+        // value drives the first LiveLine (YES for binary)
+        value,
       }
-      return point as LiveLinePoint
-    })
+      for (const o of outcomes) {
+        const price = Number((o as unknown as { price?: string }).price)
+        if (Number.isFinite(price)) point[o.name] = price
+      }
+      points.push(point as LiveLinePoint)
+    }
+    return points
   }, [priceHistoryData])
 
   const priceHistory = useMemo(
@@ -432,10 +460,16 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             ) : (
             <LiveLineChart
               data={priceHistory}
-              // value = first outcome's latest price (drives smooth interpolation)
-              value={priceHistory.at(-1)?.["value"] as number ?? Number(market.yes_price ?? 0)}
+              // value = first outcome's latest price (drives smooth interpolation).
+              // Fall back to the market price, not 0: a 0 here hands the chart a
+              // real zero and the line dives to the floor on the first frame.
+              value={(priceHistory.at(-1)?.["value"] as number | undefined) ?? Number(market.yes_price ?? 0.5)}
               // valueNo = second outcome's latest price (drives secondary line for binary)
-              valueNo={isBinary ? (priceHistory.at(-1)?.["No"] as number ?? Number(market.no_price ?? 0)) : undefined}
+              valueNo={
+                isBinary
+                  ? ((priceHistory.at(-1)?.["No"] as number | undefined) ?? Number(market.no_price ?? 0.5))
+                  : undefined
+              }
               window={60}
               numXTicks={5}
               height={220}
@@ -459,7 +493,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             </LiveLineChart>
             )}
           </div>
-          {/* Live Trade Ticker — below chart so it never covers axes */}
+          {/* Live Trade Ticker • below chart so it never covers axes */}
           <div className="mt-3">
             <LiveTradeTicker marketId={market.id} />
           </div>
