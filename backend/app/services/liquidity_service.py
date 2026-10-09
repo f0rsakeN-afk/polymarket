@@ -125,10 +125,51 @@ class LiquidityService:
         pre_yes_price = pool.yes_shares / pre_total if pre_total > 0 else Decimal("0.5")
         pre_no_price = pool.no_shares / pre_total if pre_total > 0 else Decimal("0.5")
 
+        # Token value is denominated in ESCROW, not reserves.
+        #
+        # Both ways an LP token turns back into dollars are collateral-
+        # denominated, and always were:
+        #
+        #   remove_liquidity : pool.collateral * (lp_tokens / lp_token_supply)
+        #   settlement      : pool.collateral / lp_token_supply  (tasks.py)
+        #
+        # Minting here against `yes_shares + no_shares` therefore made entry and
+        # exit disagree the moment the two denominators diverged - and they
+        # diverge on the very first trade, because the AMM mints new shares to
+        # every buyer while fees raise the escrow. Concretely: on a 100 USDC pool
+        # after a 40 USDC YES buy, reserves summed to 157.44 while the escrow held
+        # 140, so a new 10 USDC LP was minted 12.70 tokens and could immediately
+        # redeem only 8.96 - a ~10% loss on entry, before any trading, for doing
+        # nothing and taking no risk.
+        #
+        # Pricing the mint off the escrow makes entry and exit exactly symmetric.
+        # With supply s, escrow c and deposit X:
+        #
+        #     minted = X*s/c  ->  fraction = X/(c+X)  ->  payout = (c+X)*X/(c+X) = X
+        #
+        # so a joiner receives exactly what they put in, and the ratio between
+        # supply and escrow is the sole thing that carries value. Fees still reach
+        # LPs: trading raises `collateral` while `lp_token_supply` is untouched,
+        # so each token's claim on the escrow grows.
         if pool.lp_token_supply > 0:
-            pool_total = pool.yes_shares + pool.no_shares
-            lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total if pool_total > 0 else amount * Decimal(2)
+            escrow = pool.collateral or Decimal(0)
+            if escrow <= 0:
+                # Tokens are outstanding but the escrow is empty - the pool has
+                # already been drained. There is no per-token value left to mint
+                # against, and dividing here would raise ZeroDivisionError rather
+                # than explain the problem.
+                raise ValidationError(
+                    "This market's liquidity pool holds no collateral, so new "
+                    "liquidity cannot be priced. Outstanding LP tokens have "
+                    "already been settled.",
+                    error_code="POOL_ESCROW_EMPTY",
+                )
+            lp_tokens_minted = (amount * pool.lp_token_supply) / escrow
         else:
+            # Bootstrap: no reference price exists, so set one. 2x matches what
+            # market creation seeds (`lp_token_supply = amount * 2` against an
+            # escrow of `amount`), keeping the initial ratio consistent with the
+            # branch above.
             lp_tokens_minted = amount * Decimal(2)
 
         collateral_each = amount / Decimal(2)
