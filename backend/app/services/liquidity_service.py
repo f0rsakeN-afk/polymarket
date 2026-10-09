@@ -172,9 +172,44 @@ class LiquidityService:
             # branch above.
             lp_tokens_minted = amount * Decimal(2)
 
-        collateral_each = amount / Decimal(2)
-        pool.yes_shares += collateral_each
-        pool.no_shares += collateral_each
+        # Deposit is split PROPORTIONALLY to the pool's existing reserves, so the
+        # YES/NO ratio - and therefore the price - does not move.
+        #
+        # Splitting 50/50 preserves the ratio only on a pool that is already 50/50,
+        # which is why this went unnoticed on freshly-created markets and silently
+        # corrupted every traded one: on a pool at price(YES)=0.5331, adding 50 USDC
+        # moved it to 0.5226, dragging the price back toward 0.5. An LP could move
+        # the market by depositing, against existing holders, while their tokens
+        # were minted at a flat 2x that ignored the move entirely.
+        #
+        # With reserves y/n and deposit X:
+        #     y' = y(1 + X/T),  n' = n(1 + X/T)  =>  y'/T' = y/T   exactly.
+        #
+        # Market creation already seeded proportionally
+        # (`yes_shares += amount * prob`), so this makes deposits consistent with
+        # it, and it stops the slippage guard below from rejecting a legitimate
+        # deposit for a price move the depositor themselves caused.
+        #
+        # Parimutuel pools are deliberately excluded. There, `yes_shares` is the
+        # outcome's share of the *market* total and `no_shares` is a derived
+        # cache of `total - shares_i` (see MarketService.build_outcome_amm), so
+        # there is no independent NO side to keep in proportion. Funding one
+        # outcome of a shared-total book legitimately raises that outcome's
+        # price; changing that is a design decision, not a bugfix.
+        if pool.outcome_id is not None:
+            # Parimutuel: unchanged - fund the outcome's own share count.
+            collateral_each = amount / Decimal(2)
+            pool.yes_shares += collateral_each
+            pool.no_shares += collateral_each
+        elif pre_total > 0:
+            # Binary, funded: split in the same proportion as the reserves.
+            pool.yes_shares += amount * pool.yes_shares / pre_total
+            pool.no_shares += amount * pool.no_shares / pre_total
+        else:
+            # Binary, unseeded: no ratio to preserve, so bootstrap an even split.
+            collateral_each = amount / Decimal(2)
+            pool.yes_shares += collateral_each
+            pool.no_shares += collateral_each
         pool.credit_collateral(amount)
 
         lp_result = await db.execute(
