@@ -7,6 +7,7 @@ import {
 } from "@/lib/api/notifications"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { applyPrivateFeedResync } from "@/lib/ws-resync"
 import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 import { Card } from "@workspace/ui/components/card"
 import { Button } from "@workspace/ui/components/button"
@@ -149,6 +150,13 @@ export default function NotificationsPage() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
+      // The socket reconnected; notifications may have been missed while it
+      // was down. The optimistic prepends accumulated from that broken stream
+      // are dropped too - the refetch is the complete picture.
+      if (applyPrivateFeedResync(qc, msg)) {
+        setRealtimePrepend([])
+        return
+      }
       const message = msg as { type?: string; notification?: Notification }
       if (message.type === "notification" && message.notification) {
         setRealtimePrepend((prev) => [message.notification!, ...prev])

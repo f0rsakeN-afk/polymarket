@@ -72,8 +72,8 @@ export const metadata: Metadata = {
     languages: { "en-US": baseUrl },
   },
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
   },
 }
 

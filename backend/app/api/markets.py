@@ -149,7 +149,10 @@ async def list_markets(
         try:
             fts_vector = func.to_tsvector(literal_column("'english'"), Market.question)
             query_vector = func.plainto_tsquery("english", q)
-            relevance = func.ts_rank_cd(query_vector, fts_vector)
+            # ts_rank_cd(tsvector, tsquery) — vector first, query second.
+            # Reversed args resolve to a non-existent (tsquery, tsvector)
+            # overload and Postgres refuses to prepare the statement.
+            relevance = func.ts_rank_cd(fts_vector, query_vector)
             base = base.where(func.plainto_tsquery("english", q).op("@@")(fts_vector))
             base = base.order_by(relevance.desc())
         except Exception:

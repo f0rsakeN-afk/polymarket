@@ -125,15 +125,91 @@ class LiquidityService:
         pre_yes_price = pool.yes_shares / pre_total if pre_total > 0 else Decimal("0.5")
         pre_no_price = pool.no_shares / pre_total if pre_total > 0 else Decimal("0.5")
 
+        # Token value is denominated in ESCROW, not reserves.
+        #
+        # Both ways an LP token turns back into dollars are collateral-
+        # denominated, and always were:
+        #
+        #   remove_liquidity : pool.collateral * (lp_tokens / lp_token_supply)
+        #   settlement      : pool.collateral / lp_token_supply  (tasks.py)
+        #
+        # Minting here against `yes_shares + no_shares` therefore made entry and
+        # exit disagree the moment the two denominators diverged - and they
+        # diverge on the very first trade, because the AMM mints new shares to
+        # every buyer while fees raise the escrow. Concretely: on a 100 USDC pool
+        # after a 40 USDC YES buy, reserves summed to 157.44 while the escrow held
+        # 140, so a new 10 USDC LP was minted 12.70 tokens and could immediately
+        # redeem only 8.96 - a ~10% loss on entry, before any trading, for doing
+        # nothing and taking no risk.
+        #
+        # Pricing the mint off the escrow makes entry and exit exactly symmetric.
+        # With supply s, escrow c and deposit X:
+        #
+        #     minted = X*s/c  ->  fraction = X/(c+X)  ->  payout = (c+X)*X/(c+X) = X
+        #
+        # so a joiner receives exactly what they put in, and the ratio between
+        # supply and escrow is the sole thing that carries value. Fees still reach
+        # LPs: trading raises `collateral` while `lp_token_supply` is untouched,
+        # so each token's claim on the escrow grows.
         if pool.lp_token_supply > 0:
-            pool_total = pool.yes_shares + pool.no_shares
-            lp_tokens_minted = (amount * pool.lp_token_supply) / pool_total if pool_total > 0 else amount * Decimal(2)
+            escrow = pool.collateral or Decimal(0)
+            if escrow <= 0:
+                # Tokens are outstanding but the escrow is empty - the pool has
+                # already been drained. There is no per-token value left to mint
+                # against, and dividing here would raise ZeroDivisionError rather
+                # than explain the problem.
+                raise ValidationError(
+                    "This market's liquidity pool holds no collateral, so new "
+                    "liquidity cannot be priced. Outstanding LP tokens have "
+                    "already been settled.",
+                    error_code="POOL_ESCROW_EMPTY",
+                )
+            lp_tokens_minted = (amount * pool.lp_token_supply) / escrow
         else:
+            # Bootstrap: no reference price exists, so set one. 2x matches what
+            # market creation seeds (`lp_token_supply = amount * 2` against an
+            # escrow of `amount`), keeping the initial ratio consistent with the
+            # branch above.
             lp_tokens_minted = amount * Decimal(2)
 
-        collateral_each = amount / Decimal(2)
-        pool.yes_shares += collateral_each
-        pool.no_shares += collateral_each
+        # Deposit is split PROPORTIONALLY to the pool's existing reserves, so the
+        # YES/NO ratio - and therefore the price - does not move.
+        #
+        # Splitting 50/50 preserves the ratio only on a pool that is already 50/50,
+        # which is why this went unnoticed on freshly-created markets and silently
+        # corrupted every traded one: on a pool at price(YES)=0.5331, adding 50 USDC
+        # moved it to 0.5226, dragging the price back toward 0.5. An LP could move
+        # the market by depositing, against existing holders, while their tokens
+        # were minted at a flat 2x that ignored the move entirely.
+        #
+        # With reserves y/n and deposit X:
+        #     y' = y(1 + X/T),  n' = n(1 + X/T)  =>  y'/T' = y/T   exactly.
+        #
+        # Market creation already seeded proportionally
+        # (`yes_shares += amount * prob`), so this makes deposits consistent with
+        # it, and it stops the slippage guard below from rejecting a legitimate
+        # deposit for a price move the depositor themselves caused.
+        #
+        # Parimutuel pools are deliberately excluded. There, `yes_shares` is the
+        # outcome's share of the *market* total and `no_shares` is a derived
+        # cache of `total - shares_i` (see MarketService.build_outcome_amm), so
+        # there is no independent NO side to keep in proportion. Funding one
+        # outcome of a shared-total book legitimately raises that outcome's
+        # price; changing that is a design decision, not a bugfix.
+        if pool.outcome_id is not None:
+            # Parimutuel: unchanged - fund the outcome's own share count.
+            collateral_each = amount / Decimal(2)
+            pool.yes_shares += collateral_each
+            pool.no_shares += collateral_each
+        elif pre_total > 0:
+            # Binary, funded: split in the same proportion as the reserves.
+            pool.yes_shares += amount * pool.yes_shares / pre_total
+            pool.no_shares += amount * pool.no_shares / pre_total
+        else:
+            # Binary, unseeded: no ratio to preserve, so bootstrap an even split.
+            collateral_each = amount / Decimal(2)
+            pool.yes_shares += collateral_each
+            pool.no_shares += collateral_each
         pool.credit_collateral(amount)
 
         lp_result = await db.execute(

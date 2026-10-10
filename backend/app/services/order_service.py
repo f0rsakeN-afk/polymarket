@@ -18,6 +18,7 @@ from app.api.exceptions import (
     ValidationError,
 )
 from app.config import settings
+from app.database import async_session
 from app.models.liquidity import LiquidityPool
 from app.models.market import Market, Outcome
 from app.models.order import Order
@@ -31,7 +32,6 @@ from app.schemas.order import OrderRequest
 from app.services.cache_service import (
     build_orderbook,
     cache_invalidate_market_lists,
-    cache_invalidate_orderbook,
     cache_set_orderbook,
 )
 from app.services.market_service import MarketService
@@ -61,6 +61,195 @@ async def _enqueue_limit_sweep_now() -> None:
     fresh = await redis_cb.call(lambda: r.set("limit_check:enqueued", "1", ex=1, nx=True))
     if fresh:
         check_limit_order_execution.delay()
+
+
+async def _push_orderbook(market_id: str) -> None:
+    """Rebuild the resting book, refresh its cache, and push it to live clients.
+
+    Every path that can change the *resting* book must call this:
+
+      - a limit / fill-or-kill order that could not fill immediately and now rests,
+      - a fill that consumed resting maker orders,
+      - a cancellation, which removes a resting order.
+
+    It used to run only on the fill path, which looks sufficient until you notice
+    that a fully-filled market order lands as ``status="filled"`` and
+    `build_orderbook` filters that status out entirely. So the single path that
+    published never actually changed the book, while the two paths that *do*
+    change it published nothing: placing a limit order or cancelling one left
+    every other client showing a stale book until it reloaded. The book was never
+    visibly wrong, just permanently behind.
+
+    Takes no session, and deliberately opens its own. Every caller has already
+    committed by the time this runs, so the read needs committed state - and
+    borrowing the caller's session would be wrong in two ways: it would open a
+    second transaction on a session the caller still owns, and any attempt to
+    close that transaction (rollback/expunge) mutates state the caller may still
+    be reading, since SQLAlchemy expires every loaded instance on rollback. Own
+    session, own lifetime, nothing leaked back.
+
+    Best-effort: this runs after the trade has committed, so a broadcast failure
+    must never surface as a failed order. It logs rather than swallowing, because
+    a silently stale book is otherwise indistinguishable from a missing publish.
+    """
+    try:
+        async with async_session() as db:
+            orderbook_data = await build_orderbook(db, market_id)
+        # Set rather than invalidate: the next REST read is then warm and
+        # identical to what live clients were just handed.
+        await cache_set_orderbook(market_id, orderbook_data, ttl=60)
+        await redis_pubsub.publish_market_event(market_id, "orderbook:update", orderbook_data)
+    except Exception:
+        logger.exception("orderbook:update push failed for market=%s", market_id)
+
+
+async def _notify_fill_participants(
+    *,
+    db,
+    market: Market,
+    outcome_name: str,
+    taker_user: User,
+    order: Order,
+    match_details: list[dict],
+    taker_shares: Decimal,
+    taker_price: Decimal,
+    status: str,
+) -> None:
+    """Tell every user whose money or shares moved - not just the taker.
+
+    This is the gap that made realtime look broken in the exact place it matters
+    most. `publish_order_fill` and `position:update` existed only in
+    `workers/tasks.py`, the 30-second limit-order sweeper. `execute_order` - the
+    path every real order takes - published price, trades and the book to
+    *everyone watching the market*, and nothing at all to the people whose
+    positions had just changed. So when you bought someone's resting limit
+    order, their portfolio, orders and positions pages stayed stale until they
+    happened to refetch, while the market page they were watching updated
+    instantly. The data was correct; the delivery was addressed to the wrong
+    audience.
+
+    `match_details` already carries `maker_user_id`, `maker_order_id`,
+    `match_shares` and `match_usdc` for every maker consumed by this order - it
+    was being read only to build Trade rows, and the participants were thrown
+    away. They are the address list.
+
+    Makers are aggregated per user first: one aggressive order can sweep five
+    resting orders from the same person, and they should get one frame saying
+    what happened, not five saying it happened again.
+
+    Post-commit and fully best-effort per participant. A user who cannot be
+    notified must never fail the trade that already committed - but each failure
+    is logged rather than swallowed, because silent non-delivery is what made
+    this look like a working socket in the first place.
+    """
+    from app.services.notification_service import NotificationService
+
+    # user_id -> aggregated fill for that user
+    participants: dict[str, dict] = {}
+
+    taker_key = str(taker_user.id)
+    participants[taker_key] = {
+        "shares": taker_shares,
+        "price": taker_price,
+        "order_ids": [str(order.id)],
+        "side": order.side,
+        "role": "taker",
+        "status": status,
+    }
+
+    for md in match_details or []:
+        if md.get("skipped"):
+            continue
+        maker_uid = md.get("maker_user_id")
+        if not maker_uid:
+            continue
+        maker_uid = str(maker_uid)
+        # Self-trade is already excluded by the matcher, but a defensive guard
+        # here costs one comparison and keeps a user from getting two
+        # contradicting frames for the same fill.
+        if maker_uid == taker_key:
+            continue
+        entry = participants.setdefault(
+            maker_uid,
+            {"shares": Decimal(0), "price": Decimal(0), "order_ids": [],
+             "side": md.get("side", "buy"), "role": "maker", "status": status},
+        )
+        entry["shares"] += Decimal(str(md.get("match_shares", 0)))
+        entry["price"] += Decimal(str(md.get("match_usdc", 0)))
+        oid = md.get("maker_order_id")
+        if oid:
+            entry["order_ids"].append(str(oid))
+
+    for uid, entry in participants.items():
+        shares = entry["shares"]
+        if shares <= 0:
+            continue
+        price = (entry["price"] / shares) if shares > 0 else Decimal(0)
+
+        # 1. Private fill frame -> order fills directly into the portfolio /
+        #    orders / positions query caches.
+        try:
+            await redis_pubsub.publish_order_fill(uid, {
+                "order_id": entry["order_ids"][0] if entry["order_ids"] else None,
+                "order_ids": entry["order_ids"],
+                "market_id": str(market.id),
+                "market_slug": market.slug,
+                "status": entry["status"],
+                "side": entry["side"],
+                "shares": float(shares),
+                "price": float(price),
+                "role": entry["role"],
+            })
+        except Exception:
+            logger.exception(
+                "order:fill publish failed user=%s market=%s", uid, market.id
+            )
+
+        # 2. Position frame. Separate from the fill because a partial fill
+        #    changes a position without completing an order, and the frontend
+        #    keys its position/portfolio invalidation off this type.
+        try:
+            await redis_pubsub.publish_user_event(uid, {
+                "market_id": str(market.id),
+                "market_slug": market.slug,
+                "outcome": outcome_name,
+                "shares": float(shares),
+                "side": entry["side"],
+                "role": entry["role"],
+            })
+        except Exception:
+            logger.exception(
+                "position:update publish failed user=%s market=%s", uid, market.id
+            )
+
+        # 3. Persisted in-app notification, so it survives a reload and shows in
+        #    the bell's history rather than being a toast that evaporates.
+        #
+        #    Only once the order is actually complete. A large resting order swept
+        #    by the executor fills in many pieces, and persisting a notification
+        #    per piece produces a burst of near-identical toasts and a bell full
+        #    of duplicates, while telling the user nothing they did not already
+        #    know. The live frames above still fire per fill so the UI stays
+        #    current; this is the durable summary, and it happens once.
+        if entry["status"] == "filled":
+            try:
+                await NotificationService.dispatch(
+                    db,
+                    uid,
+                    "order_filled",
+                    f"Filled: {entry['side']} {float(shares):.2f} shares",
+                    f"Your order on {market.slug} has been filled.",
+                    {
+                        "order_id": entry["order_ids"][0] if entry["order_ids"] else None,
+                        "market_id": str(market.id),
+                        "side": entry["side"],
+                        "role": entry["role"],
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "order_filled notification failed user=%s market=%s", uid, market.id
+                )
 
 
 def _is_finite(value) -> bool:
@@ -591,9 +780,63 @@ class OrderService:
                     after_total = amm.yes_shares + amm.no_shares
                     await db.commit()
 
+                    # The resting book just changed - this order is now sitting
+                    # in it, and any portion that matched already consumed maker
+                    # orders. This path returns before the fill path's
+                    # notification block, so without this push it was the one
+                    # book-changing path that never told anyone.
+                    await _push_orderbook(str(market.id))
+
+                    # A partial fill is still a fill. This branch returns before
+                    # the block that notifies participants, so without it a limit
+                    # order that matched on arrival filled makers' positions and
+                    # told nobody - the same silence as the fully-filled path,
+                    # reached more often, because resting orders are the common
+                    # case on a real book.
+                    rest_status = "partial" if matched_shares > 0 else "pending"
+                    if matched_shares > 0:
+                        try:
+                            await _notify_fill_participants(
+                                db=db,
+                                market=market,
+                                outcome_name=outcome.name if outcome else "",
+                                taker_user=user,
+                                order=order,
+                                match_details=match_details,
+                                taker_shares=matched_shares,
+                                taker_price=(
+                                    matched_usdc / matched_shares
+                                    if matched_shares > 0
+                                    else Decimal(0)
+                                ),
+                                status=rest_status,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "partial-fill notifications failed market=%s", market.id
+                            )
+                    else:
+                        # Nothing executed, but funds just moved into the locked
+                        # balance and the user's own portfolio has to show it.
+                        try:
+                            await redis_pubsub.publish_user_event(str(user.id), {
+                                "market_id": str(market.id),
+                                "market_slug": market.slug,
+                                "outcome": outcome.name if outcome else "",
+                                "shares": 0.0,
+                                "side": data.side,
+                                "role": "taker",
+                                "order_status": "pending",
+                            })
+                        except Exception:
+                            logger.exception(
+                                "resting-order position update failed user=%s",
+                                user.id,
+                            )
+
                     return OrderResult(
                         order_id=str(order.id),
-                        status="pending" if matched_shares == 0 else "partial",
+                        status=rest_status,
                         side=data.side,
                         outcome=data.outcome,
                         shares=matched_shares,
@@ -781,6 +1024,12 @@ class OrderService:
         market.total_volume += total_usdc_spent if data.side == "buy" else total_usdc_received
         market.num_trades += 1
 
+        # Real Trade rows, kept for the live-feed frames published after commit.
+        # One order can produce several (one per matched maker, plus the AMM leg),
+        # and each is a distinct row in the REST feed - so each needs its own
+        # frame, carrying its own id, price and amount.
+        created_trades: list[Trade] = []
+
         for md in match_details:
             t = Trade(
                 user_id=user.id,
@@ -792,6 +1041,7 @@ class OrderService:
                 executed_at=datetime.now(UTC),
             )
             db.add(t)
+            created_trades.append(t)
 
         # AMM (non-book) fill leg. Must key off `amm_shares`, not
         # `remaining_shares` • that variable is pinned to 0 for BUY orders
@@ -808,6 +1058,7 @@ class OrderService:
                 executed_at=datetime.now(UTC),
             )
             db.add(t)
+            created_trades.append(t)
 
         trade_amount = -total_usdc_spent if data.side == "buy" else total_usdc_received
         tx = Transaction(
@@ -862,18 +1113,31 @@ class OrderService:
         tx.reference_id = str(order.id)
         await db.commit()
 
-        # ── Step 10: Post-commit notifications (best-effort) ──
+        # ── Step 10: Post-commit notifications (best-effort, each logged) ──
+        #
+        # Prices are read straight off the in-memory pool (`expire_on_commit=False`),
+        # so they are always available and are needed by both the price frame and
+        # the alert check further down.
+        #
+        # This whole block used to sit inside ONE `except Exception: pass`, which
+        # meant any single failure - a Redis timeout, a cache miss on a market
+        # row - silently killed the price frame, the trade frame, the global frame
+        # and the orderbook frame together, leaving nothing in the logs. Live
+        # updates simply went quiet with no way to tell why. Each publish now
+        # carries its own try/except that logs, so one failing channel cannot
+        # take the others down and a failure is always attributable.
 
-        try:
-            yes_price, no_price = OrderService._get_market_prices(pool)
-            # For a parimutuel market the single binary yes/no pair says nothing
-            # about any outcome, so attach a real price per outcome taken from
-            # the outcome pools. Without it the front end has no value to draw a
-            # per-outcome line from and every outcome except the first sits
-            # frozen. ALL outcomes are priced, not just the traded one, so every
-            # line moves on every frame.
-            outcome_prices: dict[str, float] | None = None
-            if is_parimutuel:
+        yes_price, no_price = OrderService._get_market_prices(pool)
+
+        # For a parimutuel market the single binary yes/no pair says nothing
+        # about any outcome, so attach a real price per outcome taken from
+        # the outcome pools. Without it the front end has no value to draw a
+        # per-outcome line from and every outcome except the first sits
+        # frozen. ALL outcomes are priced, not just the traded one, so every
+        # line moves on every frame.
+        outcome_prices: dict[str, float] | None = None
+        if is_parimutuel:
+            try:
                 by_id = MarketService.outcome_prices(
                     await MarketService.load_outcome_pools(db, market.id)
                 )
@@ -882,6 +1146,16 @@ class OrderService:
                     for o in all_outcomes
                     if str(o.id) in by_id
                 }
+            except Exception:
+                # Non-fatal: the frame still carries the binary pair, so a
+                # binary market is unaffected and a parimutuel one degrades to
+                # a single line rather than going dark.
+                logger.exception(
+                    "outcome prices unavailable for market=%s • frame degrades to yes/no",
+                    market.id,
+                )
+
+        try:
             await redis_pubsub.publish_price_update(
                 str(market.id),
                 yes_price,
@@ -889,34 +1163,106 @@ class OrderService:
                 float(market.total_volume),
                 outcome_prices=outcome_prices,
             )
-            await redis_pubsub.publish_market_event(str(market.id), "trade:new", {
-                "outcome": data.outcome,
-                "side": data.side,
-                "price": float(amm_price_val) if amm_price_val > 0 else float(matched_usdc / matched_shares) if matched_shares > 0 else 0,
-                "amount": float(total_shares),
-                "username": user.username,
-            })
-            await redis_pubsub.publish_global_trade({
+        except Exception:
+            logger.exception("price_update publish failed for market=%s", market.id)
+
+        # One frame per persisted Trade row, carrying the same fields the REST
+        # feed returns - including the real row id. The previous frame was a
+        # single synthetic row carrying the order's averaged price and combined
+        # share count, which matched no row in the database and had no id for the
+        # client to dedupe against once REST refetched.
+        trade_frames = [
+            {
+                "id": str(t.id),
                 "market_id": str(market.id),
-                "outcome": data.outcome,
-                "side": data.side,
-                "price": float(amm_price_val) if amm_price_val > 0 else float(matched_usdc / matched_shares) if matched_shares > 0 else 0,
-                "amount": float(total_shares),
+                "market_slug": market.slug,
+                "market_question": market.question,
+                "outcome": t.outcome,
+                "side": t.side,
+                "price": str(t.price),
+                "amount": str(t.amount),
+                "executed_at": t.executed_at.isoformat() if t.executed_at else None,
                 "username": user.username,
-            })
-            # Build and cache the new orderbook, then push it directly through WS
-            orderbook_data = await build_orderbook(db, str(market.id))
-            await cache_set_orderbook(str(market.id), orderbook_data, ttl=60)
-            await redis_pubsub.publish_market_event(str(market.id), "orderbook:update", orderbook_data)
+            }
+            for t in created_trades
+        ]
+
+        if trade_frames:
+            # Market-scoped channel first, then the platform-wide feed. Separate
+            # loops rather than one nested try: a failure on the global channel
+            # must not cost the market page its own trade row.
+            for frame in trade_frames:
+                try:
+                    await redis_pubsub.publish_market_event(
+                        str(market.id), "trade:new", frame
+                    )
+                except Exception:
+                    logger.exception(
+                        "trade:new publish failed market=%s trade=%s",
+                        market.id, frame["id"],
+                    )
+            for frame in trade_frames:
+                try:
+                    await redis_pubsub.publish_global_trade(frame)
+                except Exception:
+                    logger.exception(
+                        "global trade publish failed trade=%s", frame["id"]
+                    )
+        else:
+            # Should not happen on a filled order, but an empty trade feed would
+            # look exactly like a dead socket, so make it visible.
+            logger.warning(
+                "order %s filled with no Trade rows • live feed will show nothing",
+                order.id,
+            )
+
+        try:
+            await _push_orderbook(str(market.id))
+        except Exception:
+            logger.exception("orderbook push failed market=%s", market.id)
+
+        # Tell the people whose balances actually moved.
+        #
+        # Public frames alone left the most important audience untouched: the
+        # maker whose resting limit order was just consumed, and the taker's own
+        # portfolio in any other tab. Both watch the market page - which updates
+        # in real time - while their positions sit frozen until a refetch, which
+        # reads as "the socket is broken" even though it is working perfectly.
+        try:
+            await _notify_fill_participants(
+                db=db,
+                market=market,
+                outcome_name=outcome.name if outcome else "",
+                taker_user=user,
+                order=order,
+                match_details=match_details,
+                taker_shares=total_shares,
+                taker_price=(total_usdc_spent / total_shares) if total_shares > 0 else Decimal(0),
+                status="filled",
+            )
+        except Exception:
+            logger.exception(
+                "fill notifications failed market=%s • trade committed, "
+                "participants will not see it live",
+                market.id,
+            )
+
+        try:
             await cache_invalidate_market_lists()
         except Exception:
-            pass
+            logger.exception(
+                "market list cache invalidate failed after fill on market=%s", market.id
+            )
 
         try:
             from app.workers.tasks import check_price_alerts
             check_price_alerts.delay(str(market.id), yes_price, no_price)
         except Exception:
-            pass
+            # Enqueue-only, so this is the one place a warning fits better than
+            # a traceback: the trade itself already committed successfully.
+            logger.warning(
+                "price alert enqueue failed for market=%s", market.id, exc_info=True
+            )
 
         # The fill above moved this market's price, so resting limit orders
         # waiting on it may now be fillable • don't make them wait for the
@@ -987,4 +1333,35 @@ class OrderService:
 
         await db.commit()
         logger.info(f"Order cancelled: {order_id} by user={user.id}")
-        await cache_invalidate_orderbook(str(order.market_id))
+
+        # Cancelling removes a resting order, so the book changed and every other
+        # client is now holding a level that no longer exists. This only used to
+        # invalidate the cache, which fixed the *next* REST read and left every
+        # already-open orderbook stale - including this user's own, since nothing
+        # re-rendered it from the invalidated cache.
+        await _push_orderbook(str(order.market_id))
+
+        # The user's own balance and order row both changed here, in a socket the
+        # user is already connected to. Without this their orders page and
+        # available balance stayed showing the cancelled order until a refetch.
+        try:
+            await redis_pubsub.publish_order_fill(str(user.id), {
+                "order_id": str(order.id),
+                "order_ids": [str(order.id)],
+                "market_id": str(order.market_id),
+                "status": "cancelled",
+                "side": order.side,
+                "shares": 0.0,
+                "price": float(order.price or 0),
+                "role": "taker",
+            })
+            await redis_pubsub.publish_user_event(str(user.id), {
+                "market_id": str(order.market_id),
+                "status": "cancelled",
+                "side": order.side,
+                "role": "taker",
+            })
+        except Exception:
+            logger.exception(
+                "cancel notification failed user=%s order=%s", user.id, order.id
+            )

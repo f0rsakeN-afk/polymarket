@@ -105,6 +105,7 @@ class _FakePipeline:
 
     def __init__(self, sink):
         self._sink = sink
+        self._seq = 0
 
     def hset(self, *args, **kwargs):
         return self
@@ -117,6 +118,17 @@ class _FakePipeline:
 
     def publish(self, channel, payload):
         self._sink.append(payload)
+
+    def eval(self, script, numkeys, *keys_and_args):
+        """The sequenced publish (INCR + splice + PUBLISH in one Lua step).
+
+        Substitutes `__SEQ__` the way the server-side script does, so the frame
+        these tests parse is the frame a subscriber would actually receive.
+        """
+        payload = keys_and_args[-1]
+        self._seq += 1
+        self._sink.append(payload.replace('"__SEQ__"', str(self._seq)))
+        return self
 
     async def execute(self):
         return None

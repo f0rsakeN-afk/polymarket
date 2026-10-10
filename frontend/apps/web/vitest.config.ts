@@ -24,6 +24,15 @@ export default defineConfig({
       { find: /^react\//, replacement: r("./node_modules/react/") },
       { find: /^react$/, replacement: r("./node_modules/react") },
       { find: /^@workspace\/ui\//, replacement: r("../../packages/ui/src/") },
+      // Mirrors tsconfig.json's "@/lib/schemas/*": ["./schemas/*"].
+      //
+      // Without it, any test importing a component that reaches a schema fails
+      // to resolve the module - the schemas live in schemas/, not lib/schemas/.
+      // Next and tsc both honour the alias; Vitest does not read tsconfig paths,
+      // so it has to be repeated here or those components cannot be tested at
+      // all. Must come before the catch-all `@/` below, which would otherwise
+      // claim it.
+      { find: /^@\/lib\/schemas\//, replacement: r("./schemas/") },
       { find: /^@\//, replacement: r("./") },
     ],
     dedupe: ["react", "react-dom"],
