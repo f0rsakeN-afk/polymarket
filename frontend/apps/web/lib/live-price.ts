@@ -18,6 +18,7 @@ export interface PriceUpdateMessage {
   yes_price?: number;
   no_price?: number;
   outcome_prices?: Record<string, number>;
+  volume?: number;
 }
 
 export type LivePricePoint = Record<string, number | string> & { time: number };
@@ -26,6 +27,7 @@ export type LivePricePoint = Record<string, number | string> & { time: number };
 export interface MarketPriceCache {
   yes_price?: string;
   no_price?: string;
+  outcomes?: MarketOutcomeCache[];
   [key: string]: unknown;
 }
 
@@ -172,6 +174,13 @@ export function priceHistoryToPoints(
   return points;
 }
 
+/** Cached outcome shape, as the market detail query returns it. */
+export interface MarketOutcomeCache {
+  id?: string;
+  name?: string;
+  price?: number | string | null;
+}
+
 /**
  * Patch the cached market with the frame's prices.
  *
@@ -187,6 +196,31 @@ export function patchMarketPrices<T extends MarketPriceCache>(
   const patch: Partial<MarketPriceCache> = {};
   if (isFiniteNumber(msg.yes_price)) patch.yes_price = String(msg.yes_price);
   if (isFiniteNumber(msg.no_price)) patch.no_price = String(msg.no_price);
+
+  // Per-outcome prices, for markets with 3+ outcomes.
+  //
+  // The header, the outcome selector and the order form all read their prices
+  // from `buildOutcomePrices(market.outcomes, orderbook)`, which prefers the
+  // API price over the book midpoint. `outcomes[].price` is only ever written by
+  // the initial REST fetch, so on a multi-outcome market the API price always
+  // won - and always won *stale*, freezing every per-outcome price in the UI even
+  // though the chart lines beside them were moving. Writing them here is what
+  // makes the numbers and the lines agree.
+  //
+  // Matched case-insensitively: the frame carries the canonical name from the DB
+  // ("Yes") while the cached outcome is whatever the API echoed back.
+  const outcomePrices = msg.outcome_prices;
+  const outcomes = prev.outcomes;
+  if (outcomePrices && Array.isArray(outcomes) && outcomes.length > 0) {
+    let changed = false;
+    const nextOutcomes = outcomes.map((outcome) => {
+      const price = outcomePrices[outcome.name ?? ""] ?? outcomePrices[(outcome.name ?? "").toLowerCase()];
+      if (!isFiniteNumber(price) || price === outcome.price) return outcome;
+      changed = true;
+      return { ...outcome, price };
+    });
+    if (changed) patch.outcomes = nextOutcomes;
+  }
 
   if (Object.keys(patch).length === 0) return prev;
 

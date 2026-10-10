@@ -9,6 +9,7 @@ import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { applyPrivateFeedResync } from "@/lib/ws-resync"
 import { SplitMergeForm } from "@/components/liquidity/split-merge-form"
 import {
   Card,
@@ -465,6 +466,8 @@ export default function PortfolioPage() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
+      // The socket reconnected; fills and balance changes may have been missed.
+      if (applyPrivateFeedResync(qc, msg)) return
       const message = msg as {
         type?: string
         title?: string

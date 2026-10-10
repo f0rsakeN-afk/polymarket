@@ -70,7 +70,16 @@ class NotificationService:
     ) -> None:
         notif = await NotificationService.create_in_app(db, user_id, ntype, title, body, data)
 
-        # Publish to WebSocket for real-time notification
+        # Publish to WebSocket for real-time notification.
+        #
+        # Both shapes, deliberately. Two consumers read this frame and they were
+        # written against different contracts:
+        #   - the notification bell checks `message.notification` (nested), and
+        #   - the portfolio toast reads `message.title` / `message.body` (flat).
+        # Only the flat shape was ever sent, so the bell's live path never fired
+        # and a new notification showed up on the next poll or refetch instead
+        # of immediately. Carrying both makes the frame satisfy each reader
+        # without either having to know about the other.
         try:
             await redis_pubsub.publish_notification(user_id, {
                 "id": str(notif.id),
@@ -80,6 +89,15 @@ class NotificationService:
                 "data": data,
                 "read_at": None,
                 "created_at": notif.created_at.isoformat() if notif.created_at else None,
+                "notification": {
+                    "id": str(notif.id),
+                    "type": ntype,
+                    "title": title,
+                    "body": body,
+                    "data": data,
+                    "read_at": None,
+                    "created_at": notif.created_at.isoformat() if notif.created_at else None,
+                },
             })
         except Exception:
             pass  # non-fatal

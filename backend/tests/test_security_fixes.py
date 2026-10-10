@@ -41,8 +41,11 @@ def ws_client():
 
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         mock_pubsub.subscribe_user = AsyncMock()
+        mock_pubsub.unsubscribe_user = AsyncMock()
         yield TestClient(app)
 
 
@@ -110,6 +113,7 @@ async def test_websocket_query_token_is_gated_off_by_default(ws_client, test_use
 
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         # Public feed: a valid token in the URL is not honoured, but the socket
         # itself is public and connects.
         with ws_client.websocket_connect(f"/ws/trades?token={token}") as ws:

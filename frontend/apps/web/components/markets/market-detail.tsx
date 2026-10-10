@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
@@ -10,7 +10,7 @@ import { Button } from "@workspace/ui/components/button"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
-import { useMarketSocket } from "@/hooks/use-market-socket"
+import { useMarketSocket, WS_GAP, WS_RESYNC } from "@/hooks/use-market-socket"
 import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -120,13 +120,47 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
+  // Held in a ref so the WS handler can stamp a fallback market_id without taking
+  // `market` as a dependency - which would re-subscribe the socket on every load.
+  const marketIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    marketIdRef.current = market?.id
+  }, [market?.id])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
-    if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
+    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; volume?: number; winning_outcome_name?: string; id?: string; market_id?: string; market_slug?: string; market_question?: string; outcome?: string; side?: string; price?: string | number; amount?: string | number; executed_at?: string | null; username?: string }
+
+    if (msg.type === "trade:new") {
+      // The backend now sends one frame per persisted Trade row with the same
+      // fields as the REST feed, so use them verbatim.
+      //
+      // Two bugs are fixed here. The old handler required `msg.price && msg.amount
+      // && msg.username` to be truthy, so a legitimate fill at price 0 or a trade
+      // with no username attached was silently dropped; and it minted a synthetic
+      // `ws-${Date.now()}` id, which collided with itself for two trades inside
+      // the same millisecond and matched no database row - so the live row could
+      // never be deduped against the one the next REST refetch returned.
+      const price = Number(msg.price)
+      const amount = Number(msg.amount)
+      if (!msg.outcome || !msg.side || !msg.id) return
+      if (!Number.isFinite(price) || !Number.isFinite(amount)) return
+
+      const trade: Trade = {
+        id: msg.id,
+        market_id: msg.market_id ?? marketIdRef.current ?? "",
+        market_slug: msg.market_slug ?? slug,
+        market_question: msg.market_question ?? "",
+        outcome: msg.outcome,
+        side: msg.side,
+        price: String(msg.price),
+        amount: String(msg.amount),
+        executed_at: msg.executed_at ?? null,
+        username: msg.username ?? "Unknown",
+      }
+
       setRealtimeTrades((prev) => {
-        const next = [{ id: `ws-${Date.now()}`, market_id: "", market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: String(msg.price!), amount: String(msg.amount!), executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
-        return next.slice(0, 200)
+        if (prev.some((t) => t.id === trade.id)) return prev
+        return [trade, ...prev].slice(0, 200)
       })
       return
     }
@@ -192,6 +226,22 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     }
     if (msg.type === "comment:deleted") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
+    }
+
+    // The socket proved it dropped frames (a jump in the server's per-market
+    // sequence number), or it just reconnected after a gap it could not measure.
+    // Either way the incremental frames above are no longer a complete picture,
+    // so the cached market, book and trades are rebuilt from REST - the database
+    // is the source of truth and replaying the socket would only reproduce the
+    // same gap.
+    //
+    // Without this the page silently rendered a book and price history that were
+    // missing trades, and on a market that had gone quiet since the drop nothing
+    // would ever correct it.
+    if (msg.type === WS_RESYNC || msg.type === WS_GAP) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.market(slug) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(slug) })
+      queryClient.invalidateQueries({ queryKey: ["market-trades", slug] })
     }
   }, [slug, queryClient])
 
@@ -400,7 +450,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 {market.category}
               </span>
             )}
-            <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
+            {/* <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span> */}
           </div>
           {/*
             Fluid type rather than one fixed size. A prediction-market question
@@ -441,9 +491,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                   </>
                 )
                 : outcomeList.slice(0, 4).map((outcome, i) => (
-                    <div key={outcome.id} className="flex items-center gap-2">
-                      <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
-                      <div className="text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
+                    <div key={outcome.id} className="flex min-w-0 items-center gap-2">
+                      {/* Wraps rather than truncates: this strip is how a user
+                          matches a line on the chart to its name, so a clipped
+                          name breaks the pairing. */}
+                      <div className="min-w-0 break-words text-xs uppercase tracking-wider text-muted-foreground">
+                        {outcome.name}
+                      </div>
+                      <div className="shrink-0 text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
                         {Math.round(priceFor(outcome.name, 0) * 100)}¢
                       </div>
                     </div>
