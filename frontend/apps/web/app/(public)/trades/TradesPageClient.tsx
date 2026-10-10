@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { useSimpleGlobalTrades } from "@/hooks/api/use-trades"
 import { useGlobalTradesSocket } from "@/hooks/use-global-trades-socket"
@@ -10,7 +10,7 @@ import { toTrade, type GlobalTradeFrame } from "@/lib/global-trade-frame"
 const MAX_TRADES = 100
 
 export function TradesPageClient() {
-  const { data, isLoading } = useSimpleGlobalTrades({ page_size: MAX_TRADES })
+  const { data, isLoading, refetch } = useSimpleGlobalTrades({ page_size: MAX_TRADES })
   const listRef = useRef<HTMLDivElement>(null)
 
   const [wsTrades, setWsTrades] = useState<Trade[]>([])
@@ -37,6 +37,20 @@ export function TradesPageClient() {
 
   const handleWsMessage = useCallback((msg: unknown) => {
     const frame = msg as GlobalTradeFrame
+
+    // The feed socket just reconnected. Anything it "missed" is unrecoverable
+    // from the socket itself - it is a firehose with no replay - so the REST
+    // page is the only complete picture and has to be re-pulled. Without this,
+    // trades that happened during the outage simply never appear: the feed
+    // reconnects cleanly, shows "live", and is quietly missing a window.
+    if (frame.type === "__ws_resync__") {
+      setWsTrades([])
+      setPendingCount(0)
+      seenIdsRef.current.clear()
+      void refetch()
+      return
+    }
+
     if (frame.type !== "trade:new") return
 
     const trade = toTrade(frame)
@@ -58,13 +72,34 @@ export function TradesPageClient() {
       }
       return [trade, ...prev]
     })
-  }, [])
+  }, [refetch])
 
   const { status: wsStatus } = useGlobalTradesSocket({
     onMessage: handleWsMessage,
   })
 
-  const mergedTrades = [...wsTrades, ...(data?.trades ?? [])].slice(0, MAX_TRADES)
+  // Deduplicated by id *here*, at merge time, rather than only on arrival.
+  //
+  // `seenIdsRef` stops a WS frame arriving after the REST page has already been
+  // seen. It cannot stop the reverse: a WS frame that arrives *while* the
+  // request is in flight is accepted, and then the response - which contains
+  // that same trade - renders beside it. The window is small but real, and the
+  // reconnect resync widened it, because every reconnect now re-runs the query.
+  //
+  // Deduping at the merge is the only place that sees both sources at once, and
+  // it costs one pass over at most `MAX_TRADES` rows. WS rows win the tie
+  // because they are the fresher copy of the same trade.
+  const mergedTrades = useMemo(() => {
+    const seen = new Set<string>()
+    const out: Trade[] = []
+    for (const t of [...wsTrades, ...(data?.trades ?? [])]) {
+      if (seen.has(t.id)) continue
+      seen.add(t.id)
+      out.push(t)
+      if (out.length >= MAX_TRADES) break
+    }
+    return out
+  }, [wsTrades, data?.trades])
 
   const scrollToTop = useCallback(() => {
     listRef.current?.scrollTo({ top: 0, behavior: "smooth" })

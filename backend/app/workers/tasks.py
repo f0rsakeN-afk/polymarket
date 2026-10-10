@@ -140,6 +140,7 @@ def expire_stale_orders(self):
     try:
         async def _run():
             from app.services.cache_service import cache_invalidate_orderbook
+            from app.services.notification_service import NotificationService
 
             async with get_session() as db:
                 # Batched: one giant FOR UPDATE sweep would lock every expirable
@@ -193,6 +194,67 @@ def expire_stale_orders(self):
                 )
                 for market_id in expired_by_market:
                     await cache_invalidate_orderbook(market_id)
+
+                # Tell the owner, not just the market.
+                #
+                # Expiry is not a market event - it is a change to *this user's*
+                # order and, for a buy, to their available balance: the locked
+                # remainder was just released. Publishing only to the market
+                # channel meant the market page refreshed for everybody while the
+                # owner's orders page kept showing a pending order that no longer
+                # existed, holding funds they could no longer see released.
+                #
+                # This is the same omission as the fill and cancel paths had, and
+                # it is the reason an expired order reads as "my order vanished"
+                # rather than "my order expired".
+                #
+                # Aggregated per user: one user can have several orders expire in
+                # the same batch, and they deserve one message saying so rather
+                # than one per order.
+                expired_by_user: dict[str, list] = {}
+                for batch in expired_by_market.values():
+                    for order in batch:
+                        expired_by_user.setdefault(str(order.user_id), []).append(order)
+
+                for user_id, orders in expired_by_user.items():
+                    try:
+                        await redis_pubsub.publish_order_fill(user_id, {
+                            "order_id": str(orders[0].id),
+                            "order_ids": [str(o.id) for o in orders],
+                            "market_id": str(orders[0].market_id),
+                            "status": "expired",
+                            "side": orders[0].side,
+                            "shares": 0.0,
+                            "price": float(orders[0].price or 0),
+                            "role": "taker",
+                        })
+                        await redis_pubsub.publish_user_event(user_id, {
+                            "market_id": str(orders[0].market_id),
+                            "status": "expired",
+                            "role": "taker",
+                        })
+                        noun = "order" if len(orders) == 1 else "orders"
+                        await NotificationService.dispatch(
+                            db,
+                            user_id,
+                            "order_cancelled",
+                            f"{len(orders)} resting {noun} expired",
+                            f"Your resting {noun} on this market reached the expiry "
+                            "time and the reserved funds have been released.",
+                            {
+                                "order_ids": [str(o.id) for o in orders],
+                                "market_id": str(orders[0].market_id),
+                                "reason": "expired",
+                            },
+                        )
+                    except Exception:
+                        # The expiry already committed; failing to tell the user
+                        # must not fail the sweep. Logged, never swallowed.
+                        logger.exception(
+                            "expiry notification failed user=%s • their order "
+                            "page will be stale until they refetch",
+                            user_id,
+                        )
 
                 return f"Expired {expired_count} orders"
 
@@ -581,13 +643,19 @@ def check_limit_order_execution(self):
                                         f"Your {re_locked_order.status} order on {market.slug} has been filled.",
                                         {"order_id": str(re_locked_order.id), "market_id": str(market.id), "side": order_side}
                                     )
-                                    # Publish position:update for real-time UI refresh
-                                    await redis_pubsub.publish_notification(str(re_locked_order.user_id), {
-                                        "type": "position:update",
+                                    # Publish position:update for real-time UI refresh.
+                                    # `publish_user_event`, not `publish_notification`:
+                                    # the latter stamps `type: "notification"` over
+                                    # whatever the caller asked for, so the
+                                    # `position:update` type never left the process
+                                    # and every client handler for it was dead code.
+                                    await redis_pubsub.publish_user_event(str(re_locked_order.user_id), {
                                         "market_id": str(market.id),
+                                        "market_slug": market.slug,
                                         "outcome": outcome.name if outcome else None,
                                         "shares": float(order_amount) - float(remaining),
                                         "side": order_side,
+                                        "role": "taker",
                                     })
                                 except Exception:
                                     pass

@@ -15,6 +15,7 @@ import {
 } from "@/hooks/api/use-notifications"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { applyPrivateFeedResync } from "@/lib/ws-resync"
 import type { Notification } from "@/lib/schemas/notifications"
 import { Bell, BellRing, CheckCircle, XCircle, AlertTriangle, Clock, Info } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
@@ -154,6 +155,9 @@ export function NotificationBell() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
+      // The socket reconnected; anything that arrived while it was down is not
+      // coming, so the list is re-read rather than left showing a partial view.
+      if (applyPrivateFeedResync(qc, msg)) return
       const message = msg as { type?: string; notification?: Notification }
       if (message.type === "notification" && message.notification) {
         setOverlay((prev) => ({

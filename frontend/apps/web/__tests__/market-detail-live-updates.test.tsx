@@ -21,6 +21,11 @@ import { render, screen, act } from "@testing-library/react";
 let socketHandler: ((data: unknown) => void) | null = null;
 
 vi.mock("@/hooks/use-market-socket", () => ({
+  // The synthetic frame types are values, not behaviour - they must survive
+  // the mock or the component's resync branch compares against `undefined` and
+  // silently never matches.
+  WS_RESYNC: "__ws_resync__",
+  WS_GAP: "__ws_gap__",
   useMarketSocket: ({ onMessage }: { onMessage: (d: unknown) => void }) => {
     socketHandler = onMessage;
     return { status: "connected" };

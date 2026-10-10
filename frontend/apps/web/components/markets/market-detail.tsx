@@ -10,7 +10,7 @@ import { Button } from "@workspace/ui/components/button"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
-import { useMarketSocket } from "@/hooks/use-market-socket"
+import { useMarketSocket, WS_GAP, WS_RESYNC } from "@/hooks/use-market-socket"
 import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -226,6 +226,22 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     }
     if (msg.type === "comment:deleted") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
+    }
+
+    // The socket proved it dropped frames (a jump in the server's per-market
+    // sequence number), or it just reconnected after a gap it could not measure.
+    // Either way the incremental frames above are no longer a complete picture,
+    // so the cached market, book and trades are rebuilt from REST - the database
+    // is the source of truth and replaying the socket would only reproduce the
+    // same gap.
+    //
+    // Without this the page silently rendered a book and price history that were
+    // missing trades, and on a market that had gone quiet since the drop nothing
+    // would ever correct it.
+    if (msg.type === WS_RESYNC || msg.type === WS_GAP) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.market(slug) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(slug) })
+      queryClient.invalidateQueries({ queryKey: ["market-trades", slug] })
     }
   }, [slug, queryClient])
 

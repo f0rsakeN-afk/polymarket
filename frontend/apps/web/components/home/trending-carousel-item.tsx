@@ -3,7 +3,7 @@
 import { memo, useCallback, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
-import { useMarketSocket } from "@/hooks/use-market-socket"
+import { useMarketSocket, WS_GAP, WS_RESYNC } from "@/hooks/use-market-socket"
 import { usePriceHistory } from "@/hooks/api/use-markets"
 import { priceHistoryToPoints, buildLivePricePoint } from "@/lib/live-price"
 import type { LiveLinePoint } from "@workspace/ui/components/charts/live-line-chart"
@@ -115,6 +115,18 @@ function TrendingCarouselItem({ market }: TrendingCarouselItemProps) {
       yes_price?: number
       outcome_prices?: Record<string, number>
     }
+
+    // Frames were lost or the socket just reconnected: whatever live points we
+    // accumulated describe a window we can no longer vouch for, and the tail of
+    // the sparkline would silently jump once the next frame arrives. Drop them
+    // so the card falls back to the REST price and history, which are a complete
+    // and consistent picture, instead of stitching across a hole.
+    if (msg.type === WS_RESYNC || msg.type === WS_GAP) {
+      setLivePrice(null)
+      setLivePoints([])
+      return
+    }
+
     if (msg.type !== "market:price_update") return
 
     /*

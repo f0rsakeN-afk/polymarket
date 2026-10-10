@@ -71,6 +71,16 @@ WS_MESSAGES_FANNED_OUT = Counter(
     "Realtime frames fanned out to local sockets, by channel class",
     ["channel"],  # market | user | global
 )
+# A publish that never reached Redis. Previously every publisher ended in
+# `except redis.RedisError: pass`, so a Redis outage deleted trades, price
+# frames AND the `dirty:markets` marker that drives the limit-order executor,
+# with nothing in logs and nothing to alert on. This makes silence visible.
+WS_PUBLISH_FAILURES = Counter(
+    "ws_publish_failures_total",
+    "Realtime frames that failed to publish to Redis, by frame type",
+    ["frame"],  # price_update | trade | order_fill | notification | user_event
+    #            | market_event | global_trade
+)
 
 
 def _route_template(request: Request) -> str:

@@ -183,6 +183,39 @@ describe("applying a live trade frame", () => {
     expect(screen.getAllByTestId("feed-row")).toHaveLength(1);
   });
 
+  it("does not duplicate a trade the REST page returned *after* the frame arrived", () => {
+    // The reverse of the case above, and the one `seenIdsRef` structurally
+    // cannot catch: a WS frame arrives while the REST request is still in
+    // flight, so it is accepted (nothing has been seen yet), and then the
+    // response lands carrying that same trade. `seenIdsRef` only guards
+    // frame-against-already-seen, so the merge itself has to dedupe.
+    //
+    // The reconnect resync re-runs this query, which made the window reachable
+    // on every reconnect rather than just page load.
+    const { rerender } = render(<TradesPageClient />);
+
+    act(() => socketHandler?.(frame()));
+
+    // The REST page then resolves, carrying the same trade.
+    restTrades = [
+      {
+        id: "trade-1",
+        market_id: "market-1",
+        market_slug: "will-x-happen",
+        market_question: "Will X happen?",
+        outcome: "Yes",
+        side: "buy",
+        price: "0.62",
+        amount: "12.5",
+        executed_at: "2026-01-01T12:00:00+00:00",
+        username: "trader_123",
+      },
+    ];
+    rerender(<TradesPageClient />);
+
+    expect(screen.getAllByTestId("feed-row")).toHaveLength(1);
+  });
+
   it("does not duplicate two pushes of the same trade", () => {
     render(<TradesPageClient />);
 

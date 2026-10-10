@@ -19,6 +19,7 @@ import { Spinner } from "@workspace/ui/components/spinner"
 import { DataTable, Column } from "@/components/shared/data-table"
 import { useOrders } from "@/hooks/api/use-orders"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { applyPrivateFeedResync } from "@/lib/ws-resync"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useCancelOrder } from "@/hooks/api/use-orders"
 import { queryKeys } from "@/lib/api/queryKeys"
@@ -179,6 +180,8 @@ export function OrdersPageClient() {
 
   const handleWsMessage = useCallback(
     (payload: unknown) => {
+      // The socket reconnected; fills may have been missed while it was down.
+      if (applyPrivateFeedResync(qc, payload)) return
       const msg = payload as { type?: string; notification?: { type?: string } }
       if (
         msg?.type === "position:update" ||

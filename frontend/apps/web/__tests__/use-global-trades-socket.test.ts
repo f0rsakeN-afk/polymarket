@@ -238,65 +238,80 @@ describe("reconnect", () => {
     expect(FakeWebSocket.instances.length).toBe(countAfterRecovery);
   });
 
-  it("gives up after repeated failures rather than dialling forever", async () => {
+  it("keeps retrying forever rather than parking permanently", async () => {
+    // The regression this pins: the loop used to park itself after 8 attempts
+    // and only resume on `online` or a tab focus. Neither is guaranteed by the
+    // browser, so a feed lost to a sleeping laptop, a deploy, or a network
+    // handover could stay dead for the rest of the session while the UI still
+    // looked healthy. The delay is capped at 30s, so "forever" costs at most
+    // two attempts a minute.
     const { view } = setup();
 
-    // More rounds than MAX_RECONNECT_ATTEMPTS (8), so the park is reached.
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 20; i++) {
       await act(async () => {
         vi.advanceTimersByTime(30_000);
       });
-      if (FakeWebSocket.instances.length === 0) break; // parked: nothing to drop
       act(() => FakeWebSocket.latest().drop());
     }
 
-    expect(view.result.current.status).toBe("error");
-  });
-
-  it("un-parks when the network genuinely returns", async () => {
-    // The parked state must not be permanent: `online` is the signal that the
-    // endpoint might be serving again.
-    const { view } = setup();
-    for (let i = 0; i < 12; i++) {
-      await act(async () => {
-        vi.advanceTimersByTime(30_000);
-      });
-      if (FakeWebSocket.instances.length === 0) break;
-      act(() => FakeWebSocket.latest().drop());
-    }
-    expect(view.result.current.status).toBe("error");
-
-    await act(async () => {
-      window.dispatchEvent(new Event("online"));
-    });
-
+    // Well past the old ceiling of 8, and the status never went terminal - a
+    // parked feed reported "error" and stopped dialling entirely.
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(12);
     expect(view.result.current.status).not.toBe("error");
   });
 
-  it("does NOT un-park on an ordinary tab switch while parked", async () => {
-    // `recover` is bound to both `online` and tab focus, so it fires on routine
-    // user activity. If it cleared the park unconditionally, a feed whose
-    // endpoint is down would re-attempt on every tab switch - the retry ceiling
-    // becomes no ceiling, and an endpoint refusing us is hammered all day.
-    const { view } = setup();
-    for (let i = 0; i < 12; i++) {
+  it("never exceeds the capped backoff however long it has been failing", async () => {
+    setup();
+    for (let i = 0; i < 40; i++) {
       await act(async () => {
         vi.advanceTimersByTime(30_000);
       });
-      if (FakeWebSocket.instances.length === 0) break;
+      const before = FakeWebSocket.instances.length;
       act(() => FakeWebSocket.latest().drop());
-    }
-    expect(view.result.current.status).toBe("error");
-
-    const countWhenParked = FakeWebSocket.instances.length;
-    for (let i = 0; i < 5; i++) {
+      // Still retrying within a single 30s window: if the delay had grown past
+      // the cap, a retry would be outstanding and the count would not move.
       await act(async () => {
-        document.dispatchEvent(new Event("visibilitychange"));
+        vi.advanceTimersByTime(30_000);
       });
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(before);
     }
+  });
 
-    expect(FakeWebSocket.instances.length).toBe(countWhenParked);
-    expect(view.result.current.status).toBe("error");
+  it("announces a resync on reconnect so the consumer can refetch", async () => {
+    // The feed is a firehose with no sequence numbers, so this hook cannot
+    // detect a gap on its own. Without an explicit signal, trades that happened
+    // during the outage simply never appear: the feed reconnects cleanly, shows
+    // "live", and is quietly missing a window.
+    const { view } = setup();
+    const first = FakeWebSocket.latest();
+    act(() => first.open());
+    act(() => first.drop());
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    act(() => FakeWebSocket.latest().open());
+
+    expect(view.result.current.status).toBe("connected");
+  });
+
+  it("replaces the socket on a tab switch, which is how the sleep case repairs", async () => {
+    // A socket killed by a suspended machine can still read OPEN - the browser
+    // may not notice until it next writes - so `readyState` cannot distinguish
+    // it from a healthy one. Tab focus is the only browser-side signal that
+    // says "the world moved", so the socket is replaced rather than trusted.
+    // Costs one handshake per tab switch; buys an instant repair instead of
+    // waiting out the server's pong deadline.
+    setup();
+    act(() => FakeWebSocket.latest().open());
+    const first = FakeWebSocket.latest();
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(1);
+    expect(first.closed).toBe(true);
   });
 
   it("still recovers from the sleep case after many silent tab switches", async () => {
