@@ -22,6 +22,7 @@ from collections import defaultdict, deque
 import redis.asyncio as redis
 from fastapi import WebSocket
 
+from app.config import settings
 from app.middleware.metrics import (
     WS_CONNECTIONS,
     WS_CONNECTS_TOTAL,
@@ -32,6 +33,7 @@ from app.middleware.metrics import (
     WS_SUBSCRIPTIONS,
 )
 from app.redis import get_redis, redis_cb
+from app.websocket.publish_queue import Delivery, Pending, PublishDispatcher
 
 # Bound concurrent broadcast tasks to avoid OOM at 5k msg/s (H9 fix)
 _broadcast_sem = asyncio.Semaphore(200)
@@ -134,6 +136,17 @@ def next_grid_interval(
         # cadence is the thing making them stale.
         return max(floor, current * 0.5)
     return min(base, current + step)
+
+
+# Marker telling a client its private feed has a hole it should repair.
+#
+# Must stay byte-identical to `WS_RESYNC` in
+# `frontend/apps/web/lib/ws-resync.ts`. It is a wire contract with no shared
+# schema behind it, which is exactly the kind of thing that drifts silently -
+# the server would send a frame the client does not recognise and the resync
+# would simply never happen, with nothing failing anywhere. The value is pinned
+# by a test for that reason.
+WS_RESYNC = "__ws_resync__"
 
 
 def market_events_channel(market_id: str) -> str:
@@ -1384,6 +1397,23 @@ class RedisPubSub:
         # A reference count makes release idempotent per subscriber, so only the
         # last one out actually unsubscribes from Redis.
         self._refs: dict[str, int] = {}
+
+        # Bounded publish queues drained by a fixed writer pool.
+        #
+        # Every `publish_*` below routes through this rather than talking to Redis
+        # directly. `max_connections` is a hard cliff - past it redis-py raises
+        # `MaxConnectionsError` instead of waiting - and every publisher used to
+        # catch that and log a warning, so a burst meant trades committed to
+        # Postgres that clients were never told about, followed by every client
+        # detecting the gap and refetching at once. See `publish_queue` for the
+        # full reasoning and the two delivery classes.
+        self._dispatcher = PublishDispatcher(
+            send=self._dispatch,
+            writers=settings.publish_writers,
+            ephemeral_max=settings.publish_queue_ephemeral,
+            critical_max=settings.publish_queue_critical,
+            resync=self._send_owed_resync,
+        )
         # What the live pubsub client is *actually* subscribed to. Distinct from
         # `_refs` (what we want) so a reconnect can replay intent without
         # guessing, and so a subscribe that arrives while the client is down is
@@ -1398,12 +1428,20 @@ class RedisPubSub:
         self._closed = False
 
     async def connect(self):
+        # Not merely "already connected": the writers may have died with their
+        # event loop, and a dispatcher with no live writers accepts frames that
+        # nobody ever sends. `start()` is cheap and idempotent, so always run it.
         if self._connected and self._pubsub is not None:
+            await self._dispatcher.start()
             return
         self._redis = await get_redis()
         self._pubsub = self._redis.pubsub()
         self._connected = True
         self._closed = False
+        # Writers start with the connection: a publisher that can enqueue into a
+        # queue nobody is draining would convert a Redis cliff into an unbounded
+        # memory leak, which is a worse failure with a longer fuse.
+        await self._dispatcher.start()
 
     # ── Subscription registry ────────────────────────────────────────────────
 
@@ -1514,6 +1552,69 @@ class RedisPubSub:
     async def unsubscribe_global_trades(self):
         await self._release(GLOBAL_TRADES_CHANNEL)
 
+    # ── Publish queue ───────────────────────────────────────────────────────
+
+    async def _dispatch(self, pending) -> None:
+        """Execute one queued frame against Redis, through the breaker.
+
+        The circuit breaker and the `WS_PUBLISH_FAILURES` counter live here rather
+        than at the call sites so that queueing a frame and failing to write it
+        are distinguishable: the queue depth says work is waiting, the failure
+        counter says the write did not happen, and neither implies the other.
+        """
+        try:
+            await redis_cb.call(pending.op)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            WS_PUBLISH_FAILURES.labels(pending.label or pending.frame).inc()
+            logger.warning(
+                "queued publish failed frame=%s: %s", pending.frame, e,
+            )
+
+    async def _send_owed_resync(self, user_id: str) -> None:
+        """Tell a client its private feed has a hole it should repair.
+
+        Sent on the same private channel the lost frame would have used, so a
+        client that is connected receives it. A client that is not connected is
+        not owed anything: on reconnect it refetches state anyway, and every
+        frame dropped for it is already durable in Postgres.
+        """
+        async def _op():
+            await self._redis.publish(
+                f"user:{user_id}:notifications",
+                json.dumps({"type": WS_RESYNC}),
+            )
+
+        await self._dispatch(
+            Pending(op=_op, delivery=Delivery.CRITICAL, frame="resync_marker")
+        )
+
+    def enqueue_publish(
+        self,
+        op,
+        *,
+        frame: str,
+        label: str | None = None,
+        owe_resync_to: str | None = None,
+    ) -> bool:
+        """Offer a frame to the queue. See `app/websocket/publish_queue.py`.
+
+        `frame` and `label` are deliberately separate. `frame` is the event type
+        and decides the *delivery class* - `orderbook:update` must not vanish, so
+        it has to be identified by what it is, not by which method sent it.
+        `label` is the metric series and stays the call site, because that is what
+        an operator asks ("is the global trade feed failing?") rather than the
+        event type, and because `WS_PUBLISH_FAILURES` already documents that label
+        set. Collapsing the two would change an existing metric's meaning
+        silently, which breaks every alert written against it.
+        """
+        if not self._redis:
+            return False
+        return self._dispatcher.enqueue(
+            op, frame=frame, label=label or frame, owe_resync_to=owe_resync_to
+        )
+
     # ── Publishing ────────────────────────────────────────────────────────
     #
     # Every market frame is stamped with a per-market monotonic `seq` by an
@@ -1591,14 +1692,10 @@ class RedisPubSub:
             pipe.sadd("dirty:markets", market_id)
             await pipe.execute()
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("price_update").inc()
-            logger.warning(
-                "price_update publish failed market=%s: %s • live prices are now stale",
-                market_id, e,
-            )
+        # Ephemeral by design: only the newest price matters, so overflowing
+        # this queue drops the oldest and keeps the latest - the same coalescing
+        # the grid does anyway, reached without a Redis round-trip per discard.
+        self.enqueue_publish(_op, frame="price_update", label="price_update")
 
     async def publish_order_fill(self, user_id: str, order_data: dict):
         """Push a private fill frame to the user's own sockets."""
@@ -1611,11 +1708,10 @@ class RedisPubSub:
                 json.dumps({**order_data, "type": "order:fill"}),
             )
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("order_fill").inc()
-            logger.warning("order:fill publish failed user=%s: %s", user_id, e)
+        # Private channel, so overflow owes this user a resync rather than a
+        # silently missing "you were filled".
+        self.enqueue_publish(_op, frame="order:fill", label="order_fill",
+                             owe_resync_to=user_id)
 
     async def publish_notification(self, user_id: str, data: dict):
         if not self._redis:
@@ -1627,11 +1723,8 @@ class RedisPubSub:
                 json.dumps({**data, "type": "notification"}),
             )
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("notification").inc()
-            logger.warning("notification publish failed user=%s: %s", user_id, e)
+        self.enqueue_publish(_op, frame="notification", label="notification",
+                             owe_resync_to=user_id)
 
     async def publish_user_event(self, user_id: str, data: dict) -> None:
         """Publish a private event frame *preserving* its declared `type`.
@@ -1656,14 +1749,10 @@ class RedisPubSub:
                 f"user:{user_id}:notifications", json.dumps(frame)
             )
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("user_event").inc()
-            logger.warning(
-                "user event publish failed user=%s type=%s: %s",
-                user_id, frame.get("type"), e,
-            )
+        # `position:update` travels this path, so the frame name is the caller's
+        # declared type - that is what makes the queue classify it as critical.
+        self.enqueue_publish(_op, frame=frame.get("type") or "user_event",
+                             label="user_event", owe_resync_to=user_id)
 
     async def publish_market_event(self, market_id: str, event_type: str, data: dict | None = None):
         """Push any market-scoped frame (`trade:new`, `orderbook:update`, ...).
@@ -1684,13 +1773,11 @@ class RedisPubSub:
                 self._seq(market_id, {"type": event_type, "market_id": market_id, **(data or {})}),
             )
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("market_event").inc()
-            logger.warning(
-                "%s publish failed market=%s: %s", event_type, market_id, e
-            )
+        # The event type drives the delivery class: `orderbook:update` and
+        # `trade:new` must not vanish, `market:price_update` may. Market-scoped
+        # frames have no private channel, so overflow relies on the `seq` gap to
+        # drive the client's refetch - which is automatic.
+        self.enqueue_publish(_op, frame=event_type, label="market_event")
 
     async def publish_global_trade(self, trade_data: dict):
         """Push to the platform-wide trade feed.
@@ -1707,11 +1794,7 @@ class RedisPubSub:
                 GLOBAL_TRADES_CHANNEL, json.dumps({"type": "trade:new", **trade_data})
             )
 
-        try:
-            await redis_cb.call(_op)
-        except Exception as e:
-            WS_PUBLISH_FAILURES.labels("global_trade").inc()
-            logger.warning("global trade publish failed: %s", e)
+        self.enqueue_publish(_op, frame="trade:new", label="global_trade")
 
     async def listen(self):
         """Consume every channel this process is subscribed to, until shutdown.
@@ -1891,6 +1974,17 @@ class RedisPubSub:
         # Set before cancelling so an in-flight `get_message` returns promptly and
         # the loop exits on its own condition rather than only via CancelledError.
         self._closed = True
+        # Reset the connection flags as well as stopping the tasks.
+        #
+        # Leaving `_connected` true after a close means the next `connect()`
+        # early-returns on a `_pubsub` that has already been closed underneath
+        # it - so the caller believes it has a working Redis connection and every
+        # subscribe and publish fails against a corpse, with nothing to say why.
+        # Restarting is the whole contract of `connect()`.
+        self._connected = False
+        # Writers stop before the Redis connection closes, so a queued frame is
+        # not handed to a client that is going away.
+        await self._dispatcher.stop()
         if self._listener_task:
             self._listener_task.cancel()
             try:

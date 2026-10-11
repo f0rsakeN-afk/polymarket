@@ -76,7 +76,10 @@ async def test_a_market_buy_reaches_a_subscriber_with_moving_prices_and_book(
     market_socket = RecordingSocket()
     await node.connect(market_socket, market_id, client_ip="10.0.0.1")
 
-    with patch.object(global_manager, "broadcast_to_market", node.broadcast_to_market):
+    import app.services.order_service as order_service
+
+    with patch.object(global_manager, "broadcast_to_market", node.broadcast_to_market), \
+         patch.object(order_service, "redis_pubsub", bus):
         await bus.subscribe_market(market_id)
         await bus.start_listener()
 
@@ -196,7 +199,10 @@ async def test_a_resting_limit_order_pushes_the_book_and_changes_nothing_else(
     market_socket = RecordingSocket()
     await node.connect(market_socket, market_id, client_ip="10.0.0.2")
 
-    with patch.object(global_manager, "broadcast_to_market", node.broadcast_to_market):
+    import app.services.order_service as order_service
+
+    with patch.object(global_manager, "broadcast_to_market", node.broadcast_to_market), \
+         patch.object(order_service, "redis_pubsub", bus):
         await bus.subscribe_market(market_id)
         await bus.start_listener()
 
@@ -261,9 +267,15 @@ async def test_a_global_feed_subscriber_receives_the_same_trade(
     await node.connect(market_socket, str(test_market.id), client_ip="10.0.0.3")
     await node.connect(global_socket, GLOBAL_TRADES_KEY, client_ip="10.0.0.4")
 
+    import app.services.order_service as order_service
+
     with patch.object(
         global_manager, "broadcast_to_market", node.broadcast_to_market
-    ), patch.object(global_manager, "broadcast_global", node.broadcast_global):
+    ), patch.object(
+        global_manager, "broadcast_global", node.broadcast_global
+    ), patch.object(
+        order_service, "redis_pubsub", bus
+    ):
         await bus.subscribe_market(str(test_market.id))
         await bus.subscribe_global_trades()
         await bus.start_listener()

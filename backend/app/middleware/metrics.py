@@ -82,6 +82,37 @@ WS_PUBLISH_FAILURES = Counter(
     #            | market_event | global_trade
 )
 
+# The publish queue's vital signs.
+#
+# `max_connections` is a hard cliff, not a queue: past it redis-py raises
+# `MaxConnectionsError` rather than waiting, and every publisher here caught that
+# and logged a warning. So the trade was committed to Postgres and the client was
+# simply never told - a silent drop, invisible to everyone but the log. This
+# counter is what makes a drop storm something you can alert on.
+WS_PUBLISH_QUEUED = Counter(
+    "ws_publish_queued_total",
+    "Frames handed to the publish queue, by delivery class",
+    ["delivery"],
+)
+WS_PUBLISH_DROPPED = Counter(
+    "ws_publish_dropped_total",
+    "Frames discarded because the publish queue was full, by delivery class and reason",
+    ["delivery", "reason"],  # ephemeral: overflow_coalesced | critical: overflow_spilled
+)
+WS_PUBLISH_QUEUE_DEPTH = Gauge(
+    "ws_publish_queue_depth",
+    "Frames waiting in the publish queue, by delivery class",
+    ["delivery"],
+)
+# A critical frame that could not be queued. The affected client is sent a
+# resync marker instead, so this counts reconciliations owed, not lost trades -
+# the trade is already durable in Postgres.
+WS_PUBLISH_SPILL_OWED = Counter(
+    "ws_publish_spill_owed_total",
+    "Critical frames dropped for overflow, for which a client resync was queued",
+    ["frame"],
+)
+
 
 def _route_template(request: Request) -> str:
     # scope["route"] is populated by the router downstream; read AFTER call_next.
