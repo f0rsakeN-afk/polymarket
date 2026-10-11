@@ -6,6 +6,7 @@ import { MarketCard } from "./market-card"
 import { SkeletonMarketGrid } from "@/components/shared/skeletons"
 import { useMarketGrid } from "@/hooks/use-market-socket"
 import type { LiveFrame } from "@/lib/live-price"
+import { useVisibleRange } from "@/lib/use-visible-range"
 import type { MarketResponse } from "@/hooks/api/types/market"
 
 /** Latest socket prices, keyed by market id. */
@@ -28,6 +29,9 @@ const FLUSH_INTERVAL_MS = 250
  * markets would otherwise spend its entire budget on them.
  */
 const DEAD_MARKET_STATUSES = new Set(["resolved", "closed"])
+
+/** Fallback card height, used until the virtualizer measures a real one. */
+const ESTIMATED_CARD_PX = 260
 
 interface MarketListProps {
   markets: MarketResponse[]
@@ -112,9 +116,30 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   // alone leaves a slot pinned on a market that can never tick again for as long
   // as the request takes - and on a list that is mostly resolved markets, that
   // is the whole budget spent on markets that are already done.
+  // Only what is on screen, plus a small overscan.
+  //
+  // Declaring every loaded market made the server hold a channel and buffer a
+  // price for each one per flush - including the hundreds scrolled out of view.
+  // That work was invisible in the UI and grew with the catalogue rather than
+  // with the page, which is the wrong axis entirely: a user's screen shows the
+  // same twenty markets whether the catalogue holds twenty or twenty thousand.
+  //
+  // The overscan is load-bearing, not cosmetic. A market subscribed only once it
+  // scrolls into view arrives with whatever price the last REST response gave it
+  // and stays there until something else moves it - so the first thing a user
+  // sees after scrolling is a price that is conspicuously not live, which reads
+  // as the realtime layer being broken precisely where they were looking.
+  // Window the list. Rendering and subscription both follow the visible range,
+  // so a long catalogue costs the same as a short one.
+  const { virtualizer, scrollRef, visibleIndices } = useVisibleRange(
+    markets,
+    useCallback(() => ESTIMATED_CARD_PX, [])
+  )
+
   const marketIds = markets
     .filter((m) => !DEAD_MARKET_STATUSES.has(m.status ?? ""))
     .filter((m) => !resolvedRef.current.has(m.id))
+    .filter((_, i) => visibleIndices.includes(i))
     .map((m) => m.id)
   const idsKey = marketIds.join("|")
 
@@ -148,18 +173,28 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
           continue
         }
 
-        // Gap detection survives batching: `seq` rides along on every price, so
-        // a grid can still tell a missed frame from a quiet market.
+        // Gap detection survives batching - but only because the server says what it
+        // dropped. Aggregation collapses N updates per market into one frame, so
+        // the intermediate `seq`s are *deliberately* absent: `seq_from` is the
+        // first seq this flush window saw, `seq` the last.
+        //
+        // Judging contiguity on `seq` alone would read a collapsed update as
+        // `4 -> 9` and call it loss, so every busy market would fire a full REST
+        // resync on every tick - which is a self-inflicted load problem, not just
+        // a wrong number. Comparing `seq_from` against what we last received
+        // separates the two: coalescing stays contiguous, genuine transport loss
+        // still shows up as a gap.
         const seq = msg.seq
         if (typeof seq === "number") {
+          const seqFrom = typeof msg.seq_from === "number" ? msg.seq_from : seq
           const prev = seqRef.current.get(marketId)
-          if (prev !== undefined && seq > prev + 1) {
+          if (prev !== undefined && seqFrom > prev + 1) {
             // Provable loss - repair from REST rather than stitching across a
             // hole, exactly as a detail page does.
             needsResyncRef.current = true
             continue
           }
-          seqRef.current.set(marketId, Math.max(prev ?? seq, seq))
+          seqRef.current.set(marketId, seq)
         }
 
         pendingRef.current[marketId] = {
@@ -253,12 +288,53 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
     )
   }
 
+  const rows = virtualizer.getVirtualItems()
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {markets.map((market) => (
-          <MarketCard key={market.id} market={market} live={live[market.id]} />
-        ))}
+      {/*
+        The list is windowed rather than fully rendered.
+
+        Every mounted card re-renders whenever its price ticks, so on a long list
+        a market moving on page 40 would repaint a node nobody can see. The
+        virtualizer mounts only the visible rows, which bounds the DOM and the
+        render work together - and, because the grid declares the same range, the
+        server-side buffering is bounded by the same number.
+
+        Absolute positioning against a spacer of the full scroll height is what
+        keeps scroll position honest: the container reports the true length of the
+        list while only a handful of rows exist inside it.
+      */}
+      <div
+        ref={scrollRef}
+        className="max-h-[70vh] overflow-y-auto"
+        data-testid="market-scroll"
+      >
+        <div
+          style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+          className="w-full"
+        >
+          {rows.map((row) => {
+            const market = markets[row.index]
+            if (!market) return null
+            return (
+              <div
+                key={market.id}
+                ref={virtualizer.measureElement}
+                data-index={row.index}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${row.start}px)`,
+                }}
+              >
+                <MarketCard market={market} live={live[market.id]} />
+              </div>
+            )
+          })}
+        </div>
       </div>
       <div ref={sentinelRef} className="flex justify-center py-4">
         {loading && <div className="flex items-center gap-1 text-muted-foreground"><div className="size-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" /> Loading...</div>}

@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import redis.asyncio as redis
 from fastapi import WebSocket
@@ -45,6 +45,95 @@ GLOBAL_TRADES_KEY = "__global_trades__"
 # Matched as a whole string, never by prefix: it splits into two `:`-separated
 # parts, so prefix routing ("global" matches no known prefix) dropped it.
 GLOBAL_TRADES_CHANNEL = "global:trades"
+
+
+class GridFlushStats:
+    """Rolling view of what the grid flush is actually costing.
+
+    A gateway that cannot report its own latency cannot be tuned, and "the tick
+    is 250ms" says nothing about whether a price is 20ms old or 200ms old. The
+    harness measured p95 near 213ms at 500 sockets while the configured interval
+    said 250ms - close enough to look fine, and completely different as an
+    experience.
+
+    Keeps bounded samples rather than accumulating history, because this lives in
+    a long-lived worker and an unbounded list is a slow leak in a process that is
+    supposed to be steady-state.
+    """
+
+    __slots__ = ("_elapsed", "_sockets", "_intervals", "_maxlen")
+
+    def __init__(self, maxlen: int = 256) -> None:
+        self._maxlen = maxlen
+        self._elapsed: deque[float] = deque(maxlen=maxlen)
+        self._sockets: deque[int] = deque(maxlen=maxlen)
+        self._intervals: deque[float] = deque(maxlen=maxlen)
+
+    def observe(self, sockets_sent: int, elapsed_s: float, interval_s: float) -> None:
+        self._elapsed.append(elapsed_s)
+        self._sockets.append(sockets_sent)
+        self._intervals.append(interval_s)
+
+    @staticmethod
+    def _pct(values: deque, q: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        return ordered[min(int(q * len(ordered)), len(ordered) - 1)]
+
+    @property
+    def flush_p95_s(self) -> float:
+        """p95 flush duration - the work, excluding the sleep between ticks."""
+        return self._pct(self._elapsed, 0.95)
+
+    @property
+    def interval_p50_s(self) -> float:
+        """The cadence the controller settled on."""
+        return self._pct(self._intervals, 0.50)
+
+    @property
+    def sockets_per_flush(self) -> int:
+        return self._sockets[-1] if self._sockets else 0
+
+    def snapshot(self) -> dict:
+        return {
+            "flush_p95_s": round(self.flush_p95_s, 4),
+            "interval_p50_s": round(self.interval_p50_s, 4),
+            "sockets_last_flush": self.sockets_per_flush,
+            "samples": len(self._elapsed),
+        }
+
+
+def next_grid_interval(
+    current: float,
+    *,
+    sockets_sent: int,
+    elapsed_s: float,
+    base: float,
+    floor: float,
+    step: float,
+    saturation_ratio: float,
+) -> float:
+    """Choose the next grid flush interval from what the last one cost.
+
+    Multiplicative decrease, additive increase. That shape is deliberate: it
+    reacts fast when saturation is costing real latency, and recovers gradually,
+    so one busy moment does not leave every socket pinned at the floor for the
+    rest of the process's life.
+
+    Extracted from `grid_loop` so the policy can be tested directly. A test that
+    re-implements the arithmetic next to the code proves nothing - it passes
+    when the loop is broken, which is the only thing a test is for.
+    """
+    if sockets_sent == 0:
+        # Nothing to send. Drift back toward the base instead of staying at
+        # whatever an earlier busy period pushed it to.
+        return min(base, current + step)
+    if elapsed_s > current * saturation_ratio:
+        # The flush is eating the tick. Prices are ageing in the queue and the
+        # cadence is the thing making them stale.
+        return max(floor, current * 0.5)
+    return min(base, current + step)
 
 
 def market_events_channel(market_id: str) -> str:
@@ -184,6 +273,17 @@ class ConnectionManager:
     # percentage, and coarse enough that a list of trading markets costs a
     # handful of frames a second rather than a few hundred.
     GRID_FLUSH_INTERVAL_S = 0.25
+    # Floor for the adaptive cadence. Below this the loop is spinning rather than
+    # adapting, and a tight spin starves the very listener that fills the buffer.
+    # Hitting this floor means the honest answer is another worker, not a faster
+    # loop.
+    GRID_FLUSH_MIN_INTERVAL_S = 0.02
+    # How far the cadence climbs back per cheap flush.
+    GRID_FLUSH_INTERVAL_STEP_S = 0.05
+    # Fraction of the interval a flush may consume before the next one shortens.
+    # Below this the gateway is keeping up; above it, prices are ageing in the
+    # queue and the tick is the thing making them stale.
+    GRID_FLUSH_SATURATION_RATIO = 0.6
     # Ceiling on markets one socket may display. Bounds the buffer a single
     # misbehaving client can make this worker hold.
     MAX_GRID_MARKETS_PER_SOCKET = 200
@@ -251,6 +351,13 @@ class ConnectionManager:
         #
         # Socket -> markets it is displaying in a grid.
         self._grid_subs: dict[WebSocket, set[str]] = {}
+        # Socket -> the grid channels it is holding a refcount on.
+        #
+        # Tracked separately because refcounts are global while interest is per
+        # socket: releasing has to undo exactly what this socket took, or a
+        # market two users are watching gets unsubscribed when one of them
+        # navigates away. `set_grid`/`release_grid` are the only writers.
+        self._grid_channels: dict[WebSocket, set[str]] = {}
         # Market -> sockets displaying it. The reverse index makes a price
         # update cost O(subscribers of that market) rather than O(all sockets).
         self._grid_subscribers: dict[str, set[WebSocket]] = defaultdict(set)
@@ -263,6 +370,10 @@ class ConnectionManager:
         self._ws_user: dict[WebSocket, str | None] = {}
         # Track pending cleanup tasks so they can be awaited on shutdown
         self._pending_cleanups: set[asyncio.Task[None]] = set()
+        # Whether the last flush outran its own tick. Exposed so ops can see
+        # backpressure and so tests can assert the controller is responding.
+        self._grid_backpressure = False
+        self._grid_flush_stats = GridFlushStats()
 
     def touch(self, websocket: WebSocket) -> None:
         """Record inbound traffic as proof the socket is alive.
@@ -499,6 +610,16 @@ class ConnectionManager:
                     logger.warning(
                         "WS redis unsubscribe failed market=%s", market_id, exc_info=True
                     )
+            # The grid's channels too. `clear_grid` above dropped the local
+            # index, but the Redis refcounts this socket was holding for those
+            # markets have to come back as well - otherwise every market ever
+            # shown in a grid stays SUBSCRIBEd on this node for the life of the
+            # process, and this node keeps receiving and discarding frames for
+            # markets nobody is watching.
+            try:
+                await self.release_grid(websocket, redis_pubsub_ref)
+            except Exception:
+                logger.warning("WS grid unsubscribe failed", exc_info=True)
 
         # Drop the sequence high-water mark with the last subscriber, so it does
         # not outlive the market's presence on this node.
@@ -535,6 +656,9 @@ class ConnectionManager:
         Returns the ids actually accepted, so a client that asked for more than
         the cap can fall back rather than silently believing it is live for all
         of them.
+
+        Local bookkeeping only. This does not touch Redis, so it is NOT sufficient
+        on its own - see `set_grid`.
         """
         accepted = {m for m in market_ids if isinstance(m, str) and m}
         if len(accepted) > self.MAX_GRID_MARKETS_PER_SOCKET:
@@ -552,6 +676,59 @@ class ConnectionManager:
         for market_id in accepted:
             self._grid_subscribers[market_id].add(websocket)
         return accepted
+
+    async def set_grid(
+        self, websocket: WebSocket, market_ids: list[str], pubsub: "RedisPubSub"
+    ) -> set[str]:
+        """Declare a socket's visible markets and subscribe to them.
+
+        `subscribe_grid` on its own is not enough, and that gap was invisible for
+        a long time because both halves are individually plausible.
+
+        It updates the *local* reverse index - which market fans out to which
+        socket - but publishing to `market:{id}:events` only reaches a socket if
+        this node holds a Redis SUBSCRIBE on that channel. The per-market path
+        acquires one in `connect()`. The grid path acquired none, so a socket that
+        had declared a grid was indexed for delivery and yet subscribed to
+        nothing: every price went to Redis and none of it came back.
+
+        Only pages that *also* opened a market detail socket worked, because that
+        socket had acquired the channels for its own one market - and even then
+        only for that market. So `/markets` and the home grid were permanently
+        static, in every environment, with no error anywhere: no failed request,
+        no dropped frame, just prices that never moved.
+
+        Nothing caught it because the tests sat on either side of the break. The
+        grid tests called `broadcast_to_market` directly, bypassing Redis
+        entirely; the socket tests used a fake transport that never needed a
+        channel. Only a harness that drives the whole path - publish, Redis,
+        listener, fan-out, buffer, flush - can see that the two halves were never
+        connected.
+
+        The delta matters as much as the acquire. Re-declaring on scroll must not
+        re-subscribe to markets the socket already wanted, and must release the
+        ones it no longer does, or a long browsing session leaks channels and
+        pins this node to markets nobody is watching.
+        """
+        previous = set(self._grid_subs.get(websocket, set()))
+        accepted = await self.subscribe_grid(websocket, market_ids)
+
+        stale = previous - accepted
+        fresh = accepted - previous
+        if stale:
+            await pubsub.unsubscribe_markets(stale)
+        if fresh:
+            await pubsub.subscribe_markets(fresh)
+
+        self._grid_channels[websocket] = set(accepted)
+        return accepted
+
+    async def release_grid(self, websocket: WebSocket, pubsub: "RedisPubSub") -> None:
+        """Drop a socket's grid and give back the channels it was holding."""
+        held = self._grid_channels.pop(websocket, set())
+        self.clear_grid(websocket)
+        if held:
+            await pubsub.unsubscribe_markets(held)
 
     def clear_grid(self, websocket: WebSocket) -> None:
         """Drop a socket's grid set and its buffered prices.
@@ -629,6 +806,36 @@ class ConnectionManager:
             existing = pending.get(market_id)
             if existing is not None and existing.get("type") == "market:resolved":
                 continue
+            if existing is not None and "seq_from" not in payload and isinstance(
+                existing.get("seq"), int
+            ):
+                # Carry the *first* sequence this flush window saw for this
+                # market, so the grid can tell coalescing apart from loss.
+                #
+                # Coalescing is the whole point of the aggregation: a market that
+                # ticks five times between flushes must produce ONE frame, which
+                # means the intermediate `seq`s are deliberately absent. But the
+                # grid's gap detector cannot tell a deliberately-collapsed update
+                # from a dropped one, and a collapsed one looks exactly like
+                # `seq 4 -> seq 9`. So every busy market was declaring itself
+                # lossy every tick and firing a full REST resync - hundreds of
+                # times a second, each one refetching the entire markets query.
+                #
+                # `seq_from` is the difference: contiguity is judged between the
+                # last seq the grid actually received and the first seq this
+                # window carries. Collapsed updates make it contiguous; genuine
+                # transport loss makes it a gap.
+                #
+                # The *existing* `seq_from` is what gets carried forward, not the
+                # existing `seq`. Using `seq` would re-anchor the window on every
+                # tick and leave `seq_from` permanently one behind, so a window
+                # spanning seqs 5..9 would report `seq_from = 8` and every
+                # consumer would read a coalesced burst as a gap - the exact
+                # failure this field exists to remove.
+                prior_from = existing.get("seq_from")
+                payload["seq_from"] = (
+                    prior_from if isinstance(prior_from, int) else existing["seq"]
+                )
             pending[market_id] = payload
 
     async def flush_grid(self) -> int:
@@ -661,17 +868,56 @@ class ConnectionManager:
         return len(pending)
 
     async def grid_loop(self, interval_s: float | None = None) -> None:
-        """Flush grid buffers on a fixed cadence for the life of the process.
+        """Flush grid buffers for the life of the process, adapting the cadence.
 
         One timer for the whole worker, not one per socket: per-socket timers make
         the scheduler cost proportional to connected clients, which is precisely
         the thing a realtime gateway must not have.
+
+        The cadence adapts to how long the flush actually took. A fixed tick is
+        right when idle - flushing a nearly-empty buffer more often buys nothing
+        but scheduler wakeups - and wrong when saturated, because the flush then
+        takes most of the interval and every price the client sees is that much
+        older than it needs to be. Measured on this gateway, end to end, p50 was
+        ~21ms idle but p95 reached ~213ms at 500 sockets x 100 markets: the tail
+        was queueing behind a full tick, not anything slow in the send itself.
+
+        So the interval tracks the work: a flush that consumed a large share of
+        the time it was allowed shortens the next one, and a cheap flush lengthens
+        it back toward the base. It is multiplicative decrease / additive
+        increase because that reacts fast to saturation - the case where being
+        slow is expensive - while recovering gradually, so a single busy moment
+        does not leave every socket flushing at the floor forever.
+
+        The floor exists because flushing faster than the event loop can actually
+        complete a pass just burns CPU and starves the listener that feeds it. If
+        the floor is not enough, the honest answer is more workers, not a tighter
+        loop.
         """
-        interval = interval_s if interval_s is not None else self.GRID_FLUSH_INTERVAL_S
+        base = interval_s if interval_s is not None else self.GRID_FLUSH_INTERVAL_S
+        floor = self.GRID_FLUSH_MIN_INTERVAL_S
+        interval = base
         while True:
             try:
                 await asyncio.sleep(interval)
-                await self.flush_grid()
+                started = time.monotonic()
+                sent = await self.flush_grid()
+                elapsed = time.monotonic() - started
+
+                interval = next_grid_interval(
+                    interval,
+                    sockets_sent=sent,
+                    elapsed_s=elapsed,
+                    base=base,
+                    floor=floor,
+                    step=self.GRID_FLUSH_INTERVAL_STEP_S,
+                    saturation_ratio=self.GRID_FLUSH_SATURATION_RATIO,
+                )
+                self._grid_backpressure = (
+                    sent > 0
+                    and elapsed > interval / self.GRID_FLUSH_SATURATION_RATIO
+                )
+                self._grid_flush_stats.observe(sent, elapsed, interval)
             except asyncio.CancelledError:
                 logger.info("WS grid flush loop cancelled")
                 raise
@@ -1211,6 +1457,27 @@ class RedisPubSub:
 
     async def subscribe_market(self, market_id: str):
         await self._acquire(market_events_channel(market_id))
+
+    async def subscribe_markets(self, market_ids) -> None:
+        """Acquire many markets' channels in one reconcile.
+
+        A grid declares its whole visible set at once, so the singular
+        `subscribe_market` in a loop is the wrong shape: each `_acquire` runs a
+        full `_sync_channels`, which walks every channel this node holds. Two
+        hundred markets would mean two hundred passes over the entire set to add
+        two hundred channels - quadratic in the one operation most likely to be
+        large. Batching makes it one pass, and the delta means re-declaring a
+        scrolled grid costs only the markets that actually changed.
+        """
+        channels = [market_events_channel(m) for m in market_ids]
+        if channels:
+            await self._acquire(*channels)
+
+    async def unsubscribe_markets(self, market_ids) -> None:
+        """Release many markets' channels in one reconcile (see `subscribe_markets`)."""
+        channels = [market_events_channel(m) for m in market_ids]
+        if channels:
+            await self._release(*channels)
 
     async def unsubscribe_market(self, market_id: str):
         """Release this node's interest in a market.
