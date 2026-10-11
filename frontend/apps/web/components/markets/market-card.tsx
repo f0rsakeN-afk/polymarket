@@ -155,7 +155,28 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
   outcomes: { id: string; name: string; price: string; outcome_index: number }[]
   marketSlug: string
 }) {
-  const visible = outcomes.slice(0, 6)
+  // A card is a teaser, not a table, and it shows the same shape whatever the
+  // market type - so a grid of them reads as one surface rather than a mix of
+  // sizes.
+  //
+  // Binary rows and multi-outcome cells are already the same component - name,
+  // percentage, bar - so a binary market and a parimutuel market with up to four
+  // outcomes are identical: two rows either way. Only *more* than four diverged,
+  // because the cap was six and the badge took a full extra row (`col-span-2`),
+  // making those cards visibly taller than the rest of their row.
+  //
+  // Fixing the grid at 2x2 and letting the badge occupy the slot a fourth
+  // outcome would have used means every card is exactly two outcome rows tall -
+  // two outcomes or fifty - which is what lets the grid be laid out at a known
+  // height with no measuring, no ragged rows, and no clipped content.
+  const MAX_SLOTS = 4
+  // Derived from what is actually hidden, not from the slot count. The badge
+  // takes one of the four slots, so the number of outcomes on screen is
+  // `MAX_SLOTS - 1` whenever there is an overflow - computing it from
+  // `MAX_SLOTS` instead undercounts by exactly one and tells the user there are
+  // fewer options left than there really are.
+  const visible =
+    outcomes.length > MAX_SLOTS ? outcomes.slice(0, MAX_SLOTS - 1) : outcomes.slice(0, MAX_SLOTS)
   const overflow = outcomes.length - visible.length
 
   return (
@@ -171,7 +192,7 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
       {overflow > 0 && (
         <Link
           href={`/markets/${marketSlug}`}
-          className="col-span-2 flex items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground transition-all hover:border-primary/40 hover:text-foreground"
+          className="flex items-center justify-center rounded-md border border-dashed border-border text-xs font-medium text-muted-foreground transition-all hover:border-primary/40 hover:text-foreground"
         >
           +{overflow} more
         </Link>
@@ -229,7 +250,7 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
   }, [isMulti, priced.outcomes, priced.yes_price, priced.no_price])
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">
+    <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-4 pb-3">
         {market.status === "resolved" && (
@@ -251,7 +272,10 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
       <div className="mx-4 border-t border-border/50" />
 
       {/* Outcomes */}
-      <div className="flex-1 px-4 py-3">
+      {/* `min-h-0` stops a tall market pushing the footer out of the cell;
+          `overflow-hidden` clips anything that still exceeds it here rather than
+          letting it escape the card's rounded corner. */}
+      <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
         {isMulti ? (
           <MultiOutcomeGrid
             outcomes={displayOutcomes}

@@ -93,10 +93,20 @@ describe("MarketCard per-outcome prices", () => {
     const rendered = screen
       .getAllByText(/^\d+%$/)
       .map((el) => el.textContent)
-    expect(new Set(rendered).size).toBeGreaterThan(3)
+
+    // The card is a teaser: it renders a fixed 2x2 grid and hides the rest behind
+    // a "+N more" badge, so only the leading outcomes are on screen. The claim
+    // under test is unchanged - every shown outcome carries its *own* price
+    // rather than a 1/n fallback - so it is asserted over what is shown, and the
+    // values checked are the leading ones (France 49%, England 19%, Germany 11%).
+    expect(new Set(rendered).size).toBe(rendered.length)
+    expect(rendered.length).toBeGreaterThanOrEqual(3)
+    expect(rendered).toContain("49%") // France
+    expect(rendered).toContain("19%") // England
     expect(rendered).toContain("11%") // Germany
-    expect(rendered).toContain("7%") // Spain
-    expect(rendered).not.toContain("13%") // 1/8, the old fallback
+    expect(rendered).not.toContain("13%") // 1/8, the old flat fallback
+    // The hidden outcomes are still reachable, so the cap is not silent.
+    expect(screen.getByText(/\+\d+ more/)).toBeTruthy()
   })
 
   it("treats a two-way named market as parimutuel, not binary", async () => {

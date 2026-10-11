@@ -106,6 +106,25 @@ beforeEach(() => {
     configurable: true,
     get() { return 1200 },
   })
+  // jsdom's matchMedia reports `matches: false` for everything, which would pin
+  // the list to a single column and make the grid assertions vacuous - the test
+  // would pass for a one-per-row layout, which is exactly the bug being guarded.
+  window.matchMedia = ((query: string) => {
+    const min = Number(/min-width:\s*(\d+)px/.exec(query)?.[1] ?? 0)
+    const mql = {
+      media: query,
+      get matches() { return window.innerWidth >= min },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    }
+    return mql
+  }) as typeof window.matchMedia
+  window.innerWidth = 1280 // desktop: three columns
+
   Element.prototype.getBoundingClientRect = function () {
     return {
       width: 1200, height: 900,
@@ -227,3 +246,257 @@ describe("MarketList scroll container", () => {
 // Keeps the helper referenced so lint does not strip it as unused; the stub is
 // applied by the virtualizer itself via getBoundingClientRect.
 void stubViewport
+/**
+ * The grid layout is product design, and windowing must not silently remove it.
+ *
+ * An earlier version of the virtualizer rendered one item per row - technically
+ * "working", completely broken. It passed every test in this file, because all of
+ * them were about *how many* cards render, and none were about *how they are
+ * arranged*. A card list that is a grid is a different product from one that is a
+ * column, and only an assertion about arrangement catches that.
+ */
+describe("MarketList keeps its responsive grid", () => {
+  it("lays cards out in lanes rather than one per row", () => {
+    const markets = Array.from({ length: 60 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const cells = [...container.querySelectorAll("[data-index]")]
+
+    // A grid gives cells distinct horizontal lanes and a fractional width. One-per-row
+    // gives every cell the same `left` and full width.
+    const lanes = new Set(cells.map((el) => el.getAttribute("data-lane")))
+    const widths = new Set(
+      cells.map((el) => (el as HTMLElement).style.width).filter(Boolean)
+    )
+
+    expect(lanes.size).toBeGreaterThan(1)
+    for (const w of widths) {
+      // Each cell takes a fraction of the row, not 100%.
+      expect(parseFloat(w)).toBeLessThan(100)
+    }
+  })
+
+  it("gives every cell a fractional width so more than one fits per row", () => {
+    // Desktop width from the stub above -> three lanes -> ~33% per cell.
+    const markets = Array.from({ length: 40 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const cell = container.querySelector("[data-index]") as HTMLElement | null
+    expect(cell).not.toBeNull()
+    const width = parseFloat(cell!.style.width)
+    expect(width).toBeGreaterThan(0)
+    expect(width).toBeLessThanOrEqual(100 / 2) // at least a 2-column grid
+  })
+
+  it("does not nest a scroll container inside the page", () => {
+    // The page scrolls; a nested `overflow-y-auto` panel changes how it feels,
+    // puts a scrollbar inside the content, and desynchronises the infinite-scroll
+    // sentinel, which measures against the viewport.
+    const markets = Array.from({ length: 40 }, (_, i) => market(i))
+    renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const list = screen.getByTestId("market-scroll")
+    // Neither an inner scroller nor a viewport-relative height cap: either one
+    // turns the list into its own scroll context, which puts a scrollbar inside
+    // the content and desynchronises the infinite-scroll sentinel below it.
+    // Asserted on the list container itself - checking a descendant would pass
+    // vacuously, which is exactly how the regression slipped through.
+    expect(list.className).not.toMatch(/overflow-y-auto/)
+    expect(list.className).not.toMatch(/max-h-/)
+    expect(list.style.overflow).not.toBe("auto")
+    expect(list.style.maxHeight).toBe("")
+  })
+
+  it("keeps the sentinel after the list so pagination still works", () => {
+    const markets = Array.from({ length: 40 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore onLoadMore={vi.fn()} />
+    )
+
+    const list = screen.getByTestId("market-scroll")
+    const sentinel = container.querySelector("div[class*='justify-center']")
+    expect(sentinel).toBeTruthy()
+    // Sentinel must come after the list in document order, or it never intersects.
+    expect(
+      list.compareDocumentPosition(sentinel!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+})
+
+/**
+ * Parimutuel markets have more outcomes than binary ones, and that changes how
+ * tall a card wants to be.
+ *
+ * A binary market renders two outcome rows; a parimutuel market up to six
+ * outcome cells in two columns plus a "+N more" affordance. Left to size
+ * themselves, every row of the grid ends at a different height and the grid
+ * reads as broken - which is exactly what a lane virtualizer does with variable
+ * heights.
+ */
+describe("MarketCard handles 2 to many outcomes at a fixed height", () => {
+  const multi = (i: number, outcomes: number) =>
+    ({
+      id: `multi${i}`,
+      status: "active",
+      question: `Who wins ${i}?`,
+      slug: `who-wins-${i}`,
+      outcomes: Array.from({ length: outcomes }, (_, n) => ({
+        id: `o${n}`,
+        name: `Option ${n}`,
+        price: String(1 / outcomes),
+        outcome_index: n,
+      })),
+    }) as unknown as MarketResponse
+
+  it("renders a binary market alongside markets with many options", () => {
+    const markets = [
+      market(0),
+      multi(1, 2),
+      multi(2, 6),
+      multi(3, 14),
+    ]
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    // Every card in view renders; the fixed height must not be hiding one.
+    expect(container.querySelectorAll("[data-index]").length).toBeGreaterThanOrEqual(1)
+    expect(container.textContent).toContain("Who wins 1?")
+  })
+
+  it("shows the overflow affordance when a market has more outcomes than fit", () => {
+    // 14 outcomes but only 6 cells fit. The "+N more" link is how a user reaches
+    // the rest, so losing it to a height cap would make those outcomes
+    // unreachable from the grid entirely.
+    const markets = [multi(1, 14)]
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    expect(container.textContent).toMatch(/\+\d+ more/)
+  })
+
+  it("does not show an overflow affordance when every outcome fits", () => {
+    const markets = [multi(1, 4)]
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    expect(container.textContent).not.toMatch(/\+\d+ more/)
+  })
+
+  it("gives every cell the same height so rows line up", () => {
+    const markets = [market(0), multi(1, 6), multi(2, 14), market(3)]
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const heights = [...container.querySelectorAll("[data-index]")]
+      .map((el) => (el as HTMLElement).style.height)
+      .filter(Boolean)
+
+    expect(heights.length).toBeGreaterThan(0)
+    // One height for every cell. Variable heights are what made the grid ragged.
+    expect(new Set(heights).size).toBe(1)
+  })
+
+  it("card content is clipped inside the cell rather than escaping it", () => {
+    const markets = [multi(1, 14)]
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const article = container.querySelector("article")
+    expect(article).toBeTruthy()
+    // A tall market must not push past the cell and break the row's alignment.
+    expect(article!.className).toMatch(/overflow-hidden/)
+    expect(article!.className).toMatch(/h-full/)
+  })
+})
+
+/**
+ * Every card must be the same *shape*, not merely the same height.
+ *
+ * A fixed pixel height alone only hides the problem: a binary card at 228px with
+ * a parimutuel card's content clipped inside it still looks wrong, just quieter.
+ * The card is built so two outcome rows fit in every case, and this pins that -
+ * because the moment the badge takes its own row again, tall markets become
+ * taller than their neighbours and the grid goes ragged.
+ */
+describe("MarketCard is one shape whatever the outcome count", () => {
+  const withOutcomes = (n: number) =>
+    ({
+      id: `m${n}`,
+      status: "active",
+      question: `Market with ${n} outcomes`,
+      slug: `market-${n}`,
+      outcomes: Array.from({ length: n }, (_, i) => ({
+        id: `o${i}`,
+        name: `Option ${i}`,
+        price: String(1 / n),
+        outcome_index: i,
+      })),
+    }) as unknown as MarketResponse
+
+  it("renders exactly two rows of outcome cells for 2, 4 and 50 outcomes", () => {
+    for (const n of [2, 4, 50]) {
+      const { container, unmount } = renderList(
+        <MarketList
+          markets={[withOutcomes(n)]}
+          loading={false}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+        />
+      )
+      // Counted by the bar, which only real outcomes have - the overflow badge is
+      // a link too, so counting links would include it.
+      const bars = container.querySelectorAll("article .h-1\\.5")
+      expect(bars.length).toBeLessThanOrEqual(4)
+      expect(bars.length).toBeGreaterThan(0)
+      unmount()
+    }
+  })
+
+  it("keeps the overflow badge in the same grid slot, not on its own row", () => {
+    const { container } = renderList(
+      <MarketList
+        markets={[withOutcomes(12)]}
+        loading={false}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+
+    const badge = [...container.querySelectorAll("article a")].find((a) =>
+      /\+\d+ more/.test(a.textContent ?? ""),
+    )
+    expect(badge).toBeTruthy()
+    // `col-span-2` would put the badge on a row of its own and make this card
+    // taller than every other card beside it.
+    expect(badge!.className).not.toMatch(/col-span-2/)
+  })
+
+  it("shows the remaining outcomes on the badge", () => {
+    const { container } = renderList(
+      <MarketList
+        markets={[withOutcomes(12)]}
+        loading={false}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+      />
+    )
+    // 12 outcomes, 3 shown, so 9 remain. Read from the badge itself rather than
+    // `textContent`: JSX splits `+{overflow} more` into separate text nodes, and
+    // asserting on the concatenated string depends on how React joins them.
+    const badge = [...container.querySelectorAll("article a")].find((a) =>
+      /more/.test(a.textContent ?? ""),
+    )
+    expect(badge?.textContent?.replace(/\s+/g, " ")).toContain("+9 more")
+  })
+})
