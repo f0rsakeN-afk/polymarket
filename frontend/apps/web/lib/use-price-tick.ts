@@ -32,16 +32,12 @@
 
 import { useEffect, useRef, useState } from "react"
 
-/**
- * Smallest price change worth showing, in probability points.
- *
- * Below this, movement is not perceivable on a number a user is scanning rather
- * than reading, so rendering it costs attention and buys nothing.
- */
-export const SIGNIFICANT_MOVE = 0.01
+import { isSignificant, useRealtimePrefs } from "./realtime-prefs"
 
 /** How long a card stays flagged as having just moved. */
 const ACTIVE_WINDOW_MS = 4_000
+
+export { isSignificant }
 
 export type PriceTick = {
   /** `1` up, `-1` down, `0` no significant move yet. */
@@ -69,6 +65,8 @@ export type PriceTick = {
  * flash of a stale price on every tick, for every card.
  */
 export function usePriceTick(price: number | null | undefined): PriceTick {
+  const { prefs } = useRealtimePrefs()
+  const { motion, rule, absolute, relative } = prefs
   const [tick, setTick] = useState<PriceTick>({ direction: 0, at: 0, active: false })
   // Compared against, so this hook can be called once per card with any price.
   const seen = useRef<number | null>(null)
@@ -80,10 +78,20 @@ export function usePriceTick(price: number | null | undefined): PriceTick {
       // First value: baseline only. Treating it as a move would light up every
       // card on first paint, which says nothing about anything having changed.
       seen.current = price
-    } else if (Math.abs(price - prev) >= SIGNIFICANT_MOVE) {
+    } else {
+      // Always advance the baseline, including for moves we chose not to show.
+      // Skipping it would let a run of sub-threshold drift accumulate until it
+      // tripped the threshold, and then flash a direction the user never watched
+      // happen - reporting a move nobody saw.
       seen.current = price
-      seq.current += 1
-      setTick({ direction: price > prev ? 1 : -1, at: seq.current, active: true })
+      const worthShowing =
+        motion === "all" ||
+        (motion === "significant" &&
+          isSignificant(prev, price, rule, { absolute, relative }))
+      if (worthShowing) {
+        seq.current += 1
+        setTick({ direction: price > prev ? 1 : -1, at: seq.current, active: true })
+      }
     }
   }
 

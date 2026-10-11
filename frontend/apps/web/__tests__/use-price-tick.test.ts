@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { act, cleanup, renderHook } from "@testing-library/react"
-import { SIGNIFICANT_MOVE, tickColor, usePriceTick } from "@/lib/use-price-tick"
+import { tickColor, usePriceTick } from "@/lib/use-price-tick"
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -53,11 +53,29 @@ describe("usePriceTick", () => {
     expect(h.latest().direction).toBe(-1)
   })
 
-  it("ignores a change too small to perceive", () => {
-    // The point of the threshold: a grid of sub-perceptual churn is noise, and it
-    // buries the cards that actually moved.
+  it("animates a move that changes the number on screen", () => {
+    // The case the old fixed 1-point threshold got wrong. The card renders
+    // `Math.round(price * 100)`, so 50% -> 51% is plainly visible - and is only
+    // half a point of movement. A fixed threshold silently dropped it.
     const h = step(0.5)
-    h.set(0.5 + SIGNIFICANT_MOVE / 2)
+    h.set(0.505)
+    expect(h.latest().direction).toBe(1)
+  })
+
+  it("ignores a move the user cannot see", () => {
+    // ...and the converse, which the old threshold got wrong in the other
+    // direction: a full point of movement that leaves the rendered number
+    // identical is not something anyone could notice.
+    const h = step(0.995)
+    h.set(0.999)
+    expect(h.latest().direction).toBe(0)
+  })
+
+  it("ignores a change too small to perceive", () => {
+    // A grid of sub-perceptual churn is noise, and it buries the cards that
+    // actually moved.
+    const h = step(0.5)
+    h.set(0.502)
     expect(h.latest().direction).toBe(0)
   })
 
@@ -66,11 +84,15 @@ describe("usePriceTick", () => {
     // drifts would accumulate into a phantom "move" on the next real tick, and
     // report a direction nobody observed.
     const h = step(0.5)
-    h.set(0.502)
+    // Drift that stays inside one rendered value (all of these read "50%"), so
+    // none of it is worth showing.
+    h.set(0.501)
+    h.set(0.503)
     h.set(0.504)
-    h.set(0.506)
     expect(h.latest().direction).toBe(0)
 
+    // Then a real move. Up, not "up by however much accumulated" - a direction
+    // the user never watched happen is not one they were shown.
     h.set(0.55)
     expect(h.latest().direction).toBe(1)
   })
