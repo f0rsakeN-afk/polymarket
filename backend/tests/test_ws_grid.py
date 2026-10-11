@@ -19,7 +19,7 @@ import asyncio
 
 import pytest
 
-from app.websocket.manager import ConnectionManager
+from app.websocket.manager import ConnectionManager, GridFlushStats, next_grid_interval
 
 
 class _Sock:
@@ -427,3 +427,184 @@ class TestResolutionReachesTheGrid:
         mgr = ConnectionManager()
         await mgr.broadcast_to_market("m1", {"type": "market:resolved", "status": "resolved"})
         assert await mgr.flush_grid() == 0
+
+
+class TestAdaptiveFlushCadence:
+    """The tick has to respond to load, because the tail is where users notice.
+
+    A fixed 250ms flush is right when idle and wrong when saturated: the flush
+    then consumes most of the interval and every price on screen is that much
+    older than it needs to be. Measured end to end on this gateway, p50 was
+    ~21ms idle while p95 reached ~213ms at 500 sockets - the tail was queueing
+    behind a full tick, not anything slow inside the send.
+
+    These exercise the policy that `grid_loop` calls, rather than a copy of it
+    written out here. A test that re-implements the arithmetic beside the code
+    passes when the code is broken, which is the one thing a test must not do.
+    """
+
+    @staticmethod
+    def assert_shortens(after: float, before: float) -> None:
+        assert after < before, f"expected < {before}, got {after}"
+
+    @staticmethod
+    def step(interval: float, sent: int, elapsed: float, base=0.25, floor=0.02,
+             step_s=0.05, ratio=0.6) -> float:
+        return next_grid_interval(
+            interval, sockets_sent=sent, elapsed_s=elapsed,
+            base=base, floor=floor, step=step_s, saturation_ratio=ratio,
+        )
+
+    def test_a_flush_that_eats_its_tick_shortens_the_cadence(self):
+        # 200ms of work inside a 250ms tick: 80% of the interval, well past the
+        # 60% saturation point.
+        self.assert_shortens(self.step(0.25, sent=500, elapsed=0.2), 0.25)
+
+    def test_a_cheap_flush_lengthens_the_cadence(self):
+        # 5ms inside a 250ms tick is not a reason to flush harder.
+        after = self.step(0.05, sent=1, elapsed=0.005)
+        assert after > 0.05
+
+    def test_an_idle_gateway_drifts_back_to_the_base(self):
+        """One busy moment must not leave every socket flushing at the floor."""
+        interval = 0.02  # where saturation left it
+        for _ in range(20):
+            interval = self.step(interval, sent=0, elapsed=0.0)
+        assert interval == 0.25
+
+    def test_the_cadence_never_falls_below_the_floor(self):
+        """A tight spin starves the listener that feeds the buffer.
+
+        Flushing faster than the loop can complete a pass does not make prices
+        fresher - it burns CPU and stops Redis draining. When the floor is not
+        enough the honest answer is another worker, not a faster loop.
+        """
+        interval = 0.25
+        for _ in range(50):
+            interval = self.step(interval, sent=500, elapsed=10.0)
+        assert interval == 0.02
+
+    def test_recovery_is_gradual_so_one_spike_does_not_move_everyone(self):
+        # Multiplicative decrease, additive increase: fast down, slow back. A
+        # single bad flush must not reset the cadence for the whole process.
+        interval = self.step(0.25, sent=500, elapsed=0.24)
+        assert interval == 0.125  # halved
+        interval = self.step(interval, sent=1, elapsed=0.001)
+        assert interval == 0.175  # +0.05, not straight back to 0.25
+
+    def test_a_send_made_idle_by_the_interval_is_not_saturation(self):
+        # `sent == 0` is handled by the idle branch. If the saturation branch ran
+        # first it would halve on an idle tick, and a quiet gateway would race
+        # itself to the floor for doing nothing.
+        interval = 0.25
+        for _ in range(10):
+            interval = self.step(interval, sent=0, elapsed=0.0)
+        assert interval == 0.25
+
+    def test_stats_are_bounded_not_an_unbounded_leak(self):
+        # This lives in a long-lived worker. A growing list here is a slow leak
+        # in exactly the process that is meant to be steady-state.
+        stats = GridFlushStats(maxlen=16)
+        for i in range(500):
+            stats.observe(i, 0.01, 0.25)
+        snap = stats.snapshot()
+        assert snap["samples"] == 16
+        assert 0 <= snap["flush_p95_s"] < 1
+        assert snap["interval_p50_s"] == 0.25
+
+
+class _SlowSock(_Sock):
+    def __init__(self, delay_s: float):
+        super().__init__()
+        self._delay = delay_s
+
+    async def send_json(self, payload):
+        await asyncio.sleep(self._delay)
+        self.sent.append(payload)
+
+
+class TestCoalescingIsNotLoss:
+    """A collapsed update must not look like a dropped one.
+
+    Grid aggregation drops intermediate sequence numbers *on purpose*. Judging
+    contiguity on the last `seq` alone therefore makes every busy market look
+    lossy on every tick, and the client responds by refetching the whole markets
+    query - hundreds of times a second, from every open grid. The server causes
+    that load and the client pays for it.
+
+    `seq_from` is the fix: contiguity is judged from the first sequence the flush
+    window actually saw.
+    """
+
+    @pytest.mark.asyncio
+    async def test_seq_from_anchors_the_window_not_the_previous_tick(self):
+        """The bug this pins is subtle and was shipped once already.
+
+        Ten ticks (seq 5..14) in one window must report `seq_from = 5`. Anchoring
+        on the previous tick's `seq` instead leaves it permanently one behind, so
+        the window reports `seq_from = 13` - and every consumer reads a coalesced
+        burst of ten updates as a gap, which is the exact failure `seq_from`
+        exists to remove.
+        """
+        mgr = ConnectionManager()
+        ws = _Sock()
+        await mgr.subscribe_grid(ws, ["m1"])
+
+        for seq in range(5, 15):
+            await mgr.broadcast_to_market("m1", {
+                "type": "market:price_update", "yes_price": 0.5, "no_price": 0.5,
+                "seq": seq,
+            })
+        await mgr.flush_grid()
+
+        frame = ws.batches()[0]["prices"]["m1"]
+        assert frame["seq"] == 14, "newest seq must survive coalescing"
+        assert frame["seq_from"] == 5, (
+            f"seq_from anchored at {frame['seq_from']}, expected the first seq in "
+            "the window (5). Anchoring on the previous tick makes every "
+            "coalesced burst look like packet loss."
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_single_update_has_no_window_to_anchor(self):
+        # Nothing was collapsed, so there is nothing to report and the consumer
+        # falls back to `seq` itself.
+        mgr = ConnectionManager()
+        ws = _Sock()
+        await mgr.subscribe_grid(ws, ["m1"])
+        await mgr.broadcast_to_market("m1", {
+            "type": "market:price_update", "yes_price": 0.5, "no_price": 0.5, "seq": 7,
+        })
+        await mgr.flush_grid()
+
+        frame = ws.batches()[0]["prices"]["m1"]
+        assert frame["seq"] == 7
+        assert "seq_from" not in frame
+
+    @pytest.mark.asyncio
+    async def test_contiguity_is_judged_from_seq_from(self):
+        """The consumer's rule, stated as the server enables it.
+
+        `seq_from == last_seen + 1` means nothing was lost in transport, however
+        many ticks were collapsed. A genuine gap still shows up, because
+        `seq_from` jumps.
+        """
+        def lossy(last_seen: int, frame: dict) -> bool:
+            seq_from = frame.get("seq_from", frame["seq"])
+            return seq_from > last_seen + 1
+
+        mgr = ConnectionManager()
+        ws = _Sock()
+        await mgr.subscribe_grid(ws, ["m1"])
+        for seq in range(5, 15):
+            await mgr.broadcast_to_market("m1", {
+                "type": "market:price_update", "yes_price": 0.5, "no_price": 0.5,
+                "seq": seq,
+            })
+        await mgr.flush_grid()
+        frame = ws.batches()[0]["prices"]["m1"]
+
+        # Nine updates collapsed into one frame is not loss.
+        assert not lossy(4, frame)
+        # ...but a frame starting at 20 when we last saw 14 is.
+        assert lossy(14, {"seq": 30, "seq_from": 20})
