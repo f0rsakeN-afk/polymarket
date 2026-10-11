@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from conftest import drain_publishes
 
 from app.services.order_service import OrderService
 from app.websocket.manager import RedisPubSub
@@ -189,6 +190,7 @@ async def _publish(**kwargs):
     bus._redis = _FakeRedis(published)
     with patch("app.websocket.manager.redis_cb.call", new=_call_op):
         await bus.publish_price_update("mkt-1", **kwargs)
+        await drain_publishes(bus)
     assert published, "nothing was published"
     return json.loads(published[0])
 

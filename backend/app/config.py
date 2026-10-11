@@ -44,6 +44,25 @@ class Settings(BaseSettings):
     redis_max_connections: int = 100
     celery_worker_redis_max_connections: int = 20
 
+    # ── Realtime publish queue ──────────────────────────────────────────────
+    #
+    # `redis_max_connections` is a cliff, not a queue: past it redis-py raises
+    # `MaxConnectionsError` instead of waiting for a connection to free up.
+    # Measured: 300 concurrent publishes -> exactly 100 succeeded, 200 raised.
+    #
+    # Publishers now hand frames to a bounded queue drained by a fixed writer
+    # pool, so each writer holds one connection regardless of burst size and the
+    # pool becomes a throughput knob rather than a correctness cliff. Sizing is
+    # measured, not guessed: ~0.6ms per publish end to end, so a writer retires
+    # roughly 1600 publishes/second.
+    publish_writers: int = 8
+    # Overflow policy differs by delivery class, deliberately - see
+    # `app/websocket/publish_queue.py`. Prices drop-oldest (coalescing keeps the
+    # newest, which is what the client would have done anyway); critical frames
+    # are dropped *and* owed a resync, because they must never vanish silently.
+    publish_queue_ephemeral: int = 20_000
+    publish_queue_critical: int = 10_000
+
     # JWT
     jwt_secret: str = "change-me-in-production"
     secret_key: str = "change-me-in-production"

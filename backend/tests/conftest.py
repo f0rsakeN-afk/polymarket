@@ -477,3 +477,30 @@ async def resolved_market(db_session: AsyncSession, admin_user):
     await db_session.refresh(market)
     await db_session.refresh(market, ["outcomes"])
     return market
+
+
+async def drain_publishes(bus) -> None:
+    """Run a `RedisPubSub`'s publish queue to empty.
+
+    `publish_*` now enqueues rather than writing to Redis directly - that is the
+    whole point, since writing inline is what made `MaxConnectionsError` a silent
+    drop. So a test that asserts on what reached Redis has to let the writers
+    actually run, exactly as the app does.
+
+    Kept here rather than copied per file so every realtime test observes the
+    same contract, and so a future change to the queue only has to be reflected
+    in one place.
+    """
+    await bus._dispatcher.start()
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.perf_counter() + 5.0
+    while _time.perf_counter() < deadline:
+        if not any(bus._dispatcher.depth.values()):
+            # Give an in-flight write a moment to land after the queue empties.
+            await _asyncio.sleep(0)
+            if not any(bus._dispatcher.depth.values()):
+                break
+        await _asyncio.sleep(0.005)
+    await bus._dispatcher.stop()
