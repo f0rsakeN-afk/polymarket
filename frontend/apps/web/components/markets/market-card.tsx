@@ -24,6 +24,14 @@ interface MarketCardProps {
    * subscribes. Omit on surfaces with no live feed and the card renders from
    * `market` exactly as before.
    */
+  /**
+   * Whether the grid's feed is connected.
+   *
+   * Separate from `live`, which carries *data*. A connected feed on a market
+   * that has not traded still means the page is live and simply quiet - and
+   * conflating the two makes every quiet market look like a dead one.
+   */
+  liveFeed?: boolean
   live?: {
     yes_price?: number
     no_price?: number
@@ -231,7 +239,7 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
 
 // ─── Market Card ───────────────────────────────────────────────────────────────
 
-const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
+const MarketCard = memo(function MarketCard({ market, live, liveFeed }: MarketCardProps) {
   // Live prices overlay the REST snapshot when a socket frame has arrived, so a
   // card in a grid moves on the same frame the market page does. Without it both
   // grids - the home page and /markets - froze at whatever the list query
@@ -268,7 +276,7 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
   // A socket price is a fact about *now*; one from the REST snapshot is a fact
   // about when the page loaded. Without saying which, a card that never updates
   // looks exactly like a card that is merely quiet.
-  const isLive = prefs.showLiveBadge && live !== undefined
+  const isLive = prefs.showLiveBadge && (liveFeed ?? live !== undefined)
 
   const displayOutcomes = useMemo(() => {
     if (isMulti) {

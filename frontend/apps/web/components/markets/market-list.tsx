@@ -4,7 +4,7 @@ import { useEffect, useRef, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { MarketCard } from "./market-card"
 import { SkeletonMarketGrid } from "@/components/shared/skeletons"
-import { useMarketGrid } from "@/hooks/use-market-socket"
+import { useMarketGrid, useSocketLive } from "@/hooks/use-market-socket"
 import type { LiveFrame } from "@/lib/live-price"
 import { useVisibleRange } from "@/lib/use-visible-range"
 import type { MarketResponse } from "@/hooks/api/types/market"
@@ -148,6 +148,16 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   // as the realtime layer being broken precisely where they were looking.
   // Window the list. Rendering and subscription both follow the visible range,
   // so a long catalogue costs the same as a short one.
+  // Whether the grid's feed is actually connected.
+  //
+  // The live indicator used to key off "has this card received a price frame",
+  // which is the wrong question. On a quiet market - and most markets are quiet -
+  // no frame arrives, so *no card on the page showed as live*. The grid looked
+  // exactly like a static page, which is the precise failure the indicator was
+  // added to prevent: saying nothing is not the same as saying "live, and simply
+  // not moving".
+  const feedLive = useSocketLive()
+  /** The list element, for focus restoration when a focused card unmounts. */
   const containerRef = useRef<HTMLDivElement | null>(null)
   const { virtualizer, listRef, scrollMarginRef, columns, visibleIndices } = useVisibleRange(
     markets,
@@ -409,7 +419,7 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
                 transform: `translateY(${row.start - scrollMarginRef.current}px)`,
               }}
             >
-              <MarketCard market={market} live={live[market.id]} />
+              <MarketCard market={market} live={live[market.id]} liveFeed={feedLive} />
             </div>
           )
         })}
