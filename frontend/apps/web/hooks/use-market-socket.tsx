@@ -798,6 +798,38 @@ interface GridBatchFrame {
  * Sequence numbers survive the batching, so a grid still detects a missed frame
  * and repairs itself the same way a detail page does.
  */
+/**
+ * Connection state of the tab's shared socket.
+ *
+ * Exposed because "is this grid actually live?" is a question the grid has to
+ * answer for the *user*, not just for itself. Keying the live indicator off
+ * "has this card received a price yet" makes it invisible on exactly the quiet
+ * markets where saying "live, just not moving" is most useful - silence and
+ * death look identical from the outside.
+ */
+export function useSocketLive(): boolean {
+  const ctx = useContext(MarketSocketContext)
+  const getStatus = ctx?.getStatus
+  const subscribeStatus = ctx?.subscribeStatus
+  const [live, setLive] = useState(() => getStatus?.() === "connected")
+
+  useEffect(() => {
+    if (!subscribeStatus) return
+    return subscribeStatus((s) => {
+      setLive((s as { status?: WSStatus } | null)?.status === "connected")
+    })
+  }, [subscribeStatus])
+
+  // The socket may already be up by the time this mounts - a page that opened a
+  // grid second after a detail page should not report "not live" until the next
+  // status change, which may never come.
+  useEffect(() => {
+    setLive(getStatus?.() === "connected")
+  }, [getStatus])
+
+  return live
+}
+
 export function useMarketGrid(
   marketIds: string[],
   onPrices: (prices: Record<string, Record<string, unknown>>) => void,
