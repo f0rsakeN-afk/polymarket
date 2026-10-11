@@ -58,6 +58,15 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   const pendingRef = useRef<LivePrices>({})
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const needsResyncRef = useRef(false)
+  /**
+   * Markets this session has been told are settled.
+   *
+   * Kept for the life of the page, not cleared on flush: a settled market must
+   * stop consuming a subscription slot immediately, and the query has not
+   * necessarily refetched yet when that has to take effect. The row's `status`
+   * arrives on the server's schedule; this does not wait for it.
+   */
+  const resolvedRef = useRef<Set<string>>(new Set())
   /** Highest `seq` seen per market • survives the aggregation */
   const seqRef = useRef<Map<string, number>>(new Map())
 
@@ -97,8 +106,15 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   //
   // Cost tracks what is rendered rather than the size of the catalogue, which is
   // what keeps the server's per-connection subscription cap meaningful.
+  //
+  // `resolvedRef` covers the window between being told a market settled and the
+  // refetch that would tell us so via `status`. Relying on the refetched row
+  // alone leaves a slot pinned on a market that can never tick again for as long
+  // as the request takes - and on a list that is mostly resolved markets, that
+  // is the whole budget spent on markets that are already done.
   const marketIds = markets
     .filter((m) => !DEAD_MARKET_STATUSES.has(m.status ?? ""))
+    .filter((m) => !resolvedRef.current.has(m.id))
     .map((m) => m.id)
   const idsKey = marketIds.join("|")
 
@@ -109,6 +125,28 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
     (prices: Record<string, Record<string, unknown>>) => {
       for (const [marketId, frame] of Object.entries(prices)) {
         const msg = frame as LiveFrame
+
+        // A settled market leaves the grid.
+        //
+        // Without this a market that resolves keeps its subscription slot for the
+        // life of the page, keeps painting a live-looking card, and keeps showing
+        // prices that can never move again - the list believes it is tradeable
+        // right up until someone reloads. The server now rides resolution along
+        // on the same batch it was already sending, so this costs one field.
+        if (msg.type === "market:resolved") {
+          resolvedRef.current.add(marketId)
+          // Drop the baseline immediately: those prices are final and must not
+          // be re-applied on top of the refreshed row.
+          delete pendingRef.current[marketId]
+          seqRef.current.delete(marketId)
+          setLive((prev) => {
+            if (!(marketId in prev)) return prev
+            const next = { ...prev }
+            delete next[marketId]
+            return next
+          })
+          continue
+        }
 
         // Gap detection survives batching: `seq` rides along on every price, so
         // a grid can still tell a missed frame from a quiet market.
@@ -130,9 +168,16 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
           outcome_prices: msg.outcome_prices,
         }
       }
+      // A settlement invalidates the query that produced the rows themselves -
+      // status, winner, and whether the card still belongs in this filter. Doing
+      // it here rather than on a timer is the difference between the list
+      // correcting itself and the list being eventually right.
+      if (resolvedRef.current.size > 0) {
+        qc.invalidateQueries({ queryKey: ["markets"] })
+      }
       schedule()
     },
-    [schedule]
+    [schedule, qc]
   )
 
   useMarketGrid(marketIds, handlePrices)

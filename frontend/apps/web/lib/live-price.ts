@@ -233,6 +233,18 @@ export interface LiveFrame {
   no_price?: number;
   outcome_prices?: Record<string, number>;
   /**
+   * `market:resolved` rides the same aggregated batch as `market:price_update`.
+   *
+   * A grid that is never told a market settled keeps its subscription slot and
+   * keeps painting a live-looking card for a market that can never move again.
+   * It rides along because the grid was already receiving this batch - so it
+   * costs one field rather than a second channel.
+   */
+  type?: string;
+  status?: string;
+  winning_outcome_id?: string;
+  winning_outcome_name?: string;
+  /**
    * Per-market frame sequence number.
    *
    * Carried through the grid's aggregated batches so a list of live cards keeps
