@@ -6,6 +6,7 @@ import type { MarketResponse } from "@/hooks/api/types/market"
 import { outcomeColor } from "@/lib/outcome-colors"
 import { applyLivePrices } from "@/lib/live-price"
 import { tickColor, usePriceTick } from "@/lib/use-price-tick"
+import { useRealtimePrefs } from "@/lib/realtime-prefs"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -154,7 +155,8 @@ function MultiOutcomeCell({
           key={tick.at}
           className={cn(
             "shrink-0 text-xs font-semibold tabular-nums text-foreground",
-            tick.direction !== 0 && "animate-[tick-flash_900ms_ease-out] motion-reduce:animate-none",
+            tick.direction !== 0 &&
+              "animate-[tick-flash_900ms_ease-out] motion-reduce:animate-none",
             tickColor(tick.direction),
           )}
         >
@@ -258,11 +260,15 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
     ? Number(priced.outcomes?.[0]?.price ?? Number.NaN)
     : Number(priced.yes_price ?? Number.NaN)
   const tick = usePriceTick(Number.isFinite(headline) ? headline : null)
+  const { prefs } = useRealtimePrefs()
 
   // A price from the socket is a fact about *now*; one from the REST snapshot is
   // a fact about when the page loaded. Without saying which, a card that never
   // updates looks exactly like a card that is merely quiet.
-  const isLive = live !== undefined
+  // A socket price is a fact about *now*; one from the REST snapshot is a fact
+  // about when the page loaded. Without saying which, a card that never updates
+  // looks exactly like a card that is merely quiet.
+  const isLive = prefs.showLiveBadge && live !== undefined
 
   const displayOutcomes = useMemo(() => {
     if (isMulti) {
@@ -297,7 +303,7 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
         // fill. A grid where whole cards flash is unreadable, and the thing worth
         // noticing is *which* card moved, so the emphasis has to stay on the
         // number and let the card edge just say "something happened here".
-        tick.active
+        tick.active && prefs.showActiveTint
           ? "border-primary/40 ring-1 ring-primary/20"
           : "border-border hover:border-primary/30",
       )}
