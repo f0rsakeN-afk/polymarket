@@ -26,6 +26,16 @@ export const WS_STATUS = "__ws_status__"
  */
 const RESYNC_AFTER_HIDDEN_MS = 60_000
 
+/**
+ * Market id used only to open the socket for a grid-only page.
+ *
+ * `/ws/markets/{id}` takes any id and that id is never subscribed to, so this is
+ * a carrier for the grid declaration rather than a subscription. It must not
+ * collide with a real market id, which is why it is not `"default"` - a real
+ * market would then receive frames for a page that never asked for it.
+ */
+const GRID_ANCHOR_MARKET = "__grid__"
+
 // ─── Per-market subscription state ─────────────────────────────────────────────
 
 interface MarketSub {
@@ -53,6 +63,8 @@ interface SharedConnection {
   serverSubs: Set<string>
   /** Set of status-change handlers */
   statusHandlers: Set<MessageHandler>
+  /** Grid batch handlers • see `MarketSocketCtx.subscribeGrid`. */
+  gridHandlers: Set<MessageHandler>
   /** Market used in WS URL • the most recently active market for reconnect path */
   lastConnectedMarket: string | null
   /** The socket being closed on purpose • its `onclose` must not queue a reconnect */
@@ -69,6 +81,8 @@ interface SharedConnection {
   everConnected: boolean
   /** When the tab last went to background • drives the return-from-hidden resync */
   hiddenSince: number | null
+  /** Last declared grid set, replayed on reconnect like any other subscription */
+  declaredGrid: string[]
 }
 
 // Module-level singleton • one WebSocket per browser tab
@@ -85,12 +99,14 @@ function getConnection(): SharedConnection {
       reconnectTimer: null,
       serverSubs: new Set(),
       statusHandlers: new Set(),
+      gridHandlers: new Set(),
       lastConnectedMarket: null,
       intentionalCloseSocket: null,
       closeTimer: null,
       lastSeq: new Map(),
       everConnected: false,
       hiddenSince: null,
+      declaredGrid: [],
     }
   }
   return _conn
@@ -337,9 +353,25 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     for (const m of conn.serverSubs) {
       ws.send(JSON.stringify({ type: "subscribe", market_id: m }))
     }
+    // Replay everything this tab was subscribed to on the previous socket. The
+    // new socket is a new server-side subscriber, so without this every
+    // subscription - including the grid set - silently stops updating after a
+    // reconnect.
+    //
+    // One pass, not one frame per mechanism: the grid is declared alongside the
+    // markets rather than separately, so a grid plus a detail page is two frames
+    // on open instead of three.
+    const sentMarkets = new Set<string>()
+    for (const m of conn.serverSubs) {
+      ws.send(JSON.stringify({ type: "subscribe", market_id: m }))
+      sentMarkets.add(m)
+    }
+    if (conn.declaredGrid.length > 0) {
+      ws.send(JSON.stringify({ type: "grid", market_ids: conn.declaredGrid }))
+    }
     // Also send any pending subscriptions that weren't yet ACKed
     for (const [marketId, sub] of conn.subs) {
-      if (!sub.wsSubscribed) {
+      if (!sub.wsSubscribed && !sentMarkets.has(marketId)) {
         ws.send(JSON.stringify({ type: "subscribe", market_id: marketId }))
         sub.wsSubscribed = true
         conn.serverSubs.add(marketId)
@@ -393,6 +425,20 @@ function connect(conn: SharedConnection, firstMarketId: string) {
       try {
         ws.send(JSON.stringify({ type: "pong", ts: d.ts }))
       } catch { /* socket closing; onclose handles it */ }
+      return
+    }
+
+    // Aggregated grid prices, handled here rather than in the per-market path
+    // below. A batch carries many markets in one frame and has no top-level
+    // `market_id`, so the `!d.market_id` guard below would drop every one of
+    // them - the same shape of bug as the heartbeat ping being dropped for
+    // having no market id.
+    if (d.type === "market:prices_batch") {
+      const prices = (d as unknown as GridBatchFrame).prices
+      if (!prices) return
+      for (const h of conn.gridHandlers) {
+        try { h({ type: "market:prices_batch", prices }) } catch { /* handler threw */ }
+      }
       return
     }
 
@@ -461,6 +507,17 @@ function connect(conn: SharedConnection, firstMarketId: string) {
 
 interface MarketSocketCtx {
   subscribe: (marketId: string, handler: MessageHandler) => () => void
+  /**
+   * Register a handler for aggregated grid batches.
+   *
+   * Deliberately a separate channel from `subscribe`. `market:prices_batch`
+   * carries no `market_id` at the top level, so routing it through the
+   * per-market registry would drop every batch - the same shape of bug as the
+   * heartbeat ping being dropped for having no market id.
+   */
+  subscribeGrid: (handler: MessageHandler) => () => void
+  /** Declare which markets the caller is displaying. One frame, not N. */
+  sendGrid: (marketIds: string[]) => void
   getStatus: () => WSStatus
   /**
    * Subscribe to *connection status* changes.
@@ -480,6 +537,8 @@ const NOOP_SUBSCRIBE_STATUS = () => () => {}
 
 const MarketSocketContext = createContext<MarketSocketCtx>({
   subscribe: NOOP_SUBSCRIBE,
+  subscribeGrid: NOOP_SUBSCRIBE,
+  sendGrid: () => {},
   getStatus: NOOP_GET_STATUS,
   subscribeStatus: NOOP_SUBSCRIBE_STATUS,
 })
@@ -563,9 +622,45 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
     }
   }, [])
 
+  const subscribeGrid = useCallback((handler: MessageHandler) => {
+    const c = conn.current
+    c.gridHandlers.add(handler)
+    return () => {
+      c.gridHandlers.delete(handler)
+    }
+  }, [])
+
+  /**
+   * Declare the visible set to the server.
+   *
+   * One frame regardless of how many markets are on screen - that is the point
+   * of the batched protocol. Sent even while the socket is still CONNECTING:
+   * `sendWs` no-ops, but the declaration is recorded and replayed on `open`
+   * alongside the rest, because the server otherwise starts buffering for a
+   * grid that never told it what to buffer.
+   */
+  const sendGrid = useCallback((marketIds: string[]) => {
+    const c = conn.current
+    // Bring the connection up if nothing has yet.
+    //
+    // The tab-wide socket is created on demand by the first per-market
+    // subscription. A user who lands straight on /markets has asked for no
+    // market - only a grid - so without this the grid would have no socket at
+    // all and the page would be quietly, permanently static: no error, no failed
+    // request, prices that simply never move.
+    //
+    // The URL names a market id, and any id opens the endpoint; this one is never
+    // subscribed to, so it exists only to carry the grid declaration.
+    if (!c.ws) {
+      connect(c, GRID_ANCHOR_MARKET)
+    }
+    sendWs(c, { type: "grid", market_ids: marketIds })
+    c.declaredGrid = marketIds
+  }, [])
+
   const ctxValue = useMemo(
-    () => ({ subscribe, getStatus, subscribeStatus }),
-    [subscribe, getStatus, subscribeStatus]
+    () => ({ subscribe, subscribeGrid, sendGrid, getStatus, subscribeStatus }),
+    [subscribe, subscribeGrid, sendGrid, getStatus, subscribeStatus]
   )
 
   // NOTE: there is deliberately no "re-render the provider on status change"
@@ -672,6 +767,76 @@ export function useMarketSocket({
   return { status }
 }
 
+// ─── Many markets at once ─────────────────────────────────────────────────────
+
+/** One aggregated price frame, as the grid flush delivers it. */
+interface GridBatchFrame {
+  type: "market:prices_batch"
+  prices: Record<string, Record<string, unknown>>
+}
+
+/**
+ * Live prices for a whole grid, over one server-side batched subscription.
+ *
+ * The obvious implementation - subscribe to each market individually - is what
+ * this replaces, and it is the thing production systems avoid. It costs one
+ * subscription slot per visible market against a hard per-connection cap, and it
+ * puts one frame per market per tick on the wire, so thirty live cards mean
+ * thirty frames and thirty re-renders a second. That is how a realtime page ends
+ * up feeling slower than a static one, and no amount of client-side coalescing
+ * fixes it: the frames have already arrived.
+ *
+ * So the server aggregates instead. One `grid` frame declares which markets are
+ * on screen, and the reply is a single `market:prices_batch` per flush carrying
+ * every changed market. Cost is O(1) in frames and O(1) in subscriptions however
+ * many cards are rendered.
+ *
+ * Deliberately not a global "all market prices" firehose - that is one
+ * subscription, but it delivers the whole catalogue to a client showing thirty.
+ * Real market-data systems filter per subscriber; so does this.
+ *
+ * Sequence numbers survive the batching, so a grid still detects a missed frame
+ * and repairs itself the same way a detail page does.
+ */
+export function useMarketGrid(
+  marketIds: string[],
+  onPrices: (prices: Record<string, Record<string, unknown>>) => void,
+  enabled = true
+) {
+  const ctx = useContext(MarketSocketContext)
+  const onPricesRef = useRef(onPrices)
+  useEffect(() => { onPricesRef.current = onPrices }, [onPrices])
+
+  // Stable key: the declaration is re-sent only when the *set* of visible
+  // markets changes, not because the caller rebuilt an equivalent array.
+  const key = enabled
+    ? Array.from(new Set(marketIds.filter(Boolean))).sort().join("|")
+    : ""
+
+  useEffect(() => {
+    // Registered once per connection rather than per `key`: a reply to a
+    // re-declaration can still be in flight after the visible set has moved on,
+    // and a handler bound to the old set would either drop it or apply it to
+    // markets that are no longer on screen.
+    const handler: MessageHandler = (data) => {
+      const frame = data as GridBatchFrame
+      if (frame?.type !== "market:prices_batch" || !frame.prices) return
+      onPricesRef.current(frame.prices)
+    }
+    return ctx.subscribeGrid(handler)
+  }, [ctx])
+
+  // Declare the visible set - including when it empties, so the server stops
+  // buffering for a grid that has scrolled away or navigated off.
+  useEffect(() => {
+    ctx.sendGrid(key ? key.split("|") : [])
+    // `ctx` is in the dependency list because `sendGrid` reads the live
+    // connection from the singleton. Excluded deliberately instead: including it
+    // re-sends the whole declaration whenever the provider re-renders, and each
+    // one is a round-trip that replaces the server's entire set.
+  }, [key, ctx])
+}
+
 // ─── Teardown: HMR + page unload ───────────────────────────────────────────────
 //
 // `_conn` is module scope, which is what makes the socket per-tab rather than
@@ -713,6 +878,7 @@ function teardownSocket(reason: "hmr" | "unload"): void {
   c.lastConnectedMarket = null
   c.everConnected = false
   c.hiddenSince = null
+  c.declaredGrid = []
   c.retries = 0
 
   if (!ws) return

@@ -208,8 +208,15 @@ async def _notify_fill_participants(
         # 2. Position frame. Separate from the fill because a partial fill
         #    changes a position without completing an order, and the frontend
         #    keys its position/portfolio invalidation off this type.
+        #
+        #    The explicit `type` is load-bearing. `publish_user_event` stamps a
+        #    default of `notification`, so omitting it here shipped every
+        #    position update on the main order path labelled as a notification -
+        #    which the positions and portfolio pages treat as a toast and do not
+        #    invalidate against, leaving them showing the pre-trade position.
         try:
             await redis_pubsub.publish_user_event(uid, {
+                "type": "position:update",
                 "market_id": str(market.id),
                 "market_slug": market.slug,
                 "outcome": outcome_name,
@@ -444,11 +451,38 @@ class OrderService:
         price_before = float(amm.price(amm_side))
 
         if side == "buy":
-            amm.buy(amm_side, amount)
+            result = amm.buy(amm_side, amount)
         else:
-            amm.sell(amm_side, amount)
+            result = amm.sell(amm_side, amount)
 
-        price_after = float(amm.price(amm_side))
+        # Two different numbers, and only one of them answers the user's
+        # question.
+        #
+        # `price_after` is the pool's *marginal* price once this order has moved
+        # it. The user did not ask that - they asked what this order will cost
+        # them, which is the average they will actually transact at. For a buy
+        # the marginal price is always the higher of the two, so reporting it
+        # understates their cost.
+        #
+        # It also excluded fees entirely. Measured against a 1000/1000 pool, a
+        # $200 buy was quoted at $0.5730 and settled at $0.5847 - a 2.04% gap,
+        # exactly the fee. So the number on screen was never the number on the
+        # receipt, and the discrepancy grew with order size, meaning the *larger*
+        # the trade the worse the quote lied. That is not a rounding concern in a
+        # product whose entire promise is that the displayed price is live and
+        # real; it is the contract being broken.
+        #
+        # `collateral_in / shares_out` is the all-in average: what leaves the
+        # wallet per share received, fees already deducted. Same ratio for a
+        # sell, read as proceeds per share surrendered.
+        shares = float(result.shares_out)
+        all_in_price = float(result.collateral_in) / shares if shares > 0 else price_before
+
+        # `price_after` is kept, but as what it actually is: the pool's position
+        # after this trade. Callers that care about the new market price want
+        # this; callers promising the user a fill price want `price_after` to be
+        # the all-in figure, which is what it now is.
+        price_after = all_in_price
         slippage = abs(price_after - price_before)
 
         quote_id = str(uuid.uuid4())
@@ -553,7 +587,24 @@ class OrderService:
                 )
 
         # ── Step 3: Validate quote if provided ──
-
+        #
+        # OPTIONAL, and deliberately not the mechanism that protects the user.
+        #
+        # A quote is a *snapshot* - a price frozen in Redis with a 5s TTL and
+        # validated only by asking "is this still the number I computed?". In a
+        # realtime system that is the wrong primitive: time itself becomes the
+        # failure mode, so a trade gets rejected with "Quote expired • please
+        # refresh" for a reason that has nothing to do with the user's intent.
+        # The user did exactly what they meant to do and was still refused.
+        #
+        # What actually protects them is `max_slippage`, enforced at Step 6
+        # against the live pool *inside* the Step 1 lock. That is a real bound:
+        # it holds however long the request took to arrive, however many trades
+        # happened in between, and it cannot be raced because the pool it reads
+        # is the one nobody else can write to at that moment.
+        #
+        # So a quote is kept only as an optional extra assertion - "and it is
+        # still this specific price" - and its absence is not a weakness.
         if data.quote_id:
             try:
                 r = await get_redis()
@@ -820,6 +871,10 @@ class OrderService:
                         # balance and the user's own portfolio has to show it.
                         try:
                             await redis_pubsub.publish_user_event(str(user.id), {
+                                # Explicit type: without it this is stamped
+                                # `notification` and the positions page treats it
+                                # as a toast instead of invalidating.
+                                "type": "position:update",
                                 "market_id": str(market.id),
                                 "market_slug": market.slug,
                                 "outcome": outcome.name if outcome else "",
@@ -935,29 +990,86 @@ class OrderService:
         total_usdc_received = matched_usdc + sell_proceeds_amm
 
         # ── Step 6: Slippage validation ──
+        #
+        # The reference is the price the user agreed to - `expected_price`, the
+        # size-aware figure the form was showing - and only that. Comparing the
+        # fill against the pool's pre-trade price instead (which is what this used
+        # to do) measures the wrong thing in two separate ways:
+        #
+        #   1. It charges the user for their own price impact. A $200 market buy
+        #      on a 1000/1000 pool moves that pool ~17% on its own, so a
+        #      completely ordinary order reported "17% slippage" and was refused
+        #      at any sane tolerance. That is the cost of the trade itself -
+        #      inherent, unavoidable, and already shown in the quote - not
+        #      anything the user needs protecting from.
+        #
+        #   2. The fill blends two price sources. `matched_*` comes from resting
+        #      limit orders, `amm_*` from the AMM remainder, and both were being
+        #      scored against the AMM's price. A good fill against a deep book
+        #      could be refused for "slippage" against an unrelated number, while
+        #      a bad one could pass because the AMM happened to be rich.
+        #
+        # So: `expected_price` is the contract. When the client supplies it, the
+        # bound means what a user thinks it means - "fill within X% of what you
+        # showed me" - and it is evaluated against the fill that actually
+        # happened, inside the lock, so nothing can slip past it.
+        #
+        # When it is absent there is no coherent reference to score against, and
+        # inventing one would be a guarantee that lies. `min_shares_out` remains
+        # a hard, always-correct floor on what they receive, so the order still
+        # cannot go against them.
 
         if total_shares > 0:
             actual_price = total_usdc_spent / total_shares if data.side == "buy" else amm_price_val
             if data.min_shares_out is not None and total_shares < Decimal(str(data.min_shares_out)):
                 raise SlippageExceededError(
-                    expected_price=float(price_before),
+                    expected_price=(
+                        float(data.expected_price) if data.expected_price is not None
+                        else float(price_before)
+                    ),
                     actual_price=float(actual_price),
                     max_slippage=data.max_slippage or 0.01,
-                    details={"received_shares": float(total_shares), "min_shares_out": data.min_shares_out},
+                    # Floats, not Decimals. A `Decimal` here reaches the error
+                    # handler and json.dumps refuses it, so the refusal itself
+                    # crashed - the client got a 500 with no error code and no
+                    # explanation, for the one rejection it most needed to
+                    # understand. The size floor is exactly the rejection a
+                    # client has to be able to read back.
+                    details={
+                        "received_shares": float(total_shares),
+                        "min_shares_out": float(data.min_shares_out),
+                    },
                 )
-            if data.max_slippage is not None:
-                expected_price = float(price_before)
-                actual_price_f = float(actual_price)
-                if expected_price > 0:
+            if data.max_slippage is not None and data.expected_price is not None:
+                expected = float(data.expected_price)
+                actual = float(actual_price)
+                if expected > 0:
+                    # Buy is harmed by paying more, sell by receiving less.
                     if data.side == "buy":
-                        slippage_pct = (actual_price_f - expected_price) / expected_price
+                        slippage_pct = (actual - expected) / expected
                     else:
-                        slippage_pct = (expected_price - actual_price_f) / expected_price
+                        slippage_pct = (expected - actual) / expected
                     if slippage_pct > data.max_slippage:
+                        # `actual_price` rides along so the client can reconcile
+                        # against it immediately. In a realtime system the socket
+                        # is already carrying the new price - surfacing the number
+                        # the rejection was computed from lets the form correct
+                        # itself without the user re-reading anything.
                         raise SlippageExceededError(
-                            expected_price=expected_price,
-                            actual_price=actual_price_f,
+                            expected_price=expected,
+                            actual_price=actual,
                             max_slippage=data.max_slippage,
+                            details={
+                                "actual_price": actual,
+                                # Where the pool actually ended up, so the client
+                                # can reconcile the instant it sees this. The
+                                # socket is already carrying it, but echoing the
+                                # exact number the refusal was computed against
+                                # lets the form correct itself with no extra round
+                                # trip and no ambiguity about which price to trust.
+                                "current_market_price": float(amm.price(amm_side)),
+                                "retryable": True,
+                            },
                         )
 
         # ── Step 7: Save order + positions + trades ──
@@ -1356,6 +1468,10 @@ class OrderService:
                 "role": "taker",
             })
             await redis_pubsub.publish_user_event(str(user.id), {
+                # Explicit type, as on the fill path: a cancel returns locked
+                # funds and removes a resting order, so it moves a position and
+                # an order just as much as a fill does.
+                "type": "position:update",
                 "market_id": str(order.market_id),
                 "status": "cancelled",
                 "side": order.side,

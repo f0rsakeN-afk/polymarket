@@ -24,6 +24,7 @@ from app.services.cache_service import (
     cache_invalidate_market_lists,
 )
 from app.services.notification_service import NotificationService
+from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/disputes", tags=["disputes"])
@@ -213,6 +214,32 @@ async def adjudicate_dispute(
                 raise HTTPException(status_code=503, detail="Settlement service unavailable, please retry")
 
             await db.commit()
+
+            # The dispute path resolves the market directly rather than going
+            # through the admin endpoint, so it needs its own announcement -
+            # otherwise a dispute resolution was the one way a market could
+            # reach `resolved` with nothing said about it. `settle_market`
+            # announces the terminal state once payouts are durable; this is the
+            # immediate one.
+            try:
+                outcome_row = await db.get(Outcome, market.proposed_outcome_id)
+                await redis_pubsub.publish_market_event(
+                    str(market.id),
+                    "market:resolved",
+                    {
+                        "winning_outcome_id": str(market.proposed_outcome_id),
+                        "winning_outcome_name": getattr(outcome_row, "name", None),
+                        "status": market.status,
+                    },
+                )
+            except Exception:
+                # The ruling has committed and settlement is queued; failing to
+                # announce it must not fail the adjudication. Logged, not
+                # swallowed - silent non-delivery is what made this invisible.
+                logger.exception(
+                    "market:resolved publish failed market=%s after dispute ruling",
+                    market.id,
+                )
 
             await NotificationService.dispatch(
                 db,
