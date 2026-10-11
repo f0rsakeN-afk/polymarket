@@ -5,6 +5,7 @@ import Link from "next/link"
 import type { MarketResponse } from "@/hooks/api/types/market"
 import { outcomeColor } from "@/lib/outcome-colors"
 import { applyLivePrices } from "@/lib/live-price"
+import { tickColor, usePriceTick } from "@/lib/use-price-tick"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -122,25 +123,50 @@ function MultiOutcomeCell({
 }) {
   const pct = Math.round(Number(outcome.price) * 100)
 
+  // Direction of this outcome's last real move. Hook order is unconditional -
+  // an early return above it would change the hook count between renders.
+  const numeric = Number(outcome.price)
+  const tick = usePriceTick(Number.isFinite(numeric) ? numeric : null)
+
   return (
     <Link
       href={`/markets/${marketSlug}?outcomeIndex=${outcome.outcome_index}`}
-      className="group flex flex-col gap-1 rounded-md border border-border/60 bg-card/50 p-2 transition-all hover:border-primary/40 hover:bg-accent"
+      className="group flex flex-col gap-1 rounded-md border border-border/60 bg-card/50 p-2 transition-colors hover:border-primary/40 hover:bg-accent"
     >
       <div className="flex items-center justify-between">
         <span className="max-w-20 truncate text-xs font-medium text-foreground group-hover:underline">
           {outcome.name}
         </span>
+        {/*
+          The number flashes on a real move.
+
+          `key={tick.at}` remounts the span so the CSS animation restarts, which
+          is how the highlight plays once and reverts with no JS timer to keep in
+          sync. Colour alone is not enough - it is also bolded, because colour is
+          the channel users with colour-vision deficiency lose, and it is the
+          first thing to drop when a grid is dense.
+
+          `motion-reduce` removes it entirely for users who have asked the OS for
+          less motion: a grid re-animating several times a second is exactly the
+          repeated peripheral animation that setting exists for.
+        */}
         <span
-          className="shrink-0 text-xs font-semibold tabular-nums text-foreground"
+          key={tick.at}
+          className={cn(
+            "shrink-0 text-xs font-semibold tabular-nums text-foreground",
+            tick.direction !== 0 && "animate-[tick-flash_900ms_ease-out] motion-reduce:animate-none",
+            tickColor(tick.direction),
+          )}
         >
           {pct}%
         </span>
       </div>
-      {/* Mini bar */}
+      {/* Mini bar. `transition-all` replaced with `transition-[width]` so a price
+          tick animates the one thing that changed, rather than every colour and
+          shadow on the element at the same time. */}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full transition-all duration-300"
+          className="h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none"
           style={{ width: `${pct}%`, backgroundColor: color }}
         />
       </div>
@@ -224,6 +250,20 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
 
   const isMulti = (priced.outcomes?.length ?? 0) > 0 && !hasNamedPair
 
+  // Movement is tracked on the headline price - the YES price for a binary
+  // market, and the leading outcome for a parimutuel one, because every market
+  // has one and it is the number the grid is scanned for. Tracking each outcome
+  // separately would light up a card for a change the user is not looking at.
+  const headline = isMulti
+    ? Number(priced.outcomes?.[0]?.price ?? Number.NaN)
+    : Number(priced.yes_price ?? Number.NaN)
+  const tick = usePriceTick(Number.isFinite(headline) ? headline : null)
+
+  // A price from the socket is a fact about *now*; one from the REST snapshot is
+  // a fact about when the page loaded. Without saying which, a card that never
+  // updates looks exactly like a card that is merely quiet.
+  const isLive = live !== undefined
+
   const displayOutcomes = useMemo(() => {
     if (isMulti) {
       // Real per-outcome prices from the API. The old fallback of `1 / n` for
@@ -250,7 +290,20 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
   }, [isMulti, priced.outcomes, priced.yes_price, priced.no_price])
 
   return (
-    <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">
+    <article
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card transition-all duration-200 hover:shadow-md",
+        // The "just moved" treatment is deliberately quiet: a border tint, not a
+        // fill. A grid where whole cards flash is unreadable, and the thing worth
+        // noticing is *which* card moved, so the emphasis has to stay on the
+        // number and let the card edge just say "something happened here".
+        tick.active
+          ? "border-primary/40 ring-1 ring-primary/20"
+          : "border-border hover:border-primary/30",
+      )}
+      data-active={tick.active || undefined}
+      data-live={isLive || undefined}
+    >
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-4 pb-3">
         {market.status === "resolved" && (
@@ -294,9 +347,20 @@ const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
       </div>
 
       {/* Footer */}
-      <div className="mt-auto flex items-center justify-between border-t border-border/50 px-4 py-2.5">
-        <span className="text-xs font-semibold text-muted-foreground uppercase">
-          {formatVolume(market.total_volume)} Vol
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/50 px-4 py-2.5">
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {isLive && (
+            <span
+              className="relative flex size-1.5 shrink-0"
+              title="Live — streaming prices"
+            >
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:hidden" />
+              <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+            </span>
+          )}
+          <span className="font-semibold uppercase">
+            {formatVolume(market.total_volume)} Vol
+          </span>
         </span>
         <span className="text-xs text-muted-foreground">
           {new Date(market.closes_at).toLocaleDateString("en-US", {

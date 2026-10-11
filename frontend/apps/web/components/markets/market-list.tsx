@@ -86,6 +86,8 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
    * arrives on the server's schedule; this does not wait for it.
    */
   const resolvedRef = useRef<Set<string>>(new Set())
+  /** Row the user last focused, so focus can be restored if it scrolls away. */
+  const focusedIndexRef = useRef<number | null>(null)
   /** Highest `seq` seen per market • survives the aggregation */
   const seqRef = useRef<Map<string, number>>(new Map())
 
@@ -146,6 +148,7 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   // as the realtime layer being broken precisely where they were looking.
   // Window the list. Rendering and subscription both follow the visible range,
   // so a long catalogue costs the same as a short one.
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const { virtualizer, listRef, scrollMarginRef, columns, visibleIndices } = useVisibleRange(
     markets,
     useCallback(() => CARD_HEIGHT_PX, [])
@@ -231,6 +234,44 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   )
 
   useMarketGrid(marketIds, handlePrices)
+
+  // Keyboard focus must not be dropped when a card scrolls out of the window.
+  //
+  // Windowing unmounts rows that leave the viewport, so a card the user had
+  // tabbed into can simply vanish while focused - focus falls to <body> and the
+  // next Tab starts from the top of the page, silently losing their place
+  // entirely. It also reads as broken to a screen-reader user, whose cursor is
+  // now inside a node that no longer exists.
+  //
+  // So when the focused row leaves the window, focus is moved to the nearest
+  // surviving card instead of being dropped. A windowed list has to own its
+  // focus; that is the cost of not rendering everything, and it is not optional.
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      const cell = (event.target as HTMLElement | null)?.closest?.("[data-index]")
+      if (!cell) return
+      const index = Number(cell.getAttribute("data-index"))
+      if (Number.isFinite(index)) focusedIndexRef.current = index
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [])
+
+  useEffect(() => {
+    if (visibleIndices.length === 0) return
+    const focused = focusedIndexRef.current
+    if (focused === null || visibleIndices.includes(focused)) return
+
+    // Focus left the window. Land on whichever neighbour is still rendered -
+    // forwards if there is one, otherwise the last card behind us - so keyboard
+    // position degrades gracefully instead of resetting.
+    const forward = visibleIndices.find((i) => i > focused)
+    const target = forward ?? visibleIndices[visibleIndices.length - 1]
+    const cell = containerRef.current?.querySelector<HTMLElement>(
+      `[data-index="${target}"] a[href]`,
+    )
+    cell?.focus({ preventScroll: true })
+  }, [visibleIndices, containerRef])
 
   // Tear the flush timer down, or it outlives the component and writes state
   // into an unmounted grid.
@@ -325,8 +366,19 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
         which is what turns absolute positioning back into a grid.
       */}
       <div
-        ref={listRef}
+        ref={(el) => {
+          listRef.current = el
+          containerRef.current = el
+        }}
         data-testid="market-scroll"
+        role="list"
+        aria-label="Markets"
+        // A windowed list mounts only part of its contents, which is invisible to
+        // assistive technology by default: a screen reader announces "item 3 of
+        // 7" for a grid of two hundred. `aria-setsize`/`aria-posinset` restore the
+        // real totals so the position is announced even though the other items
+        // are not in the DOM.
+        aria-setsize={markets.length}
         style={{ height: virtualizer.getTotalSize(), position: "relative" }}
       >
         {rows.map((row) => {
@@ -336,8 +388,13 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
           return (
             <div
               key={market.id}
+              role="listitem"
               data-index={row.index}
               data-lane={row.lane}
+              // Lanes fill column-first, so the DOM order is not reading order.
+              // Announcing the visual position keeps a screen reader consistent
+              // with what sighted users see.
+              aria-posinset={row.index + 1}
               className="absolute top-0 px-2 pb-4"
               style={{
                 left: `${(row.lane ?? 0) * widthPct}%`,
