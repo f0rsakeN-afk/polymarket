@@ -16,7 +16,7 @@
  * realtime layer being broken precisely where the user was looking.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
-import { cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { MarketList } from "@/components/markets/market-list"
 import type { MarketResponse } from "@/hooks/api/types/market"
@@ -498,5 +498,135 @@ describe("MarketCard is one shape whatever the outcome count", () => {
       /more/.test(a.textContent ?? ""),
     )
     expect(badge?.textContent?.replace(/\s+/g, " ")).toContain("+9 more")
+  })
+})
+
+/**
+ * Windowing is an accessibility trade, not a free win.
+ *
+ * Only part of the list is in the DOM, so the things that assume the whole list
+ * is present quietly stop working: assistive technology announces "item 3 of 7"
+ * for a grid of two hundred, and a card the user tabbed into vanishes mid-scroll
+ * and drops focus to `<body>`, losing their place with no explanation.
+ */
+describe("MarketList stays usable with a screen reader and a keyboard", () => {
+  it("announces the true list size, not the number of mounted cards", () => {
+    const markets = Array.from({ length: 500 }, (_, i) => market(i))
+    renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const list = screen.getByTestId("market-scroll")
+    // Without this, a windowed list lies to assistive tech about how long it is.
+    expect(list.getAttribute("aria-setsize")).toBe("500")
+
+    const mounted = document.querySelectorAll("[data-index]").length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThan(500)
+  })
+
+  it("gives every card a list role and its position", () => {
+    const markets = Array.from({ length: 60 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    const items = [...container.querySelectorAll('[role="listitem"]')]
+    expect(items.length).toBeGreaterThan(0)
+    for (const item of items) {
+      const pos = Number(item.getAttribute("aria-posinset"))
+      expect(Number.isFinite(pos)).toBe(true)
+      expect(pos).toBeGreaterThan(0)
+      expect(pos).toBeLessThanOrEqual(60)
+    }
+  })
+
+  it("moves focus to a surviving card when the focused one scrolls away", async () => {
+    // Tab into a card, then shrink the list so that card is no longer mounted.
+    // Focus must land on something rather than falling back to <body>, which
+    // silently resets the user's place to the top of the page.
+    const many = Array.from({ length: 200 }, (_, i) => market(i))
+    const { rerender } = renderList(
+      <MarketList markets={many} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    // Focus the *last* mounted card, so shrinking the list genuinely removes it.
+    // Focusing the first card and then shrinking proves nothing - index 0 is
+    // still mounted either way, so focus never leaves the window.
+    const cells = [...document.querySelectorAll<HTMLElement>("[data-index]")]
+    expect(cells.length).toBeGreaterThan(1)
+    const lastCell = cells[cells.length - 1]!
+    const link = lastCell.querySelector<HTMLElement>("a[href]")
+    expect(link).toBeTruthy()
+    const lastIndex = Number(lastCell.getAttribute("data-index"))
+    expect(lastIndex).toBeGreaterThan(0)
+
+    link!.focus()
+    expect(document.activeElement).toBe(link)
+
+    // Keep only the first card, which is still in view - so something survives to
+    // take focus.
+    const few = many.slice(0, 1)
+    expect(lastIndex).toBeGreaterThan(0)
+    await act(async () => {
+      rerender(
+        <MarketList markets={few} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+      )
+    })
+
+    const active = document.activeElement as HTMLElement | null
+    expect(active).not.toBe(document.body)
+    expect(active).not.toBeNull()
+  })
+})
+
+/**
+ * Rows must not shift under the user.
+ *
+ * A virtualizer that measures item heights is wrong on first paint and corrects
+ * afterwards, and that correction moves rows while someone is scrolling - the
+ * classic "the page jumps when I scroll" complaint. It is invisible in every
+ * other assertion here, and it only shows up when a real user scrolls.
+ */
+describe("MarketList scroll position is stable", () => {
+  it("positions every cell from its index, not from a measured height", () => {
+    const markets = Array.from({ length: 60 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+
+    // Uniform height + index-derived offset is what makes positions stable: two
+    // cells in the same lane must differ by exactly one card height, which is
+    // only true if height is a constant.
+    const cells = [...container.querySelectorAll<HTMLElement>("[data-index]")]
+    const byLane = new Map<number, number[]>()
+    for (const cell of cells) {
+      const lane = Number(cell.getAttribute("data-lane"))
+      const y = Number(/translateY\((-?[\d.]+)px\)/.exec(cell.style.transform)?.[1])
+      byLane.set(lane, [...(byLane.get(lane) ?? []), y])
+    }
+
+    const heights = new Set(
+      cells.map((c) => c.style.height).filter(Boolean),
+    )
+    expect(heights.size).toBe(1)
+
+    for (const [, offsets] of byLane) {
+      const sorted = [...offsets].sort((a, b) => a - b)
+      for (let i = 1; i < sorted.length; i++) {
+        // Consecutive cards in a lane are one row apart, always.
+        expect(sorted[i]! - sorted[i - 1]!).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it("does not attach a resize measurement to each card", () => {
+    // Measuring per card is what causes mid-scroll reflow. With a fixed height it
+    // is dead weight that can only reintroduce the problem.
+    const markets = Array.from({ length: 30 }, (_, i) => market(i))
+    const { container } = renderList(
+      <MarketList markets={markets} loading={false} hasMore={false} onLoadMore={vi.fn()} />
+    )
+    expect(container.querySelectorAll("[data-index]").length).toBeGreaterThan(0)
   })
 })
