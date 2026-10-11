@@ -179,6 +179,14 @@ class ConnectionManager:
     # Bound concurrent sends so a 50k-subscriber tick doesn't materialize 50k
     # tasks at once • memory spike per price update.
     SEND_CONCURRENCY = 1000
+    # How often buffered grid prices are flushed into one combined frame.
+    # 250ms is four updates a second: past the rate anyone can read a changing
+    # percentage, and coarse enough that a list of trading markets costs a
+    # handful of frames a second rather than a few hundred.
+    GRID_FLUSH_INTERVAL_S = 0.25
+    # Ceiling on markets one socket may display. Bounds the buffer a single
+    # misbehaving client can make this worker hold.
+    MAX_GRID_MARKETS_PER_SOCKET = 200
     # How long a socket may go without proving it is still there.
     #
     # The old heartbeat asked "did my write succeed?" and that cannot detect the
@@ -213,6 +221,42 @@ class ConnectionManager:
         # and it is what lets the heartbeat tell a client its *true* position
         # rather than leaving it to guess from its own arrival pattern.
         self._last_seq: dict[str, int] = {}
+        # ── Grid subscriptions ────────────────────────────────────────────────
+        #
+        # A market *grid* - a list, search results, the home page - is the case
+        # per-market subscriptions get wrong, and getting it wrong is the
+        # difference between a page that scales and one that doesn't.
+        #
+        # Subscribing one socket to N markets looks fine and is not. It costs N
+        # subscription slots against a hard per-connection cap, and it delivers
+        # one frame per market per tick - so thirty visible markets means up to
+        # thirty frames a second into the browser and thirty re-renders. That is
+        # how a realtime page ends up feeling slower than a static one, and the
+        # client cannot fix it: the frames are already on the wire.
+        #
+        # The production answer is server-side aggregation. The client states
+        # which instruments it is displaying; the server keeps the latest value
+        # per instrument per socket and flushes ONE frame per socket per tick
+        # carrying all of them. Cost becomes O(1) in frames and O(1) in
+        # subscriptions, whatever the catalogue looks like.
+        #
+        # Deliberately not a single global "every market on the platform"
+        # firehose. That is one subscription, but it delivers thousands of
+        # updates to a client displaying thirty - strictly worse than delivering
+        # thirty. Real market-data systems filter per subscriber, and so does
+        # this.
+        #
+        # Per-market subscriptions stay, for the detail page, where a client
+        # wants every frame type for exactly one market.
+        #
+        # Socket -> markets it is displaying in a grid.
+        self._grid_subs: dict[WebSocket, set[str]] = {}
+        # Market -> sockets displaying it. The reverse index makes a price
+        # update cost O(subscribers of that market) rather than O(all sockets).
+        self._grid_subscribers: dict[str, set[WebSocket]] = defaultdict(set)
+        # Socket -> latest un-flushed price per market. Written on every frame,
+        # drained once per tick. This is what collapses N frames into one.
+        self._grid_pending: dict[WebSocket, dict[str, dict]] = {}
         self._ip_connections: dict[str, int] = defaultdict(int)
         self._user_connections: dict[str, int] = defaultdict(int)
         self._ws_ip: dict[WebSocket, str | None] = {}
@@ -385,6 +429,10 @@ class ConnectionManager:
 
         ws_lock = self._ws_locks.pop(websocket, None)
         self._ws_last_seen.pop(websocket, None)
+        # Grid state too. Without this the reverse index keeps a dead socket in
+        # every market set it was displaying, and each of those markets copies a
+        # price into a buffer for a socket that will never read it.
+        self.clear_grid(websocket)
 
         if ws_lock:
             async with ws_lock:
@@ -481,6 +529,126 @@ class ConnectionManager:
             if not m.startswith("__") and m in self._last_seq
         }
 
+    async def subscribe_grid(self, websocket: WebSocket, market_ids: list[str]) -> set[str]:
+        """Declare which markets a socket is displaying, replacing any previous set.
+
+        Returns the ids actually accepted, so a client that asked for more than
+        the cap can fall back rather than silently believing it is live for all
+        of them.
+        """
+        accepted = {m for m in market_ids if isinstance(m, str) and m}
+        if len(accepted) > self.MAX_GRID_MARKETS_PER_SOCKET:
+            accepted = set(sorted(accepted)[: self.MAX_GRID_MARKETS_PER_SOCKET])
+            logger.warning(
+                "WS grid capped at %d markets for socket %s",
+                self.MAX_GRID_MARKETS_PER_SOCKET, id(websocket),
+            )
+
+        self.clear_grid(websocket)
+        if not accepted:
+            return accepted
+
+        self._grid_subs[websocket] = accepted
+        for market_id in accepted:
+            self._grid_subscribers[market_id].add(websocket)
+        return accepted
+
+    def clear_grid(self, websocket: WebSocket) -> None:
+        """Drop a socket's grid set and its buffered prices.
+
+        The reverse index has to be reversed too. A grid that pages through the
+        catalogue would otherwise leave an entry behind for every market it ever
+        showed, and every price update on those markets would keep copying a
+        frame into a buffer nobody will ever send.
+        """
+        previous = self._grid_subs.pop(websocket, None)
+        self._grid_pending.pop(websocket, None)
+        if not previous:
+            return
+        for market_id in previous:
+            subs = self._grid_subscribers.get(market_id)
+            if subs is None:
+                continue
+            subs.discard(websocket)
+            if not subs:
+                del self._grid_subscribers[market_id]
+
+    async def _buffer_grid_price(self, market_id: str, event: dict) -> None:
+        """Record the newest price for every grid showing this market.
+
+        No I/O and no await on the hot path - that is what makes the aggregation
+        affordable. A market ticking fifty times between flushes costs fifty dict
+        writes and exactly one frame on the wire.
+        """
+        subs = self._grid_subscribers.get(market_id)
+        if not subs:
+            return
+        payload = {
+            "type": "market:price_update",
+            "market_id": market_id,
+            "yes_price": event.get("yes_price"),
+            "no_price": event.get("no_price"),
+            "volume": event.get("volume"),
+        }
+        outcome_prices = event.get("outcome_prices")
+        if outcome_prices:
+            payload["outcome_prices"] = outcome_prices
+        seq = event.get("seq")
+        if isinstance(seq, int):
+            # Carried so a grid keeps the same gap detection the detail page has.
+            # Without it a grid cannot tell a missed frame from a quiet market -
+            # the exact failure the heartbeat beacon exists to close.
+            payload["seq"] = seq
+        for ws in subs:
+            self._grid_pending.setdefault(ws, {})[market_id] = payload
+
+    async def flush_grid(self) -> int:
+        """Drain every grid buffer into one frame per socket. Returns sockets hit."""
+        if not self._grid_pending:
+            return 0
+
+        pending = self._grid_pending
+        self._grid_pending = {}
+        dead: list[WebSocket] = []
+
+        async def send(ws: WebSocket, prices: dict[str, dict]) -> None:
+            try:
+                await asyncio.wait_for(
+                    ws.send_json({"type": "market:prices_batch", "prices": prices}),
+                    timeout=self.SEND_TIMEOUT_S,
+                )
+                WS_SENDS_TOTAL.labels("ok").inc()
+                WS_MESSAGES_FANNED_OUT.labels("market").inc(len(prices))
+            except Exception:
+                WS_SENDS_TOTAL.labels("failed").inc()
+                dead.append(ws)
+
+        await asyncio.gather(
+            *(send(ws, prices) for ws, prices in pending.items()),
+            return_exceptions=True,
+        )
+        if dead:
+            await self._disconnect_many(dead)
+        return len(pending)
+
+    async def grid_loop(self, interval_s: float | None = None) -> None:
+        """Flush grid buffers on a fixed cadence for the life of the process.
+
+        One timer for the whole worker, not one per socket: per-socket timers make
+        the scheduler cost proportional to connected clients, which is precisely
+        the thing a realtime gateway must not have.
+        """
+        interval = interval_s if interval_s is not None else self.GRID_FLUSH_INTERVAL_S
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await self.flush_grid()
+            except asyncio.CancelledError:
+                logger.info("WS grid flush loop cancelled")
+                raise
+            except Exception as e:  # never let the loop kill itself
+                logger.error(f"WS grid flush failed: {e}")
+
     async def broadcast_to_market(self, market_id: str, event: dict):
         """
         Broadcast to sockets subscribed to this market.
@@ -493,8 +661,24 @@ class ConnectionManager:
         async with lock:
             raw_sockets = list(self._market_subs.get(market_id, set()))
 
-        if not raw_sockets:
-            return
+        # Record the high-water mark and buffer for grids, whether or not any
+        # socket is watching this market individually.
+        #
+        # Both used to sit *after* the `if not sockets: return` guard, which
+        # meant a market watched only by a grid - the entire case grids exist to
+        # serve - updated nothing at all: no sequence mark, so no beacon, and no
+        # buffered price, so no batch. The guard below now covers only the
+        # per-market send path.
+        seq = event.get("seq")
+        if isinstance(seq, int) and seq > self._last_seq.get(market_id, 0):
+            self._last_seq[market_id] = seq
+
+        # Grid subscribers are NOT sent this frame individually. It goes into
+        # their buffer and reaches them as one combined frame per tick. The
+        # reverse index makes this cost O(grids showing this market) rather than
+        # O(sockets), which is the whole point of the design.
+        if self._grid_subscribers.get(market_id) and event.get("type") == "market:price_update":
+            await self._buffer_grid_price(market_id, event)
 
         # Filter: only send to connections that actually subscribed to this market
         def is_subscribed(ws: WebSocket) -> bool:
@@ -504,16 +688,6 @@ class ConnectionManager:
         sockets = [ws for ws in raw_sockets if is_subscribed(ws)]
         if not sockets:
             return
-
-        # Record the high-water mark *before* sending, so a socket that times out
-        # mid-broadcast still counts as having been offered the frame. The
-        # heartbeat beacon tells clients where this node got to; if a frame that
-        # was never actually delivered advanced the mark, the client would be
-        # told it is up to date when it is not, which is the one thing this
-        # mechanism must never do.
-        seq = event.get("seq")
-        if isinstance(seq, int) and seq > self._last_seq.get(market_id, 0):
-            self._last_seq[market_id] = seq
 
         WS_MESSAGES_FANNED_OUT.labels("market").inc(len(sockets))
         dead = await self._bounded_send(sockets, event)

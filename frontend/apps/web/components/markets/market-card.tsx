@@ -4,6 +4,7 @@ import { memo, useMemo } from "react"
 import Link from "next/link"
 import type { MarketResponse } from "@/hooks/api/types/market"
 import { outcomeColor } from "@/lib/outcome-colors"
+import { applyLivePrices } from "@/lib/live-price"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -16,6 +17,16 @@ function formatVolume(v: string | number) {
 
 interface MarketCardProps {
   market: MarketResponse
+  /**
+   * Latest prices from the shared socket, when the card sits inside a grid that
+   * subscribes. Omit on surfaces with no live feed and the card renders from
+   * `market` exactly as before.
+   */
+  live?: {
+    yes_price?: number
+    no_price?: number
+    outcome_prices?: Record<string, number>
+  }
 }
 
 // ─── Binary layout: name + % + YES/NO pills in one row ────────────────────────
@@ -171,24 +182,34 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
 
 // ─── Market Card ───────────────────────────────────────────────────────────────
 
-const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
+const MarketCard = memo(function MarketCard({ market, live }: MarketCardProps) {
+  // Live prices overlay the REST snapshot when a socket frame has arrived, so a
+  // card in a grid moves on the same frame the market page does. Without it both
+  // grids - the home page and /markets - froze at whatever the list query
+  // returned, sitting right beside a live trending carousel.
+  //
+  // Overlaid here rather than written to the query cache because the card renders
+  // from props and the same market appears in several differently-filtered lists.
+  // `applyLivePrices` owns the multi-outcome rules.
+  const priced = useMemo(() => applyLivePrices(market, live), [market, live])
+
   // Name-based, matching the backend: a market is parimutuel when it has no
   // YES/NO pair. Counting outcomes would classify a two-way NAMED market
   // ("Trump vs Biden") as binary and render it as Yes/No, which is not what it is.
   const hasNamedPair = useMemo(() => {
-    const names = (market.outcomes ?? []).map((o) => o.name.toLowerCase())
+    const names = (priced.outcomes ?? []).map((o) => o.name.toLowerCase())
     return names.includes("yes") && names.includes("no")
-  }, [market.outcomes])
+  }, [priced.outcomes])
 
-  const isMulti = (market.outcomes?.length ?? 0) > 0 && !hasNamedPair
+  const isMulti = (priced.outcomes?.length ?? 0) > 0 && !hasNamedPair
 
   const displayOutcomes = useMemo(() => {
     if (isMulti) {
       // Real per-outcome prices from the API. The old fallback of `1 / n` for
       // every outcome made all N read identical no matter what the market
       // actually looked like.
-      const even = String(1 / (market.outcomes?.length ?? 1))
-      return market.outcomes!.map((o) => ({
+      const even = String(1 / (priced.outcomes?.length ?? 1))
+      return priced.outcomes!.map((o) => ({
         id: o.id,
         name: o.name,
         price:
@@ -202,10 +223,10 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
     // individually, but on a YES/NO market that is the same two numbers, and
     // `yes_price`/`no_price` is the pair the card has always displayed.
     return [
-      { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
-      { id: "no", name: "No", price: market.no_price, outcome_index: 1 },
+      { id: "yes", name: "Yes", price: priced.yes_price, outcome_index: 0 },
+      { id: "no", name: "No", price: priced.no_price, outcome_index: 1 },
     ]
-  }, [isMulti, market.outcomes, market.yes_price, market.no_price])
+  }, [isMulti, priced.outcomes, priced.yes_price, priced.no_price])
 
   return (
     <article className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">

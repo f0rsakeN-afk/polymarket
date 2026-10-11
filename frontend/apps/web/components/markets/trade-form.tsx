@@ -47,6 +47,19 @@ interface TradeFormProps {
   outcomePrices?: Record<string, number>
   outcomes?: Outcome[]
   marketStatus: string
+  /**
+   * Increments whenever this market's book changes because *someone else* traded.
+   *
+   * The form's displayed price is live from the socket, but every input to its
+   * quote effect is user-owned: market, outcome, side, amount. None of them
+   * change when another user buys, so nothing invalidated the quote - and the
+   * user submits against a pre-trade price that the server then validates against
+   * current state and rejects with "Quote expired • please refresh".
+   *
+   * A version counter rather than the book object, so the effect re-runs on every
+   * change and the dependency stays a primitive.
+   */
+  marketVersion?: number
   onSubmit: (order: PlaceOrderInput) => Promise<void>
 }
 
@@ -192,6 +205,7 @@ function TradeForm({
   outcomePrices,
   outcomes,
   marketStatus,
+  marketVersion = 0,
   onSubmit,
 }: TradeFormProps) {
   const { data: currentUser } = useCurrentUser()
@@ -223,9 +237,14 @@ function TradeForm({
 
   const clientOrderId = useMemo(() => crypto.randomUUID(), [])
 
-  // Backend quotes expire after 5s (OrderService.QUOTE_TTL) and
-  // place_order rejects a stale quote_id with "Quote expired • please refresh".
-  // Drop the quote at its real expiry so we neither show nor send a dead quote.
+  // The quote estimate is dropped at its real expiry so the form stops showing a
+  // number it knows is out of date.
+  //
+  // This is the one timer in the trading path, and it is deliberately *display-
+  // only*: it fires once, at the server's own expiry instant, and all it does is
+  // hide a stale estimate and trigger a cosmetic refresh. The trade itself does
+  // not depend on it - `max_slippage` is enforced against live state at
+  // execution - so nothing here can fail an order.
   useEffect(() => {
     if (!quote) return
     const ttlMs = Number(quote.expires_at) * 1000 - Date.now()
@@ -263,7 +282,6 @@ function TradeForm({
   const amount = useWatch({ control, name: "amount" })
   const price = useWatch({ control, name: "price" })
   const orderType = useWatch({ control, name: "order_type" })
-  const maxSlippage = useWatch({ control, name: "max_slippage" })
   const postOnly = useWatch({ control, name: "post_only" })
 
   // Multi-outcome markets are priced by the order book alone (one binary AMM
@@ -304,16 +322,63 @@ function TradeForm({
   const availableBalance = Number(wallet?.available_balance ?? 0)
   const hasInsufficientBalance = side === "buy" && total > availableBalance
 
-  // ── Quote fetching ──────────────────────────────────────────────────────────
+  // ── The bound the server will honour ──────────────────────────────────────────
+  //
+  // The pair that actually protects the user is `expected_price` +
+  // `max_slippage`: "fill within X% of the number on your screen". The server
+  // scores the real fill against `expected_price` inside the lock that performs
+  // it, so nothing can slip past the comparison.
+  //
+  // `expected_price` is what the user was actually shown, which is the only
+  // coherent reference - the pool's pre-order price is not, because it excludes
+  // this order's own price impact and ignores the portion matched against
+  // resting limit orders, so scoring against it charges users for their own
+  // trades and refuses ordinary orders.
+  //
+  // The two sources, in order of fidelity:
+  //   • the quote, when one matches the current inputs - size-aware and all-in,
+  //     fees included, so it is exactly what this order costs at this size
+  //   • `effectivePrice` otherwise - a socket frame, top-of-book, and the best
+  //     available when the estimate has not landed yet
+  //
+  // Either way the number is one the user saw, which is what makes the bound
+  // mean what it says.
+  const expectedPrice =
+    orderType === "limit"
+      ? (price ?? effectivePrice)
+      : quoteVisible && quote
+        ? quote.price_after
+        : effectivePrice
+  //
+  // The alternative - a quote id - freezes one number for 5s and then refuses
+  // the order if it expired. That is protection expressed as a *snapshot*, so
+  // elapsed time alone becomes a reason to fail a trade the user correctly
+  // intended. It also adds a round-trip to the critical path of every order.
+  // Default 2%: wide enough that a busy market fills reliably, tight enough that
+  // the user is never surprised by more than a cent or two on a typical market.
+  const [tolerance, setTolerance] = useState<number>(0.02)
+  const maxSlippageValue = orderType === "limit" ? 0 : tolerance
 
+  // ── Quote fetching ──────────────────────────────────────────────────────────
+  //
+  // Now display-only.
+  //
+  // The quote was previously load-bearing: it was the number submitted, and its
+  // expiry could fail the order. It is now an *estimate* that improves what the
+  // user sees - it accounts for their specific size and slippage, which a price
+  // frame cannot - but nothing depends on it being valid. It may be arbitrarily
+  // stale and the trade still succeeds, because the bound is enforced server-side
+  // against live state.
+  //
+  // That is what removes the "Quote expired • please refresh" failure entirely,
+  // rather than papering over it with a faster refresh.
   useEffect(() => {
     if (quoteDebounceRef.current) clearTimeout(quoteDebounceRef.current)
-    // Invalid inputs: skip fetch; quoteVisible gate below hides any cached quote.
+    // Invalid inputs: skip fetch. Nothing here is required to trade.
     if (!amount || Number(amount) <= 0 || orderType !== "market") {
       return
     }
-    // Live quote already covers exactly these inputs • a new one is only needed
-    // once it expires (TTL effect clears `quote`, flipping this back to false).
+    // An estimate covering these inputs is still good for display.
     if (quoteMatchesInputs) {
       return
     }
@@ -337,9 +402,14 @@ function TradeForm({
     }, 300)
     quoteDebounceRef.current = timeoutId
     return () => clearTimeout(timeoutId)
-    // `quoteMatchesInputs` re-runs this once the previous quote expires or the
-    // inputs change, so a fresh quote replaces the stale one.
-  }, [amount, outcome, side, marketId, orderType, quoteMatchesInputs])
+    // The quote is display-only now, so `marketVersion` is a *cosmetic*
+    // dependency: it keeps the estimate matching the book beside it. Removing it
+    // degrades what the user sees; it can no longer fail a trade, because nothing
+    // load-bearing depends on the quote any more.
+    //
+    // The 300ms is a debounce on input, not a poll - it collapses a burst of
+    // frames or keystrokes into one estimate, and nothing schedules it on its own.
+  }, [amount, outcome, side, marketId, orderType, quoteMatchesInputs, marketVersion])
 
   // ── Handlers ────────────────────────────────────────────────────────────
 
@@ -375,13 +445,22 @@ function TradeForm({
       const payload: PlaceOrderInput = {
         ...data,
         client_order_id: clientOrderId,
-        quote_id: quoteVisible ? quote?.quote_id : undefined,
+        // The bound, not the snapshot.
+        //
+        // `max_slippage` + `expected_price` together are what protect the user:
+        // the server compares the real fill against the price they saw, inside
+        // the fill's own lock, and refuses if it moved further than they agreed.
+        // That cannot expire and cannot be raced - unlike a `quote_id`, which
+        // failed orders purely because five seconds had passed.
+        max_slippage: maxSlippageValue > 0 ? maxSlippageValue : undefined,
+        expected_price: Number(expectedPrice) > 0 ? Number(expectedPrice) : undefined,
+        quote_id: undefined,
       }
       setQuote(null)
       setQuoteMeta(null)
       await onSubmit(payload)
     },
-    [onSubmit, clientOrderId, quote, quoteVisible]
+    [onSubmit, clientOrderId, maxSlippageValue, expectedPrice]
   )
 
   const handleOrderTypeChange = useCallback(
@@ -492,32 +571,43 @@ function TradeForm({
           </FieldContent>
         </Field>
 
+        {/* Market orders only. A limit order's price *is* its bound: it rests
+            until that price is reachable, so a slippage tolerance on top would be
+            meaningless. */}
+        {orderType === "market" && (
         <Field>
           <FieldLabel htmlFor="max_slippage">
-            Slippage Tolerance •{" "}
-            {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
+            Price protection
           </FieldLabel>
           <FieldContent>
+            {/* This slider is now the actual guarantee, so it states what it
+                guarantees rather than a tolerance against a frozen quote. The
+                server refuses the trade if the live price has moved beyond it,
+                checked inside the same lock that fills it. */}
             <Input
               id="max_slippage"
               type="range"
               min="0.001"
               max="0.1"
               step="0.001"
-              {...register("max_slippage", { valueAsNumber: true })}
+              value={tolerance}
+              onChange={(e) => setTolerance(Number(e.target.value))}
+              aria-describedby="max_slippage_help"
             />
+            <p id="max_slippage_help" className="text-[11px] text-muted-foreground">
+              Trade fills at up to {(tolerance * 100).toFixed(1)}% from the price you see.
+              Wider fills more reliably; the server refuses the trade if it moved further.
+            </p>
             <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
               <span>0.1%</span>
               <span className="font-medium text-foreground">
-                {(Number(maxSlippage ?? 0.005) * 100).toFixed(1)}%
+                {(tolerance * 100).toFixed(1)}%
               </span>
               <span>10%</span>
             </div>
           </FieldContent>
-          {errors.max_slippage && (
-            <FieldError errors={[{ message: errors.max_slippage.message }]} />
-          )}
         </Field>
+        )}
 
         {(orderType === "limit" || orderType === "fill_or_kill") && (
           <>

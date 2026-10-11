@@ -192,6 +192,27 @@ def expire_stale_orders(self):
                     ],
                     return_exceptions=True,
                 )
+
+                # Push the rebuilt book, once per affected market.
+                #
+                # The `order:expired` frames above say "this order is gone" to
+                # anyone listening per-market, but a socket that only sees them
+                # has to reconstruct the book itself - and an *orderbook:update*
+                # is what actually repaints it. Without this the REST cache was
+                # invalidated but nothing was pushed, so every open page kept
+                # rendering the expired level as live, tradeable liquidity until
+                # someone reloaded. That is the worst kind of wrong: entirely
+                # plausible-looking, and unfalsifiable without reloading.
+                #
+                # Once per market rather than per order - a market with twenty
+                # expiring orders produces one rebuild and one frame.
+                for market_id in expired_by_market:
+                    try:
+                        await _push_orderbook(market_id)
+                    except Exception:
+                        logger.exception(
+                            "orderbook push failed after expiry on market=%s", market_id
+                        )
                 for market_id in expired_by_market:
                     await cache_invalidate_orderbook(market_id)
 
@@ -229,6 +250,11 @@ def expire_stale_orders(self):
                             "role": "taker",
                         })
                         await redis_pubsub.publish_user_event(user_id, {
+                            # Explicit type: expiry releases locked funds, so
+                            # the balance and the order list both changed. Left to
+                            # the default it would be stamped `notification` and
+                            # neither would be invalidated.
+                            "type": "position:update",
                             "market_id": str(orders[0].market_id),
                             "status": "expired",
                             "role": "taker",
@@ -1286,6 +1312,35 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         # transaction is durable: a redelivered/duplicate task
         # short-circuits above instead of re-walking the ledger.
         await r.set(f"resolve_done:{market_id}", "1", ex=60 * 60 * 24 * 30)
+
+        # Now that payouts are durable, announce the terminal state.
+        #
+        # The admin's resolve endpoint announces `resolving`; this is the frame
+        # saying the money actually moved and the prices are final. Clients need
+        # the second one to stop rendering a settled market as tradeable - and
+        # until it is published, nothing told them.
+        try:
+            # The name is not in scope here - `settle_market` works from the
+            # outcome *id* - and the client's `market:resolved` handler reads
+            # `winning_outcome_name` to tell the user who won. One cheap lookup
+            # beats publishing an announcement with a null name in it.
+            outcome_row = await db.get(Outcome, market.winning_outcome_id)
+            await redis_pubsub.publish_market_event(
+                str(market.id),
+                "market:resolved",
+                {
+                    "winning_outcome_id": str(winning_outcome_id),
+                    "winning_outcome_name": getattr(outcome_row, "name", None),
+                    "status": market.status,
+                    "settled": True,
+                },
+            )
+        except Exception:
+            # The settlement is committed and durable; announcing it is
+            # best-effort. Logged, because silence here is exactly how clients
+            # ended up showing a resolved market as live.
+            logger.exception("market:resolved publish failed market=%s", market.id)
+
     return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
 
 @shared_task(
