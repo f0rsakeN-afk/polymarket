@@ -295,8 +295,32 @@ function unauthenticatedMessage(): string {
 // Routes that are publicly accessible • 401 on these means "unauthenticated", not "session expired"
 const PUBLIC_PATHS = ["/", "/markets", "/trades", "/docs", "/faq", "/legal", "/support"]
 
+/**
+ * Endpoints where a 401 is an *answer* rather than a failure.
+ *
+ * `/auth/me` is the session probe. For an anonymous visitor its 401 is the
+ * correct, definitive response - and it is treated as one: the session is marked
+ * dead, and no refresh is attempted.
+ *
+ * It was not listed here, so every page load logged out produced a pointless
+ * `/auth/refresh`: the probe 401'd, the client read that as "the access token
+ * expired", asked for a rotation with no refresh cookie to rotate, got another
+ * 401, and repeated itself on the next request. Two guaranteed-failing requests
+ * per anonymous page view, plus a red console error that looked like a broken
+ * backend rather than a working one.
+ *
+ * This is also the single most useful place to learn the session state: a 401
+ * here means "proven dead" more reliably than an inference anywhere else.
+ */
+const SESSION_PROBE_PATHS = ["/api/v1/auth/me"]
+
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+}
+
+/** Is this a request whose 401 settles the question rather than raising it? */
+function isSessionProbe(pathname: string) {
+  return SESSION_PROBE_PATHS.includes(pathname)
 }
 
 function redirectToLogin() {
@@ -358,6 +382,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // 401 • rotate the access token, then replay the original request once.
       if (res.status === 401 && !headers?.["Authorization"]) {
+        // The probe answered. Record it and stop - no rotation is possible or
+        // wanted, because there is no session here to rotate.
+        if (isSessionProbe(path)) {
+          markSessionEnded()
+          throw new ApiError(unauthenticatedMessage(), 401)
+        }
+
         // No point asking if we already know the answer, or if a recent attempt
         // was inconclusive: an anonymous visitor then costs zero refresh calls.
         if (refreshSuppressed()) {
