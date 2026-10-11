@@ -13,6 +13,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from conftest import drain_publishes
 
 from app.services.market_service import MarketService
 from app.services.order_service import OrderService
@@ -170,6 +171,7 @@ async def _publish_price_update(market_id, yes_price, no_price, volume):
 
     with patch("app.websocket.manager.redis_cb.call", new=_call_op):
         await bus.publish_price_update(market_id, yes_price, no_price, volume)
+        await drain_publishes(bus)
 
     assert published, "nothing was published"
     return json.loads(published[0])

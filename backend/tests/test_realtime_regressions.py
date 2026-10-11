@@ -11,6 +11,7 @@ import asyncio
 import json
 
 import pytest
+from conftest import drain_publishes
 
 from app.websocket.manager import (
     ConnectionManager,
@@ -212,6 +213,7 @@ async def test_every_market_frame_is_sequenced():
 
     with patch("app.websocket.manager.redis_cb.call", new=_call):
         await bus.publish_market_event("m1", "trade:new", {"id": "t1"})
+        await drain_publishes(bus)
 
     # The fake applies the same substitution the Lua script does - quotes
     # included - so this asserts the real on-wire shape.
@@ -246,7 +248,9 @@ async def test_price_and_events_share_one_channel_and_one_sequence_space():
 
     with patch("app.websocket.manager.redis_cb.call", new=_call):
         await bus.publish_price_update("m1", 0.6, 0.4, 10.0)
+        await drain_publishes(bus)
         await bus.publish_market_event("m1", "trade:new", {"id": "t1"})
+        await drain_publishes(bus)
 
     channels = [call[1][1] for call in fake.eval_calls]
     seq_keys = [call[1][0] for call in fake.eval_calls]
@@ -274,7 +278,9 @@ async def test_a_failing_publish_is_logged_and_counted_not_swallowed():
         # Must not raise: the trade already committed and a failed publish
         # cannot un-commit it. But it must not be silent either.
         await bus.publish_price_update("m1", 0.6, 0.4, 10.0)
+        await drain_publishes(bus)
         await bus.publish_global_trade({"id": "t1"})
+        await drain_publishes(bus)
 
     from app.middleware.metrics import WS_PUBLISH_FAILURES
 
@@ -314,6 +320,7 @@ async def test_publish_user_event_preserves_its_type():
 
     with patch("app.websocket.manager.redis_cb.call", new=_call):
         await bus.publish_user_event("u1", {"type": "position:update", "shares": 5})
+        await drain_publishes(bus)
 
     frame = json.loads(sent[0])
     assert frame["type"] == "position:update"
@@ -324,6 +331,7 @@ async def test_publish_user_event_preserves_its_type():
     sent.clear()
     with patch("app.websocket.manager.redis_cb.call", new=_call):
         await bus.publish_notification("u1", {"type": "whatever", "title": "hi"})
+        await drain_publishes(bus)
     assert json.loads(sent[0])["type"] == "notification"
 
 

@@ -516,6 +516,75 @@ async def phase_coalescing_not_loss(pubsub: RedisPubSub, markets: list[str]) -> 
           f"[{'PASS - not loss' if ok else 'FAIL'}]")
 
 
+async def phase_publish_burst(pubsub: RedisPubSub, markets: list[str]) -> None:
+    """A burst of publishes must drop nothing.
+
+    This is the assertion that would have caught the cliff. `max_connections` is
+    a hard limit, not a queue: measured directly against real Redis, 300
+    concurrent publishes came back as exactly 100 succeeded and 200
+    `MaxConnectionsError`. Every publisher caught that and logged a warning, so
+    the trade was committed to Postgres and no client was told - silently, in
+    every environment, with nothing to alert on.
+
+    With the queue, the same burst must complete intact. Queue depth and writers
+    are tuned so the backlog drains rather than overflowing, which is the whole
+    design: decouple rate from concurrency so the pool is a throughput knob and
+    not a correctness cliff.
+    """
+    print("\n[7] Publish burst must not drop frames")
+    print("    The assertion the MaxConnectionsError cliff would have failed.")
+
+    reset_global()
+    targets = markets[:30]
+
+    # Every frame is critical, so an overflow could not be excused as coalescing.
+    delivered: list[str] = []
+    original = pubsub._dispatcher._send
+
+    async def counting_send(pending):
+        await original(pending)
+        delivered.append(pending.frame)
+
+    pubsub._dispatcher._send = counting_send
+
+    total = 600
+    try:
+        t0 = time.perf_counter()
+        for i in range(total):
+            pubsub.enqueue_publish(
+                _make_noop(markets[i % len(targets)]),
+                frame="order:fill",
+                owe_resync_to=f"user-{i % 20}",
+            )
+        elapsed = time.perf_counter() - t0
+
+        require(await wait_for(lambda: len(delivered) >= total, timeout_s=30.0),
+               "burst did not drain - frames are being lost inside the queue")
+    finally:
+        pubsub._dispatcher._send = original
+
+    rate = len(delivered) / max(elapsed, 1e-9)
+    dropped = total - len(delivered)
+    verdict = "PASS" if dropped == 0 else f"FAIL - {dropped} dropped"
+    print(f"\n  {total} critical frames offered in {elapsed*1000:.0f}ms")
+    print(f"    delivered           {len(delivered):>6}   [{verdict}]")
+    print(f"    enqueue was non-blocking ({elapsed*1e6/max(total,1):.1f}us/frame)")
+    # Stated precisely, because the number is easy to misread: the ops here are
+    # no-ops, so this is the *dispatcher's* drain rate - how fast the queue moves
+    # frames between hand-off and the writer - not end-to-end Redis throughput.
+    # Phases 1-3 measure the real thing.
+    print(f"    dispatcher drain    {rate:>6.0f} frames/sec  (ops are no-ops;"
+          " see phases 1-3 for real Redis throughput)")
+
+
+def _make_noop(market_id: str):
+    """A publish closure that only needs to exist - timing is the writer's cost."""
+    async def _op():
+        return None
+
+    return _op
+
+
 async def main() -> None:
     from app.config import settings
 
@@ -538,6 +607,7 @@ async def main() -> None:
             phase_slow_consumer,
             phase_seq_atomicity,
             phase_coalescing_not_loss,
+            phase_publish_burst,
         )
         for phase in phases:
             # Each phase is isolated: a harness that aborts on the first exception
