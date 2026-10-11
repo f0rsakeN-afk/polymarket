@@ -208,7 +208,12 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                 market_ids = data.get("market_ids")
                 if not isinstance(market_ids, list):
                     continue
-                accepted = await manager.subscribe_grid(websocket, market_ids)
+                # `set_grid`, not `subscribe_grid`: declaring a grid also has to
+                # acquire the Redis channels for those markets. Indexing a socket
+                # for delivery without subscribing it means every price is
+                # published to a channel this node is not listening to, and the
+                # grid stays static with nothing to show for it.
+                accepted = await manager.set_grid(websocket, market_ids, redis_pubsub)
                 await websocket.send_json({
                     "type": "grid:ack",
                     "accepted": len(accepted),
@@ -216,7 +221,7 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                 })
 
             elif msg_type == "grid_clear":
-                manager.clear_grid(websocket)
+                await manager.release_grid(websocket, redis_pubsub)
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket, redis_pubsub, cause="client")

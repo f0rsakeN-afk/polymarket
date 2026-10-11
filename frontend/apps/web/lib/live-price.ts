@@ -253,6 +253,16 @@ export interface LiveFrame {
    * was added to close.
    */
   seq?: number;
+  /**
+   * The first `seq` this flush window saw for this market.
+   *
+   * Grid aggregation collapses repeated updates into one frame, so intermediate
+   * sequence numbers are deliberately absent. Without this, a grid cannot tell a
+   * collapsed update from a lost one - they look identical - and every busy
+   * market reports itself as lossy on every tick, firing a full REST resync
+   * hundreds of times a second.
+   */
+  seq_from?: number;
 }
 
 /**
