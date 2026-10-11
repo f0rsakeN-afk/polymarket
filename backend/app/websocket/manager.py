@@ -573,26 +573,43 @@ class ConnectionManager:
             if not subs:
                 del self._grid_subscribers[market_id]
 
-    async def _buffer_grid_price(self, market_id: str, event: dict) -> None:
-        """Record the newest price for every grid showing this market.
+    async def _buffer_grid_event(self, market_id: str, event: dict) -> None:
+        """Record the newest event for every grid showing this market.
 
         No I/O and no await on the hot path - that is what makes the aggregation
         affordable. A market ticking fifty times between flushes costs fifty dict
         writes and exactly one frame on the wire.
+
+        Resolution is buffered here too, not just prices. A grid excludes markets
+        that are already settled, so the moment one settles it is holding a
+        subscription slot, painting a live-looking card, and showing prices that
+        can never move again. Riding along on the batch it was already receiving
+        costs one field, and the grid gets to drop the market on the next flush
+        instead of waiting for a reload.
         """
         subs = self._grid_subscribers.get(market_id)
         if not subs:
             return
-        payload = {
-            "type": "market:price_update",
-            "market_id": market_id,
-            "yes_price": event.get("yes_price"),
-            "no_price": event.get("no_price"),
-            "volume": event.get("volume"),
-        }
-        outcome_prices = event.get("outcome_prices")
-        if outcome_prices:
-            payload["outcome_prices"] = outcome_prices
+        kind = event.get("type")
+        if kind == "market:resolved":
+            payload = {
+                "type": "market:resolved",
+                "market_id": market_id,
+                "status": event.get("status"),
+                "winning_outcome_id": event.get("winning_outcome_id"),
+                "winning_outcome_name": event.get("winning_outcome_name"),
+            }
+        else:
+            payload = {
+                "type": "market:price_update",
+                "market_id": market_id,
+                "yes_price": event.get("yes_price"),
+                "no_price": event.get("no_price"),
+                "volume": event.get("volume"),
+            }
+            outcome_prices = event.get("outcome_prices")
+            if outcome_prices:
+                payload["outcome_prices"] = outcome_prices
         seq = event.get("seq")
         if isinstance(seq, int):
             # Carried so a grid keeps the same gap detection the detail page has.
@@ -600,7 +617,19 @@ class ConnectionManager:
             # the exact failure the heartbeat beacon exists to close.
             payload["seq"] = seq
         for ws in subs:
-            self._grid_pending.setdefault(ws, {})[market_id] = payload
+            pending = self._grid_pending.setdefault(ws, {})
+            # Resolution is terminal, so it must not be lost to a late price tick.
+            #
+            # The buffer holds one entry per market, so a `market:price_update`
+            # landing after the resolution - a final trade settling into the book
+            # in the same 250ms window - would overwrite the marker and the grid
+            # would go on showing a live-looking market for a market that is
+            # already settled. Which is exactly the bug this was added to fix, so
+            # the terminal state wins.
+            existing = pending.get(market_id)
+            if existing is not None and existing.get("type") == "market:resolved":
+                continue
+            pending[market_id] = payload
 
     async def flush_grid(self) -> int:
         """Drain every grid buffer into one frame per socket. Returns sockets hit."""
@@ -677,8 +706,16 @@ class ConnectionManager:
         # their buffer and reaches them as one combined frame per tick. The
         # reverse index makes this cost O(grids showing this market) rather than
         # O(sockets), which is the whole point of the design.
-        if self._grid_subscribers.get(market_id) and event.get("type") == "market:price_update":
-            await self._buffer_grid_price(market_id, event)
+        #
+        # Both `market:price_update` and `market:resolved` ride this path: a grid
+        # that is not told a market settled keeps its subscription slot and keeps
+        # rendering it as tradeable, which is the one thing the grid exists to
+        # stop being wrong about.
+        if self._grid_subscribers.get(market_id) and event.get("type") in (
+            "market:price_update",
+            "market:resolved",
+        ):
+            await self._buffer_grid_event(market_id, event)
 
         # Filter: only send to connections that actually subscribed to this market
         def is_subscribed(ws: WebSocket) -> bool:

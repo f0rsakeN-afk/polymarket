@@ -44,7 +44,7 @@ async def test_thirty_markets_arrive_as_one_frame_not_thirty():
         mgr._grid_subscribers[f"m{i}"].add(sock)
 
     for i in range(30):
-        await mgr._buffer_grid_price(f"m{i}", {
+        await mgr._buffer_grid_event(f"m{i}", {
             "type": "market:price_update",
             "market_id": f"m{i}",
             "yes_price": 0.5,
@@ -68,7 +68,7 @@ async def test_repeated_ticks_collapse_to_the_newest_price():
     mgr._grid_subscribers["m1"].add(sock)
 
     for seq in range(1, 51):
-        await mgr._buffer_grid_price("m1", {
+        await mgr._buffer_grid_event("m1", {
             "type": "market:price_update",
             "market_id": "m1",
             "yes_price": seq / 100,
@@ -100,7 +100,7 @@ async def test_batched_prices_carry_the_sequence_number():
     mgr._grid_subs[sock] = {"m1"}
     mgr._grid_subscribers["m1"].add(sock)
 
-    await mgr._buffer_grid_price("m1", {
+    await mgr._buffer_grid_event("m1", {
         "type": "market:price_update", "market_id": "m1",
         "yes_price": 0.6, "no_price": 0.4, "seq": 42,
     })
@@ -122,7 +122,7 @@ async def test_outcome_prices_survive_the_batch():
     mgr._grid_subs[sock] = {"m1"}
     mgr._grid_subscribers["m1"].add(sock)
 
-    await mgr._buffer_grid_price("m1", {
+    await mgr._buffer_grid_event("m1", {
         "type": "market:price_update", "market_id": "m1",
         "yes_price": 0.5, "no_price": 0.5, "seq": 1,
         "outcome_prices": {"Yes": 0.4, "No": 0.35, "Draw": 0.25},
@@ -144,7 +144,7 @@ async def test_two_grids_get_their_own_frames():
         mgr._grid_subscribers[m].add(a)
     mgr._grid_subscribers["m1"].add(b)
 
-    await mgr._buffer_grid_price("m1", {
+    await mgr._buffer_grid_event("m1", {
         "type": "market:price_update", "market_id": "m1",
         "yes_price": 0.6, "no_price": 0.4, "seq": 1,
     })
@@ -356,3 +356,74 @@ async def test_the_grid_loop_flushes_and_stops_on_cancel():
         pass
 
     assert sock.batches(), "the loop must actually flush"
+
+class TestResolutionReachesTheGrid:
+    """A settled market must leave the grid, not sit in it looking alive.
+
+    A grid deliberately excludes markets that are already settled, so the instant
+    one settles it is holding a subscription slot, painting a live-looking card,
+    and showing prices that can never move again. The list then believes it is
+    tradeable right up until someone reloads - and the `market:resolved` frame the
+    detail page handles never reaches it at all, because that goes out on the
+    per-market channel while a grid listens on the aggregate.
+
+    So resolution rides the batch the grid was already receiving. One field, no
+    second channel, no extra subscription.
+    """
+
+    async def _grid_ws(self, mgr, market_id):
+        ws = _Sock()
+        await mgr.subscribe_grid(ws, [market_id])
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_resolution_is_buffered_into_the_batch(self):
+        mgr = ConnectionManager()
+        ws = await self._grid_ws(mgr, "m1")
+
+        await mgr.broadcast_to_market("m1", {
+            "type": "market:resolved",
+            "status": "resolving",
+            "winning_outcome_id": "o1",
+            "winning_outcome_name": "Yes",
+            "seq": 7,
+        })
+        await mgr.flush_grid()
+
+        payload = ws.batches()[0]
+        frame = payload["prices"]["m1"]
+        assert frame["type"] == "market:resolved"
+        assert frame["winning_outcome_name"] == "Yes"
+        # The seq rides along too, so the grid keeps its gap detection.
+        assert frame["seq"] == 7
+
+    @pytest.mark.asyncio
+    async def test_a_late_price_tick_cannot_resurrect_a_settled_market(self):
+        """The buffer holds one entry per market, so ordering decides what lands.
+
+        A final trade settling into the book inside the same 250ms window would
+        otherwise overwrite the resolution marker - and the grid would carry on
+        rendering a market that is already done, which is precisely the bug this
+        routing exists to fix. Resolution is terminal, so it wins.
+        """
+        mgr = ConnectionManager()
+        ws = await self._grid_ws(mgr, "m1")
+
+        await mgr.broadcast_to_market("m1", {"type": "market:resolved", "status": "resolved"})
+        await mgr.broadcast_to_market("m1", {
+            "type": "market:price_update", "yes_price": 0.99, "no_price": 0.01,
+        })
+        await mgr.flush_grid()
+
+        frame = ws.batches()[0]["prices"]["m1"]
+        assert frame["type"] == "market:resolved", (
+            "a price frame overwrote the resolution - the grid would show a "
+            "settled market as live"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_market_with_no_grid_subscribers_costs_nothing(self):
+        """No subscriber, no work - the point of the reverse index."""
+        mgr = ConnectionManager()
+        await mgr.broadcast_to_market("m1", {"type": "market:resolved", "status": "resolved"})
+        assert await mgr.flush_grid() == 0
