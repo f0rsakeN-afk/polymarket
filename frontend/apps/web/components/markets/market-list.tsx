@@ -30,8 +30,23 @@ const FLUSH_INTERVAL_MS = 250
  */
 const DEAD_MARKET_STATUSES = new Set(["resolved", "closed"])
 
-/** Fallback card height, used until the virtualizer measures a real one. */
-const ESTIMATED_CARD_PX = 260
+/**
+ * Height of a market card, in pixels.
+ *
+ * Exact, not an estimate, and only because `MarketCard` is built to a fixed
+ * shape: every card renders exactly two outcome rows whether it is binary or has
+ * fifty outcomes, so one height fits all of them.
+ *
+ * Pinning it means the virtualizer never has to *measure*. That matters for more
+ * than tidiness - measured heights are wrong on first paint, and correcting them
+ * shifts rows under the user's cursor mid-scroll. A known height removes that
+ * whole class of jump, and lets lanes be laid out without ever overlapping.
+ *
+ * Sizing it to content rather than to the tallest possible card is what keeps
+ * the grid dense: at 300px a binary card was ~40% empty, which reads as broken
+ * in a different way. 228 is the natural height of the fixed card shape.
+ */
+const CARD_HEIGHT_PX = 228
 
 interface MarketListProps {
   markets: MarketResponse[]
@@ -131,9 +146,9 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   // as the realtime layer being broken precisely where they were looking.
   // Window the list. Rendering and subscription both follow the visible range,
   // so a long catalogue costs the same as a short one.
-  const { virtualizer, scrollRef, visibleIndices } = useVisibleRange(
+  const { virtualizer, listRef, scrollMarginRef, columns, visibleIndices } = useVisibleRange(
     markets,
-    useCallback(() => ESTIMATED_CARD_PX, [])
+    useCallback(() => CARD_HEIGHT_PX, [])
   )
 
   const marketIds = markets
@@ -293,48 +308,54 @@ const MarketList = memo(function MarketList({ markets, loading, hasMore, onLoadM
   return (
     <div className="space-y-4">
       {/*
-        The list is windowed rather than fully rendered.
+        Windowed, but still the same responsive grid it always was.
 
-        Every mounted card re-renders whenever its price ticks, so on a long list
-        a market moving on page 40 would repaint a node nobody can see. The
-        virtualizer mounts only the visible rows, which bounds the DOM and the
-        render work together - and, because the grid declares the same range, the
-        server-side buffering is bounded by the same number.
+        The column count is the virtualizer's `lanes`, driven by the same
+        breakpoints the Tailwind classes used - so cards keep their arrangement
+        instead of collapsing to one per row, and the virtualizer reserves the
+        right amount of space per row.
 
-        Absolute positioning against a spacer of the full scroll height is what
-        keeps scroll position honest: the container reports the true length of the
-        list while only a handful of rows exist inside it.
+        The window is the scroll element rather than a nested `overflow-y-auto`
+        panel: the page already scrolled, adding an inner scroller changes how it
+        feels and puts a scrollbar inside the content.
+
+        Each row is placed by `translateY` against a spacer of the full scroll
+        height, so the document reports the true length of the list while only a
+        handful of cards exist inside it. `width`/`left` come from the row's lane,
+        which is what turns absolute positioning back into a grid.
       */}
       <div
-        ref={scrollRef}
-        className="max-h-[70vh] overflow-y-auto"
+        ref={listRef}
         data-testid="market-scroll"
+        style={{ height: virtualizer.getTotalSize(), position: "relative" }}
       >
-        <div
-          style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-          className="w-full"
-        >
-          {rows.map((row) => {
-            const market = markets[row.index]
-            if (!market) return null
-            return (
-              <div
-                key={market.id}
-                ref={virtualizer.measureElement}
-                data-index={row.index}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${row.start}px)`,
-                }}
-              >
-                <MarketCard market={market} live={live[market.id]} />
-              </div>
-            )
-          })}
-        </div>
+        {rows.map((row) => {
+          const market = markets[row.index]
+          if (!market) return null
+          const widthPct = 100 / columns
+          return (
+            <div
+              key={market.id}
+              data-index={row.index}
+              data-lane={row.lane}
+              className="absolute top-0 px-2 pb-4"
+              style={{
+                left: `${(row.lane ?? 0) * widthPct}%`,
+                width: `${widthPct}%`,
+                // Fixed height for every cell. Without this the rows go ragged:
+                // cards differ in content, so each one would measure differently
+                // and a row of cards would end at three different bottoms.
+                height: CARD_HEIGHT_PX,
+                // `row.start` is document-relative because the window is the
+                // scroll element; the list has to subtract its own offset or the
+                // whole grid renders below where it belongs.
+                transform: `translateY(${row.start - scrollMarginRef.current}px)`,
+              }}
+            >
+              <MarketCard market={market} live={live[market.id]} />
+            </div>
+          )
+        })}
       </div>
       <div ref={sentinelRef} className="flex justify-center py-4">
         {loading && <div className="flex items-center gap-1 text-muted-foreground"><div className="size-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" /> Loading...</div>}
