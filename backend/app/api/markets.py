@@ -50,6 +50,7 @@ from app.services.cache_service import (
     cache_set_orderbook,
 )
 from app.services.market_service import MarketService
+from app.websocket.manager import redis_pubsub
 from app.workers.tasks import resolve_market
 
 logger = logging.getLogger("PredictX")
@@ -750,6 +751,35 @@ async def resolve_market_endpoint(
         logger.info(f"Market resolved: {slug} -> {outcome.name} by admin={user.id}")
         await cache_invalidate_market(str(market.id))
         await cache_invalidate_market_lists()
+
+        # Say so on the market's own channel.
+        #
+        # Resolution is the single most important state change this product
+        # makes - prices stop meaning anything and $1.00 / $0.00 become final -
+        # and it had no realtime signal at all. `market-detail.tsx` has been
+        # handling a `market:resolved` frame since it was written; the backend
+        # simply never sent one, so the branch was dead code and every client
+        # kept rendering a live-looking market long after it was settled.
+        #
+        # `status` is `resolving`, not `resolved`: the worker flips it after
+        # settlement. Carried explicitly so the client can say "settling" rather
+        # than claiming a payout that has not happened yet.
+        try:
+            await redis_pubsub.publish_market_event(
+                str(market.id),
+                "market:resolved",
+                {
+                    "winning_outcome_id": str(outcome.id),
+                    "winning_outcome_name": outcome.name,
+                    "status": market.status,
+                },
+            )
+        except Exception:
+            # Resolution has committed. Failing to announce it must not fail the
+            # admin's request - and it is logged, not swallowed, because silence
+            # here is what left clients stale in the first place.
+            logger.exception("market:resolved publish failed market=%s", market.id)
+
         return success_response(
             {
                 "slug": slug,

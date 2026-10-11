@@ -211,14 +211,22 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(manager.heartbeat_loop())
     logger.info("WebSocket heartbeat sweep started (30s)")
 
+    # Grid price aggregation: one timer per worker flushing every grid socket's
+    # buffered prices into a single combined frame. This is what keeps a list of
+    # thirty live markets at one frame per tick instead of thirty.
+    grid_task = asyncio.create_task(manager.grid_loop())
+    logger.info("WebSocket grid flush started (250ms)")
+
     yield
 
     logger.info("Shutting down...")
     heartbeat_task.cancel()
-    try:
-        await heartbeat_task
-    except (asyncio.CancelledError, Exception):
-        pass
+    grid_task.cancel()
+    for task in (heartbeat_task, grid_task):
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
     await redis_pubsub.close()
     await _get_engine().dispose()
     await _get_replica_engine().dispose()

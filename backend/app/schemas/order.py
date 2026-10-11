@@ -17,6 +17,24 @@ class OrderRequest(BaseModel):
     client_order_id: str | None = Field(None, max_length=64)
     max_slippage: NonNegativeMoney | None = Field(None, ge=0, le=0.10)  # cap at 10% slippage server-side
     min_shares_out: PositiveMoney | None = None  # minimum shares to receive
+    # The price the user is agreeing to - normally the size-aware figure the form
+    # was displaying, driven live off the socket. It is the reference
+    # `max_slippage` is measured against.
+    #
+    # This exists because the only other candidate, the pool's price before the
+    # order, scores the fill against something the user never saw and never
+    # agreed to: it excludes their own price impact, and it is the AMM's price
+    # even for the portion that matched against resting limit orders. Scoring
+    # against it makes an ordinary order look like massive slippage and gets it
+    # refused for the cost of the trade itself.
+    #
+    # Without it the bound is not enforced - `min_shares_out` still applies, so
+    # the order cannot go against the user. A guarantee that cannot be evaluated
+    # against what was actually promised is worse than none.
+    expected_price: NonNegativeMoney | None = Field(None, gt=0, le=1)
+    # Optional extra assertion: "and it is still exactly this price". A snapshot
+    # with a TTL, so it fails on elapsed time alone - see order_service for why
+    # it is not what protects the user.
     quote_id: str | None = Field(None, max_length=64)  # bind to a specific quote
 
 

@@ -82,6 +82,21 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   // useOrderBook already uses queryKeys.orderBook(slug) = ["orderbook", slug]
   // which is the same key the WS 'orderbook:update' message writes to • no extra fetch on WS events
   const { data: orderbookData } = useOrderBook(slug)
+
+  /**
+   * Bumped every time this market's book changes.
+   *
+   * The order form's quote is keyed on inputs the *user* owns - market, outcome,
+   * side, amount - so when someone else trades, none of them change and the quote
+   * is never refreshed. The displayed price moves live from the socket while the
+   * quote the user actually submits against sits stale, and `place_order`
+   * validates it against current AMM state, so it fails with "Quote expired".
+   *
+   * Counting book frames rather than passing the book down keeps the dependency a
+   * primitive, and ties the invalidation to exactly the event that invalidates a
+   * quote: somebody else's order entering or leaving the book.
+   */
+  const [bookVersion, setBookVersion] = useState(0)
   // Derive first outcome's bids/asks for the header display (same select as before)
   const headerOutcome = useMemo(() => {
     if (!orderbookData?.data?.outcomes) return null
@@ -220,6 +235,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       // so this write and `getOrderBook` produce the identical value.
       const outcomes = (msg as { outcomes: OrderBookData }).outcomes
       queryClient.setQueryData(queryKeys.orderBook(slug), { success: true, data: { outcomes } })
+      // Invalidate the order form's quote. This frame is the server telling us
+      // somebody else's order entered or left the book, which is precisely what
+      // makes the price a user is quoting at wrong.
+      setBookVersion((v) => v + 1)
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
@@ -700,6 +719,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             outcomePrices={outcomePrices}
             outcomes={outcomes}
             marketStatus={market.status}
+            marketVersion={bookVersion}
             onSubmit={handleTrade}
           />
           <AlertDialog

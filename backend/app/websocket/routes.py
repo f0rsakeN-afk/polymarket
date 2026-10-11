@@ -197,6 +197,27 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                         websocket, old_market_id, redis_pubsub
                     )
 
+            elif msg_type == "grid":
+                # Replace the set of markets this socket is displaying in a grid.
+                #
+                # A list of thirty markets does not take thirty subscriptions and
+                # thirty frames a tick; it takes ONE declaration and then one
+                # combined frame per flush. Prices arrive aggregated, with `seq`
+                # preserved so the client keeps the same gap detection a detail
+                # page has.
+                market_ids = data.get("market_ids")
+                if not isinstance(market_ids, list):
+                    continue
+                accepted = await manager.subscribe_grid(websocket, market_ids)
+                await websocket.send_json({
+                    "type": "grid:ack",
+                    "accepted": len(accepted),
+                    "requested": len(market_ids),
+                })
+
+            elif msg_type == "grid_clear":
+                manager.clear_grid(websocket)
+
     except WebSocketDisconnect:
         await manager.disconnect(websocket, redis_pubsub, cause="client")
         logger.info(f"WS disconnected: market={market_id}")

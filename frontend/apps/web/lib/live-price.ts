@@ -226,3 +226,83 @@ export function patchMarketPrices<T extends MarketPriceCache>(
 
   return { ...prev, ...patch } as T;
 }
+
+/** The prices a `market:price_update` frame carries, as received. */
+export interface LiveFrame {
+  yes_price?: number;
+  no_price?: number;
+  outcome_prices?: Record<string, number>;
+  /**
+   * Per-market frame sequence number.
+   *
+   * Carried through the grid's aggregated batches so a list of live cards keeps
+   * the same gap detection a detail page has. Without it a grid cannot tell a
+   * missed frame from a quiet market, which is the failure the heartbeat beacon
+   * was added to close.
+   */
+  seq?: number;
+}
+
+/**
+ * Overlay a socket frame's prices onto a REST market, for render-from-props
+ * consumers (the market cards).
+ *
+ * A card renders whatever it is handed, so it cannot be patched through the
+ * query cache the way `patchMarketPrices` does - and the same market appears in
+ * several differently-filtered lists, each with its own cache entry. Overlaying
+ * at the card is the one place that reaches all of them.
+ *
+ * The rules mirror `patchMarketPrices` exactly, because two ways to price the
+ * same market is how the numbers and the chart beside them drift apart:
+ *
+ *  - Only finite numbers are written. `NaN` in a price renders as garbage, and a
+ *    missing price is a gap - never a fabricated `0`, which would read as a
+ *    confident "certain not to happen".
+ *  - An outcome the frame says nothing about keeps its REST price. Frames are
+ *    partial by design (a binary frame carries no `outcome_prices` at all), and
+ *    omitting an outcome is not saying that outcome is worth nothing.
+ *  - Names match exactly first, then case-insensitively, because the frame
+ *    carries the DB's canonical casing while the cached outcome is whatever the
+ *    API echoed back.
+ *  - A market with no `outcomes` array is left alone rather than throwing: a
+ *    card may be handed a market shape it does not fully understand, and should
+ *    render what it has instead of blanking the grid.
+ *
+ * Returns the same object reference when nothing changed, so a frame that
+ * changes nothing cannot re-render every card on the page.
+ */
+export function applyLivePrices<
+  T extends { yes_price?: unknown; no_price?: unknown; outcomes?: MarketOutcomeCache[] | null }
+>(market: T, live?: LiveFrame | null): T {
+  if (!live) return market;
+
+  const patch: Record<string, unknown> = {};
+  let changed = false;
+
+  if (isFiniteNumber(live.yes_price)) {
+    patch.yes_price = live.yes_price;
+    changed = true;
+  }
+  if (isFiniteNumber(live.no_price)) {
+    patch.no_price = live.no_price;
+    changed = true;
+  }
+
+  const outcomes = market.outcomes;
+  if (live.outcome_prices && Array.isArray(outcomes) && outcomes.length > 0) {
+    let outcomesChanged = false;
+    const next = outcomes.map((outcome) => {
+      const name = outcome?.name ?? "";
+      const price = live.outcome_prices![name] ?? live.outcome_prices![name.toLowerCase()];
+      if (!isFiniteNumber(price) || price === outcome.price) return outcome;
+      outcomesChanged = true;
+      return { ...outcome, price };
+    });
+    if (outcomesChanged) {
+      patch.outcomes = next;
+      changed = true;
+    }
+  }
+
+  return changed ? ({ ...market, ...patch } as T) : market;
+}
