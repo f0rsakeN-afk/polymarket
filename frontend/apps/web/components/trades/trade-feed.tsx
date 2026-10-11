@@ -190,6 +190,11 @@ const TradeFeed = memo(function TradeFeed({ trades, loading, title, listRef }: T
               return (
                 <div
                   key={trade.id}
+                  // Stable hook for the live-feed test to assert against.
+                  // `innerText` alone is ambiguous - the page shares its list
+                  // with nav items - and keying on rendered text couples the test
+                  // to copy that is free to change.
+                  data-trade-id={trade.id}
                   style={{
                     position: "absolute",
                     top: 0,
