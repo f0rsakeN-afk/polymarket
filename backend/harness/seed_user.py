@@ -18,7 +18,11 @@ Run it, then log in normally:
 """
 
 import asyncio
+import json
+import os
+import secrets
 import sys
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -30,26 +34,50 @@ from app.models.user import User
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "e2e-private@example.com"
 USERNAME = "e2eprivate"
-# Harness-only credential for a throwaway local account. Not a secret, and not
-# used anywhere but a seeded dev user.
-PASSWORD = "Passw0rd!x9"  # noqa: S105
+
+# Where the generated credential is handed to the browser tests.
+#
+# GitHub's secret scanning flags this file for a hardcoded password, and it was
+# right to. The value was a throwaway local account - but it was in a *public*
+# repository, which is a bad habit to leave in place: every real credential that
+# follows will be less scrutinised because this one looked harmless, and "looks
+# harmless, it's only a test" is exactly how test credentials become the ones
+# that reach production.
+#
+# So there is no password literal here at all. One is generated per run, used to
+# write the user, and written to a gitignored file that only the browser tests
+# read. It rotates on every seed, so the previously published value is dead on
+# arrival.
+#
+# Override with E2E_PASSWORD if you need a session to survive a reseed.
+CREDENTIALS_PATH = Path(__file__).resolve().parents[2] / ".e2e-credentials.json"
+
+
+def _password() -> str:
+    override = os.environ.get("E2E_PASSWORD")
+    if override:
+        return override
+    return secrets.token_urlsafe(24)
 
 
 async def main() -> None:
+    password = _password()
     maker = _get_async_session_maker()
     async with maker() as db:
         existing = await db.execute(select(User).where(User.email == EMAIL))
         user = existing.scalar_one_or_none()
         if user:
-            print(f"exists: {EMAIL} id={user.id}")
-            print(f"password: {PASSWORD}")
+            user.password_hash = hash_password(password)
+            await db.commit()
+            print(f"exists: {EMAIL} id={user.id} (password rotated)")
+            await _write_credentials(user.id, password)
             await seed_activity(user.id)
             return
 
         user = User(
             email=EMAIL,
             username=USERNAME,
-            password_hash=hash_password(PASSWORD),
+            password_hash=hash_password(password),
             # The only field being set that registration would not: without it
             # login refuses, and there is no mailbox here to confirm through.
             is_email_verified=True,
@@ -58,8 +86,21 @@ async def main() -> None:
         await db.commit()
         await db.refresh(user)
         print(f"created: {EMAIL} id={user.id}")
-        print(f"password: {PASSWORD}")
+        await _write_credentials(user.id, password)
         await seed_activity(user.id)
+
+
+async def _write_credentials(user_id, password: str) -> None:
+    """Hand the generated credential to the browser tests, and nowhere else."""
+    CREDENTIALS_PATH.write_text(
+        json.dumps({"email": EMAIL, "password": password, "user_id": str(user_id)}),
+        encoding="utf-8",
+    )
+    try:
+        CREDENTIALS_PATH.chmod(0o600)
+    except OSError:
+        pass
+    print(f"credentials -> {CREDENTIALS_PATH}")
 
 
 async def seed_activity(user_id) -> None:

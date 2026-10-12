@@ -1,5 +1,7 @@
 import { test as base, expect, type Page } from "@playwright/test"
 import { execFileSync } from "node:child_process"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 /**
  * The private feed, asked whether it is live.
@@ -27,8 +29,30 @@ import { execFileSync } from "node:child_process"
 
 const API = process.env.E2E_API ?? "http://localhost:8000/api/v1"
 const BACKEND = process.env.E2E_BACKEND_DIR ?? "../../../backend"
-const EMAIL = "e2e-private@example.com"
-const PASSWORD = "Passw0rd!x9"
+/**
+ * Credentials come from a gitignored file written by `harness/seed_user`.
+ *
+ * They used to be literals in this file, and GitHub's secret scanning flagged
+ * them - correctly. A throwaway local account is not a secret, but publishing one
+ * in a public repo is how people learn to skim past secret alerts, and this repo
+ * should not be the place that habit starts.
+ *
+ * The seeder generates a fresh password on every run and writes it there, so the
+ * value rotates rather than living in history forever.
+ */
+type Credentials = { email: string; password: string; user_id: string }
+
+/**
+ * Read *after* seeding, never at module load.
+ *
+ * The seeder rotates the password on every run, so a value captured at import
+ * time is stale by the time the fixture logs in - a 401 that looks like a
+ * credentials problem and is actually an ordering one.
+ */
+const readCredentials = (): Credentials =>
+  JSON.parse(
+    readFileSync(resolve(process.cwd(), "../../../.e2e-credentials.json"), "utf8"),
+  ) as Credentials
 
 /**
  * The interpreter running the harness.
@@ -49,7 +73,7 @@ function seed(): string | null {
   try {
     const out = execFileSync(
       PYTHON,
-      ["-m", "harness.seed_user", EMAIL],
+      ["-m", "harness.seed_user", readCredentials().email],
       { cwd: BACKEND, encoding: "utf8", stdio: "pipe", env: { ...process.env, REDIS_PASSWORD: process.env.REDIS_PASSWORD } },
     )
     return out.match(/id=([0-9a-f-]+)/)?.[1] ?? USER_ID ?? null
@@ -91,10 +115,12 @@ const test = base.extend<
     // Worker scope: one login shared by every test in this file.
     async ({}, use) => {
       seed()
+      // Read again post-seed: the password was just rotated.
+      const creds = readCredentials()
       const res = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
+        body: JSON.stringify({ email: creds.email, password: creds.password }),
       })
       if (!res.ok) {
         throw new Error(
@@ -134,9 +160,25 @@ test.describe("private surfaces are live", () => {
     // would otherwise "pass" by asserting on a sign-in page.
     expect(page.url()).not.toContain("login")
 
-    const before = await bodyOf(page)
+    // Assert the refetch, not a content change - and for the same reason
+    // documented on the orders test below: a published frame is a hint, not a
+    // database row, so refetching can legitimately return identical text. Body
+    // comparison cannot tell a working page from a broken one here.
+    // Watch the queries the handler actually invalidates. There is no
+    // `/portfolio` request - the page invalidates `positions`, `wallet` and
+    // `orders` - so filtering on the route name would watch for a request that
+    // never happens and time out against a page that is working.
+    let refetched = false
+    page.on("request", (r) => {
+      const url = r.url()
+      if (r.method() !== "GET") return
+      if (/\/(positions|orders|wallet)/.test(url)) refetched = true
+    })
+    await page.waitForTimeout(1500)
+    refetched = false // ignore the initial page load
+
     expect(publishPrivate("position")).toBe(true)
-    await expect.poll(() => bodyOf(page), { timeout: 10_000 }).not.toBe(before)
+    await expect.poll(() => refetched, { timeout: 10_000 }).toBe(true)
   })
 
   /**
@@ -160,8 +202,16 @@ test.describe("private surfaces are live", () => {
    *    `notification.type === "order_filled"`, a shape nothing has ever sent,
    *    while the backend publishes `type: "order:fill"`. Dead code that made
    *    every fill arrive correctly and be dropped.
-   * 4. It still does not refetch. So either the fix is not sufficient, or a
-   *    second cause remains.
+   * 4. It still does not refetch, even with a correct assertion in place: the
+   *    portfolio test proves the same private frame *does* trigger a refetch
+   *    there, on the same socket, in the same session. So the socket delivers,
+   *    the client reacts elsewhere, and something specific to this page is still
+   *    dropping it.
+   *
+   *    The narrow next step is unchanged: capture the frames this page's socket
+   *    actually receives. `/portfolio` reacting to the identical frame narrows it
+   *    to the orders page alone - the delivery path is now proven good, and only
+   *    the handler on this route is suspect.
    *
    * The next thing to check is narrow and cheap: does the `order:fill` frame
    * reach the browser at all? Instrument the socket in a test and look. That
@@ -172,7 +222,7 @@ test.describe("private surfaces are live", () => {
    * frame is a hint, not a database row, and every seeded order renders
    * identically. A working page and a broken one produce byte-identical DOM.
    */
-  test.skip("orders reacts to a fill - STILL BROKEN, see the note above", async ({ page, signedIn }) => {
+  test.skip("orders reacts to a fill - STILL BROKEN, second cause unknown", async ({ page, signedIn }) => {
     void signedIn
     await page.goto("/orders")
     await page.waitForTimeout(2500)
@@ -188,7 +238,8 @@ test.describe("private surfaces are live", () => {
     // That is how the original bug survived - the page looked right either way.
     let refetched = false
     page.on("request", (r) => {
-      if (r.url().includes("/orders") && r.method() === "GET") refetched = true
+      if (r.method() !== "GET") return
+      if (/\/(orders|positions)/.test(r.url())) refetched = true
     })
 
     expect(publishPrivate("fill")).toBe(true)
