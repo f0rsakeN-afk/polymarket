@@ -151,22 +151,50 @@ test.describe("private surfaces are live", () => {
    * failing, because a red suite gets ignored and this one is the only thing
    * watching the highest-consequence frames in the product.
    *
-   * Open question for whoever picks this up: is the private socket not connecting
-   * on this route, is the page reading auth from a source the seeded session does
-   * not satisfy, or is the fill being applied and simply not visible because the
-   * user genuinely has no orders to replace? The last is the benign case and the
-   * cheapest to check - and it is why the next step is seeding a real position,
-   * not more assertion.
+   * WHERE THIS ACTUALLY GOT TO, since the first version of this note was wrong:
+   *
+   * 1. The empty state was NOT the explanation - seeding real orders made the
+   *    page render them, so auth and the query are both fine.
+   * 2. The private socket DOES connect here: `ws://…/ws/notifications/{id}`.
+   * 3. A real bug WAS found and fixed: the handler matched
+   *    `notification.type === "order_filled"`, a shape nothing has ever sent,
+   *    while the backend publishes `type: "order:fill"`. Dead code that made
+   *    every fill arrive correctly and be dropped.
+   * 4. It still does not refetch. So either the fix is not sufficient, or a
+   *    second cause remains.
+   *
+   * The next thing to check is narrow and cheap: does the `order:fill` frame
+   * reach the browser at all? Instrument the socket in a test and look. That
+   * splits "not delivered" from "delivered and ignored", and nothing else here
+   * can - every symptom so far looks identical from the rendered page.
+   *
+   * Note also that asserting on rendered text cannot settle this: a published
+   * frame is a hint, not a database row, and every seeded order renders
+   * identically. A working page and a broken one produce byte-identical DOM.
    */
-  test.skip("orders reacts to a fill - UNVERIFIED, see the note above", async ({ page, signedIn }) => {
+  test.skip("orders reacts to a fill - STILL BROKEN, see the note above", async ({ page, signedIn }) => {
     void signedIn
     await page.goto("/orders")
     await page.waitForTimeout(2500)
     expect(page.url()).not.toContain("login")
 
-    const before = await bodyOf(page)
+    // Assert the *refetch*, not a content change.
+    //
+    // What the fix does is invalidate the orders query so the page re-reads
+    // authoritative state - deliberately, because a socket frame is a hint, not a
+    // record. So comparing rendered text is the wrong assertion twice over: the
+    // published frame is not a database row, and every seeded order renders
+    // identically, so a working page and a broken one produce byte-identical DOM.
+    // That is how the original bug survived - the page looked right either way.
+    let refetched = false
+    page.on("request", (r) => {
+      if (r.url().includes("/orders") && r.method() === "GET") refetched = true
+    })
+
     expect(publishPrivate("fill")).toBe(true)
-    await expect.poll(() => bodyOf(page), { timeout: 10_000 }).not.toBe(before)
+    await expect
+      .poll(() => refetched, { timeout: 10_000 })
+      .toBe(true)
   })
 
   /** SKIPPED - renders "Not authenticated" despite a valid session. See above. */
