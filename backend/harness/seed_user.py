@@ -24,6 +24,8 @@ from sqlalchemy import select
 
 from app.database import _get_async_session_maker
 from app.deps import hash_password
+from app.models.market import Market, Outcome
+from app.models.order import Order
 from app.models.user import User
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "e2e-private@example.com"
@@ -41,6 +43,7 @@ async def main() -> None:
         if user:
             print(f"exists: {EMAIL} id={user.id}")
             print(f"password: {PASSWORD}")
+            await seed_activity(user.id)
             return
 
         user = User(
@@ -56,6 +59,46 @@ async def main() -> None:
         await db.refresh(user)
         print(f"created: {EMAIL} id={user.id}")
         print(f"password: {PASSWORD}")
+        await seed_activity(user.id)
+
+
+async def seed_activity(user_id) -> None:
+    """Give the user something for the private feed to actually change.
+
+    Without this the "does /orders react to a fill?" test is unanswerable. A user
+    with zero orders renders an empty state, and a published fill has nothing to
+    replace - so the page not changing proves nothing either way. It is the
+    cheapest of the three candidate explanations to eliminate, so it goes first:
+    seed real rows, re-run, and whatever is left is a real fault.
+    """
+    maker = _get_async_session_maker()
+    async with maker() as db:
+        market = await db.execute(
+            select(Market).where(Market.status == "active").limit(1)
+        )
+        market = market.scalar_one_or_none()
+        if market is None:
+            print("no active market to attach activity to")
+            return
+        outcome = await db.execute(
+            select(Outcome).where(Outcome.market_id == market.id).limit(1)
+        )
+        outcome = outcome.scalar_one_or_none()
+        if outcome is None:
+            print("market has no outcomes")
+            return
+        db.add(Order(
+            user_id=user_id,
+            market_id=market.id,
+            outcome_id=outcome.id,
+            side="buy",
+            order_type="market",
+            amount=__import__("decimal").Decimal("25"),
+            price=__import__("decimal").Decimal("0.61"),
+            status="filled",
+        ))
+        await db.commit()
+        print(f"seeded a filled order on {market.slug}")
 
 
 if __name__ == "__main__":
