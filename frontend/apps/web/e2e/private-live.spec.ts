@@ -127,6 +127,7 @@ test.describe("private surfaces are live", () => {
   test.skip(skip, "needs E2E_USER_ID (harness/seed_user) and REDIS_PASSWORD")
 
   test("portfolio reacts to a position:update", async ({ page, signedIn }) => {
+    void signedIn
     await page.goto("/portfolio")
     await page.waitForTimeout(2500)
     // Redirecting back to sign-in means the session did not take, and the test
@@ -158,6 +159,7 @@ test.describe("private surfaces are live", () => {
    * not more assertion.
    */
   test.skip("orders reacts to a fill - UNVERIFIED, see the note above", async ({ page, signedIn }) => {
+    void signedIn
     await page.goto("/orders")
     await page.waitForTimeout(2500)
     expect(page.url()).not.toContain("login")
@@ -169,6 +171,7 @@ test.describe("private surfaces are live", () => {
 
   /** SKIPPED - renders "Not authenticated" despite a valid session. See above. */
   test.skip("wallet reflects a balance change pushed privately", async ({ page, signedIn }) => {
+    void signedIn
     await page.goto("/wallet")
     await page.waitForTimeout(2500)
     expect(page.url()).not.toContain("login")
