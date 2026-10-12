@@ -102,6 +102,51 @@ async def main(kind: str, market_id: str, value: float | None = None) -> None:
                 "winning_outcome_name": "Yes",
                 "winning_outcome_id": "yes",
             })
+        elif kind in ("fill", "position", "notification"):
+            # Private frames go to the user's own channels - a different path from
+            # everything above: no Lua sequencer (there is no shared ordering to
+            # maintain for a stream only one person reads), and two channels
+            # rather than one, because fills and notifications are different
+            # contracts.
+            #
+            # This is the highest-consequence path in the product. A user who is
+            # not told they were filled has no way of knowing to go and look.
+            channel = (
+                f"user:{market_id}:fills"
+                if kind in ("fill", "position")
+                else f"user:{market_id}:notifications"
+            )
+            if kind == "fill":
+                payload = {
+                    "type": "order:fill",
+                    "order_id": "probe-order",
+                    "order_ids": ["probe-order"],
+                    "market_id": "probe-market",
+                    "market_slug": "probe-market",
+                    "status": "filled",
+                    "side": "buy",
+                    "shares": 25.0,
+                    "price": 0.61,
+                    "avg_price": 0.61,
+                }
+            elif kind == "position":
+                payload = {
+                    "type": "position:update",
+                    "market_id": "probe-market",
+                    "outcome": "Yes",
+                    "shares": 137.5,
+                    "avg_price": 0.42,
+                    "realized_pnl": 3.5,
+                }
+            else:
+                payload = {
+                    "type": "notification",
+                    "id": f"probe-{int(__import__('time').time())}",
+                    "title": "Probe notification",
+                    "message": "Private feed probe",
+                    "severity": "info",
+                }
+            await ps._redis.publish(channel, json.dumps(payload))
         else:
             raise SystemExit(f"unknown kind: {kind}")
         print(f"published {kind} for {market_id}")
