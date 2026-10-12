@@ -183,7 +183,23 @@ export function OrdersPageClient() {
       // The socket reconnected; fills may have been missed while it was down.
       if (applyPrivateFeedResync(qc, payload)) return
       const msg = payload as { type?: string; notification?: { type?: string } }
+      // `order:fill` is the frame the backend actually publishes
+      // (`publish_order_fill` stamps it), and it is the one this page most needs
+      // to see - it is how a user learns they were filled.
+      //
+      // The `notification.order_filled` branch below this one looked equivalent
+      // and was dead code: nothing on the private channel has ever sent that
+      // shape. So a real fill arrived, arrived *correctly*, and was dropped by a
+      // page that was listening for a message that does not exist. The orders
+      // table only refreshed on reconnect or on a manual refetch.
+      //
+      // Both spellings are accepted deliberately: `position:update` covers the
+      // expiry and settlement paths, and keeping a fallback costs nothing while
+      // the notification shape is gone. What is not acceptable is *only*
+      // listening to a shape the server does not send - that is what made this
+      // page silently static in every environment, with no error anywhere.
       if (
+        msg?.type === "order:fill" ||
         msg?.type === "position:update" ||
         msg?.notification?.type === "order_filled"
       ) {
