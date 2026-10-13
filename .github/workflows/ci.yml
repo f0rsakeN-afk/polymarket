@@ -184,6 +184,20 @@ jobs:
       - name: Install uv
         run: pip install uv
 
+      # Generated per run rather than committed as literals.
+      #
+      # The application refuses to start on any of its placeholder secrets, which
+      # is the right guardrail - so the job has to supply them. Committing
+      # "CI-only" values to satisfy it would put real credentials back in the
+      # repository, with the added problem that a value everyone can read stops
+      # being a boundary at all. `totp_encryption_key` is sha256-derived, so any
+      # high-entropy string is valid.
+      - name: Generate run-scoped secrets
+        run: |
+          for name in TOTP_ENCRYPTION_KEY JWT_SECRET SECRET_KEY; do
+            echo "$name=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+          done
+
       - name: Install backend dependencies
         working-directory: backend
         run: uv sync --frozen
