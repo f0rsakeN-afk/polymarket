@@ -19,6 +19,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from starlette.websockets import WebSocketState
 
 from app.websocket.manager import (
     GLOBAL_TRADES_CHANNEL,
@@ -35,14 +36,22 @@ assert GLOBAL_TRADES_KEY.startswith("__")
 
 
 class FakeSocket:
-    """Minimal WebSocket stand-in that records what it was sent."""
+    """Minimal WebSocket stand-in that records what it was sent.
+
+    `client_state` models the real object because both managers refuse to accept
+    a socket that is no longer CONNECTING - Starlette's own `accept()` does not
+    check, and a second accept kills the connection with an unhandled ASGI
+    exception. A double without this attribute cannot exercise that path.
+    """
 
     def __init__(self):
         self.accepted = False
+        self.client_state = WebSocketState.CONNECTING
         self.sent: list[dict] = []
 
     async def accept(self):
         self.accepted = True
+        self.client_state = WebSocketState.CONNECTED
 
     async def send_json(self, payload):
         self.sent.append(payload)

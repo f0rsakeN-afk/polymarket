@@ -29,15 +29,25 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from starlette.websockets import WebSocketState
 
 from app.websocket.manager import GLOBAL_TRADES_KEY, ConnectionManager, RedisPubSub
 
 
 class FakeSocket:
+    """Minimal WebSocket stand-in.
+
+    `client_state` models the real object: both managers refuse to accept a
+    socket that is no longer CONNECTING, so a double without it cannot exercise
+    that path.
+    """
+
     def __init__(self):
+        self.client_state = WebSocketState.CONNECTING
         self.sent: list[dict] = []
 
     async def accept(self):
+        self.client_state = WebSocketState.CONNECTED
         return None
 
     async def send_json(self, payload):
