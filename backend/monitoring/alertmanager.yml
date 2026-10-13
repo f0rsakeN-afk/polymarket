@@ -1,0 +1,63 @@
+# Alertmanager routing.
+#
+# The default receiver is a no-op webhook on purpose, and that is the point worth
+# explaining: it does not work, and Alertmanager will say so.
+#
+# The alternative - an empty `receivers: []` - is invalid, and the alternative -
+# a receiver with no configuration - silently swallows alerts. Both leave you
+# with a monitoring stack that looks healthy and tells you nothing, which is
+# strictly worse than having none, because it is mistaken for coverage.
+#
+# So this fails visibly and immediately. Until a real destination is configured,
+# the operator gets told that alerts exist and have nowhere to go, which is the
+# truth. Set ALERT_WEBHOOK_URL and it works.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  # Repeat an unacknowledged critical alert. A fill notification that was dropped
+  # does not stop mattering because nobody was awake for it.
+  repeat_interval: 4h
+
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: default
+      # Critical pages sooner than warnings, and keep saying so.
+      group_wait: 10s
+      repeat_interval: 1h
+
+    - matchers:
+        - severity="warning"
+      receiver: default
+      repeat_interval: 12h
+
+inhibit_rules:
+  # Redis being down causes publish failures, a saturated queue, dropped frames
+  # and stalled writers. All four are the same incident.
+  #
+  # Without this, one Redis blip pages four times and the real cause is the one
+  # alert that gets muted first. Inhibition keeps the root cause loud and the
+  # consequences quiet.
+  - source_matchers:
+      - alertname="RealtimePublishFailures"
+    target_matchers:
+      - alertname=~"RealtimeQueueSaturated|RealtimeCriticalFramesDropped|RealtimeClientsOwedResync"
+    equal: []
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: "http://host.docker.internal:9/alert-destination-not-configured"
+        # A port nothing listens on. Promises are cheap; a silent monitoring
+        # stack is not, so this fails on purpose until someone configures a real
+        # destination.
+        send_resolved: true
+
+# Exposed so the container is reachable for config reloads and for checking that
+# routing is what you think it is before an incident rather than during one.
+route_receiver: default

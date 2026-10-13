@@ -191,6 +191,46 @@ services:
       - no-new-privileges:true
     read_only: true
 
+  # ── Monitoring ──────────────────────────────────────────────────────────────
+  #
+  # The application has exposed /metrics since it was written and nothing was
+  # reading it. That made every realtime metric - dropped frames, queue depth,
+  # publish failures - decorative: the cascade the publish queue exists to
+  # prevent would have happened invisibly, with the only evidence in a log line
+  # nobody watched.
+  #
+  # Alertmanager ships alongside rather than pointing Prometheus at a webhook that
+  # does not exist yet, so `docker compose up` yields a working alert path on
+  # first run instead of a Prometheus that silently has nowhere to send anything.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+    depends_on:
+      - app
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - backend
+
 networks:
   backend:
     name: PredictX-backend
@@ -204,3 +244,5 @@ volumes:
   beatdata:
     name: PredictX-beatdata
   nginx-logs:
+  prometheus-data:
+  alertmanager-data:
