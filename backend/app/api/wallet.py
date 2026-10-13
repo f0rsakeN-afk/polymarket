@@ -36,7 +36,21 @@ async def get_wallet(request: Request, db: AsyncSession = Depends(get_db_replica
     result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
     wallet = result.scalar_one_or_none()
     if not wallet:
-        raise NotFoundError("Wallet not found")
+        # The wallet is part of the account, not a separate resource the user has
+        # to go and create. Signup provisions one, so its absence means the
+        # invariant broke - a user predating that code, or a signup that
+        # half-committed - and the honest response is to repair it, not to 404.
+        #
+        # Returning 404 here was wrong twice over. The status is a lie (this is
+        # not a missing resource; it is *your* wallet, and you are asking for
+        # yourself), and the client turned it into a second lie: `wallet === null`
+        # rendered as "Not authenticated", so a signed-in user was told they were
+        # not signed in. It went unnoticed because every test fixture creates a
+        # wallet up front, so the suite only ever exercised the happy path.
+        #
+        # Get-or-create also keeps the endpoint idempotent and self-healing, so a
+        # user stranded without a wallet can still deposit.
+        wallet = await WalletService.get_or_create_wallet(db, user.id)
     return success_response(WalletResponse(
         balance=str(wallet.balance),
         locked_balance=str(wallet.locked_balance),
