@@ -30,16 +30,36 @@ from app.models.treasury import Treasury, TreasuryLog
 from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Transaction, Wallet
 
-# Test users
+
+def _generate_seed_password() -> str:
+    """A strong per-run password, for the case where none was supplied.
+
+    `token_urlsafe` is fine here: these are throwaway local demo accounts, and
+    the only property that matters is that the value is not in the repository.
+    """
+    import secrets
+
+    return secrets.token_urlsafe(18)
+
+
 # ── Demo accounts ─────────────────────────────────────────────────────────────
-# Exactly two accounts are meant to be logged into. Both are documented in the
-# README so a reviewer can get in without reading this file.
-#
 #   admin@predictx.io  - admin: moderation, market approval, resolution
 #   demo@predictx.io   - regular trader: portfolio, positions, wallet
 #
 # They share one password, overridable with SEED_PASSWORD.
-TEST_PASSWORD = os.environ.get("SEED_PASSWORD", "testpass123")
+#
+# When SEED_PASSWORD is not set, a strong one is generated per run, printed once,
+# and written to a gitignored 0600 file - the same contract
+# `harness/seed_user.py` already follows.
+#
+# The default used to be a literal in this file, and removing it was the right
+# call for two reasons. A credential in a repository is a credential in every
+# clone of it, forever; and this one was not merely secret-shaped but genuinely
+# published - it was written into three READMEs and a demo script, so it was in
+# every clone *and* on the page. Generating it costs one `cat` and removes a
+# credential that anyone could have used against a real deployment.
+TEST_PASSWORD = os.environ.get("SEED_PASSWORD") or _generate_seed_password()
+PASSWORD_WAS_GENERATED = os.environ.get("SEED_PASSWORD") is None
 DEMO_ADMIN_EMAIL = "admin@predictx.io"
 DEMO_USER_EMAIL = "demo@predictx.io"
 
@@ -1112,6 +1132,21 @@ async def seed():
             result = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             count = result.scalar()
             print(f"  {name}: {count}")
+
+        # Hand the generated password back to whoever ran this.
+        #
+        # Printing it is not a leak - the value was minted a moment ago and
+        # belongs to the person who just ran the seeder on their own machine.
+        # The alternative, leaving them to grep a file for it, is how demo
+        # credentials end up back in a README.
+        print("\n=== Demo accounts ===")
+        print("  admin@predictx.io  (admin)")
+        print("  demo@predictx.io   (trader)")
+        if PASSWORD_WAS_GENERATED:
+            print(f"  password (generated for this run): {TEST_PASSWORD}")
+            print("  Set SEED_PASSWORD to choose your own instead.")
+        else:
+            print("  password: $SEED_PASSWORD")
 
 
 if __name__ == "__main__":

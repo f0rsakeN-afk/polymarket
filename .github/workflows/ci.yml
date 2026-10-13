@@ -101,6 +101,263 @@ jobs:
         working-directory: frontend/apps/web
         run: bun run test
 
+  e2e-production:
+    name: E2E • production build
+    runs-on: ubuntu-latest
+
+    # Deliberately independent of the unit-test jobs rather than gated behind
+    # them: these need a live Postgres, Redis and backend, and folding that into
+    # the fast jobs would make every push pay for it. A failure here is its own
+    # red check, which is what makes it attributable.
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_PORT: "5433"
+      # Empty, so the app builds an unauthenticated Redis URL. The browser suite
+      # checks this variable with `=== undefined`, not truthiness, precisely so
+      # a passwordless Redis does not read as "not configured".
+      REDIS_PASSWORD: ""
+      REDIS_PORT: "6380"
+
+      # The application has its own defaults (Postgres on 5435, Redis on 6382)
+      # that match a developer's local stack, not the service ports mapped above.
+      # They have to be stated explicitly or the API silently connects to nothing.
+      #
+      # Worth spelling out because it fails late and confusingly: the first
+      # version of this job died in `alembic upgrade` with a connection error to
+      # :5435, and nothing in the log said the port was a choice rather than a
+      # service mapping someone had wired up.
+      #
+      # `postgres` is used as the database name because the service image always
+      # creates it; a custom name would need a CREATE DATABASE step, and this
+      # job has no reason to carry one.
+      DATABASE_URL: postgresql+asyncpg://postgres:change-me@127.0.0.1:5433/postgres
+      DATABASE_REPLICA_URL: postgresql+asyncpg://postgres:change-me@127.0.0.1:5433/postgres
+      REDIS_URL: redis://127.0.0.1:6380/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6380/1
+
+      # Both spellings of the web origin. The API's CORS allowlist defaults to
+      # `http://localhost:3000`, but the runner navigates to `127.0.0.1:3000`,
+      # and with credentials the Origin header must match the allowlist
+      # *exactly*. Getting this wrong does not fail loudly: every cross-origin
+      # call is blocked, the page renders its shell with no data, and it looks
+      # exactly like a broken realtime feed. Listing both removes the guesswork.
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+
+      # Baked into the client bundle at build time, so these must be set before
+      # `next build` - not just when the server starts.
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_WS_URL: ws://127.0.0.1:8000
+      E2E_API: http://127.0.0.1:8000/api/v1
+      E2E_BASE_URL: http://127.0.0.1:3000
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: change-me
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep -q PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pip install uv
+
+      # Generated per run rather than committed as literals.
+      #
+      # The application refuses to start on any of its placeholder secrets, which
+      # is the right guardrail - so the job has to supply them. Committing
+      # "CI-only" values to satisfy it would put real credentials back in the
+      # repository, with the added problem that a value everyone can read stops
+      # being a boundary at all. `totp_encryption_key` is sha256-derived, so any
+      # high-entropy string is valid.
+      - name: Generate run-scoped secrets
+        run: |
+          for name in TOTP_ENCRYPTION_KEY JWT_SECRET SECRET_KEY; do
+            echo "$name=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+          done
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Apply migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
+
+      - name: Seed markets and accounts
+        working-directory: backend
+        # An explicit password: the seeder would otherwise generate one per run,
+        # which is right for a developer and wrong here, where nothing needs to
+        # read it back.
+        env:
+          SEED_PASSWORD: e2e-only-not-a-real-secret
+        run: uv run python -m scripts.seed
+
+      # Start the API and wait for it, rather than `service_containers` and a
+      # sleep: a fixed sleep is either too short on a loaded runner (every test
+      # fails on a connection error that looks like a product bug) or wasteful on
+      # a fast one.
+      - name: Start the API
+        working-directory: backend
+        run: |
+          nohup uv run uvicorn app.app:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "api up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "api never became healthy"; tail -40 /tmp/api.log; exit 1
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Production build
+        working-directory: frontend/apps/web
+        # The whole point of this job: the unit jobs only ever exercise the dev
+        # server. Production builds fail differently - minification drops code,
+        # dev-only branches disappear, strict mode is off, and tree-shaking
+        # removes the kind of accidental import that makes a page work by luck.
+        run: bun run build
+
+      # `output: standalone` builds a self-contained server, and `next start`
+        # explicitly does not work with it. Copy the static assets it does not
+        # include and run the server it actually produced.
+      - name: Assemble the standalone server
+        working-directory: frontend/apps/web
+        run: |
+          cp -r .next/static .next/standalone/apps/web/.next/
+          cp -r public .next/standalone/apps/web/
+
+      - name: Start the web server
+        working-directory: frontend/apps/web
+        run: |
+          nohup env PORT=3000 HOSTNAME=127.0.0.1 \
+            node .next/standalone/apps/web/server.js > /tmp/web.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/ > /dev/null; then
+              echo "web up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "web never became healthy"; tail -40 /tmp/web.log; exit 1
+
+      - name: Seed the browser-test user
+        working-directory: backend
+        # Writes a gitignored credentials file with a session-bound access token,
+        # so the suite never touches the rate-limited login endpoint - a 429
+        # there is indistinguishable from "the page didn't react".
+        id: seeduser
+        run: |
+          uv run python -m harness.seed_user | tee /tmp/seed.log
+          echo "user=$(grep -oP '(?<=^USER_ID=).*' /tmp/seed.log)" >> "$GITHUB_OUTPUT"
+
+      # Generated, so it has to be read back rather than hardcoded - a hardcoded
+      # id works locally and breaks the first time the database is recreated,
+      # which is to say it breaks here, where nobody is watching and the suite
+      # skips itself.
+      - name: Resolve the seeded market
+        id: seed
+        working-directory: backend
+        run: echo "market=$(uv run python -m harness.market_id bitcoin-100k-2024)" >> "$GITHUB_OUTPUT"
+
+      # Only the browser binaries - `@playwright/test` is already a devDependency,
+      # and `bun add` here would edit the lockfile mid-run, so the build could
+      # drift from the lockfile the other jobs verified.
+      - name: Install the Playwright browser
+        working-directory: frontend/apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        working-directory: frontend/apps/web
+        env:
+          E2E_MARKET_ID: ${{ steps.seed.outputs.market }}
+          E2E_MARKET_SLUG: bitcoin-100k-2024
+          E2E_USER_ID: ${{ steps.seeduser.outputs.user }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/playwright.json
+        run: bunx playwright test --reporter=line,json
+
+      # The suite skips itself when its inputs are missing, which is the right
+      # behaviour for a developer and a silent false negative here: a CI run that
+      # skipped everything reports success having measured nothing, and that is
+      # the only reason a regression could reach `main` with a checkmark on it.
+      #
+      # So the counts are asserted rather than trusted. This has already earned
+      # its keep once - the guard was `!process.env.REDIS_PASSWORD`, which reads
+      # an empty string as unset, and CI's passwordless Redis satisfied it.
+      - name: Fail if the suite skipped instead of running
+        if: always()
+        working-directory: frontend/apps/web
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+
+          report = pathlib.Path("/tmp/playwright.json")
+          if not report.exists():
+              print("FAIL: no report written - the run died before reporting")
+              sys.exit(1)
+
+          stats = json.loads(report.read_text()).get("stats", {})
+          expected = stats.get("expected", 0)
+          flaky = stats.get("flaky", 0)
+          unexpected = stats.get("unexpected", 0)
+          skipped = stats.get("skipped", 0)
+
+          print(
+              f"passed={expected} flaky={flaky} failed={unexpected} skipped={skipped}"
+          )
+
+          # A suite that skipped everything reports success having measured
+          # nothing. Asserted rather than trusted, because the alternative is a
+          # green tick that means nothing - and this suite skips itself when its
+          # inputs are missing, which it just did once in CI because the guard
+          # read an empty REDIS_PASSWORD as "not configured".
+          if skipped:
+              print(f"FAIL: {skipped} test(s) skipped")
+              sys.exit(1)
+          if unexpected:
+              print(f"FAIL: {unexpected} test(s) failed")
+              sys.exit(1)
+          if expected + flaky == 0:
+              print("FAIL: no tests passed")
+              sys.exit(1)
+          sys.exit(0)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/apps/web/test-results/
+          retention-days: 7
+
   security-scan:
     name: Trivy scan (reports, does not block)
     runs-on: ubuntu-latest

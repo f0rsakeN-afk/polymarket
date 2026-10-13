@@ -2,6 +2,7 @@ import { test as base, expect, type Page } from "@playwright/test"
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { shouldSkip } from "./skip-guards"
 
 /**
  * The private feed, asked whether it is live.
@@ -82,7 +83,10 @@ const PYTHON: string =
   process.env.E2E_PYTHON ?? `${process.cwd()}/${BACKEND}/.venv/bin/python`
 
 const USER_ID = process.env.E2E_USER_ID
-const skip = !USER_ID || !process.env.REDIS_PASSWORD
+// See `e2e/skip-guards.ts`: the inline version of this guard read an empty
+// REDIS_PASSWORD as "not configured", so CI - which runs a passwordless Redis -
+// would have skipped this whole file and reported a green run measuring nothing.
+const skip = shouldSkip(process.env, USER_ID)
 
 /** Write the user directly, using the app's model and its own password hashing. */
 function seed(): string | null {
@@ -238,8 +242,18 @@ const test = base.extend<
     { scope: "worker" },
   ],
   signedIn: async ({ cookies, context }, use) => {
+    // Cookie domain is derived from the base URL, not hardcoded to `localhost`.
+    //
+    // A cookie scoped to `localhost` is simply not sent to `127.0.0.1` - the two
+    // are different hosts as far as the browser is concerned, even on the same
+    // machine. So the session silently did not exist: every auth-gated query
+    // stayed disabled, every page sat at a spinner, and every private-feed test
+    // failed while the 14 public tests passed. It read exactly like a broken
+    // realtime feed, which is why CI is the first place it showed up - locally
+    // both the dev server and the suite use `localhost` and agree.
+    const domain = new URL(BASE_URL).hostname
     await context.addCookies(
-      cookies.map((c) => ({ ...c, domain: "localhost", path: "/" })),
+      cookies.map((c) => ({ ...c, domain, path: "/" })),
     )
     await use()
   },
@@ -387,5 +401,45 @@ test.describe("private surfaces are live", () => {
 
     expect(publishPrivate("position")).toBe(true)
     await expect.poll(() => refetched, { timeout: 10_000 }).toBe(true)
+  })
+
+  test("one event produces one notification", async ({ page, signedIn }) => {
+    void signedIn
+    // Counts private sockets opened by this page. The portfolio page and the
+    // notification bell both subscribe, so this is where per-subscriber sockets
+    // showed up first.
+    const sockets: string[] = []
+    page.on("websocket", (ws) => {
+      if (ws.url().includes("/ws/notifications/")) sockets.push(ws.url())
+    })
+
+    const socket = trackPrivateSocket(page)
+    await page.goto("/portfolio")
+    expect(page.url()).not.toContain("login")
+    // Readiness is the socket itself, not a heading: what matters here is that
+    // the page is listening, and waiting on page furniture would be a proxy for
+    // something this test does not actually care about.
+    await waitForPrivateSocket(socket, page)
+
+    // Exactly one, not one per consumer. The server broadcasts to every socket it
+    // holds for a user, so N sockets means every private frame arrives N times.
+    expect(sockets).toHaveLength(1)
+
+    await page.locator('[aria-label^="Notifications"]').first().click()
+    expect(publishPrivate("notification")).toBe(true)
+
+    // The bell prepends each frame it receives, so a duplicated frame is a
+    // duplicated row. This is the reported symptom, and the assertion is on the
+    // count rather than on the bell merely showing something.
+    await expect
+      .poll(
+        async () =>
+          ((await page.locator("body").innerText()).match(/Probe notification/g) ?? []).length,
+        { timeout: 10_000 }
+      )
+      .toBe(1)
+
+    // Still one socket after traffic has flowed: the count must not grow with use.
+    expect(sockets).toHaveLength(1)
   })
 })
