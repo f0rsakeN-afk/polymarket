@@ -432,6 +432,35 @@ class ConnectionManager:
         user_id: str | None = None,
     ) -> bool:
         """Accept a WS connection and subscribe to initial market. Returns False if rejected."""
+        # Never accept a socket that is no longer waiting to be accepted.
+        #
+        # Starlette's `accept()` does not guard this. It only *conditionally*
+        # waits for the `websocket.connect` message and then sends
+        # `websocket.accept` unconditionally, so a socket that has already been
+        # accepted - or closed - will be handed a second `accept`, and the server
+        # answers with:
+        #
+        #     Expected ASGI message 'websocket.send' or 'websocket.close',
+        #     but got 'websocket.accept'
+        #
+        # That is not a cosmetic failure. It escapes as an unhandled ASGI
+        # exception: the connection dies with no close frame, nothing is logged
+        # at route level, and the client sees an abrupt drop it cannot explain.
+        #
+        # The sibling `UserConnectionManager.connect` hit exactly this in
+        # production. The market path had no check at all, and it is the busier
+        # of the two.
+        #
+        # Counted rather than silently skipped: this *should* never fire, so an
+        # occurrence is a bug somewhere upstream, and a counter is the only way to
+        # find out it happened rather than assuming it did not.
+        if websocket.client_state is not WebSocketState.CONNECTING:
+            logger.warning(
+                f"WS connect for market={market_id} skipped: socket is "
+                f"{websocket.client_state.value}, not CONNECTING"
+            )
+            WS_CONNECTS_TOTAL.labels("already_accepted").inc()
+            return False
         if client_ip and self._ip_connections.get(client_ip, 0) >= self.MAX_CONNECTIONS_PER_IP:
             logger.warning(f"WS rejected: too many connections from IP {client_ip}")
             WS_CONNECTS_TOTAL.labels("rejected_ip").inc()
@@ -1274,11 +1303,15 @@ class UserConnectionManager:
         one that returns nothing and assumes success is not.
         """
         if websocket.client_state is not WebSocketState.CONNECTING:
-            # Already accepted or closed. Say so rather than pretending.
+            # Already accepted or closed. Say so rather than pretending, and
+            # count it: this should never fire, so an occurrence is a bug
+            # somewhere upstream and a counter is the only way to learn that it
+            # happened rather than assuming it did not.
             logger.warning(
                 f"User WS connect for user={user_id} skipped: socket is "
                 f"{websocket.client_state.value}, not CONNECTING"
             )
+            WS_CONNECTS_TOTAL.labels("already_accepted").inc()
             return False
 
         await websocket.accept()

@@ -15,6 +15,7 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
+from starlette.websockets import WebSocketState
 
 from app.websocket.manager import ConnectionManager, RedisPubSub
 
@@ -26,10 +27,20 @@ GLOBAL_TRADES_KEY = "__global_trades__"
 
 
 class RecordingSocket:
+    """Minimal WebSocket stand-in.
+
+    `client_state` models the real object: both managers refuse to accept a
+    socket that is no longer CONNECTING, since Starlette's own `accept()` does
+    not check and a second accept kills the connection with an unhandled ASGI
+    exception. A double without it cannot exercise that path.
+    """
+
     def __init__(self):
+        self.client_state = WebSocketState.CONNECTING
         self.sent: list[dict] = []
 
     async def accept(self):
+        self.client_state = WebSocketState.CONNECTED
         return None
 
     async def send_json(self, payload):

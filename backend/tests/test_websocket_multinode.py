@@ -19,6 +19,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from starlette.websockets import WebSocketState
 
 from app.websocket.manager import ConnectionManager, RedisPubSub
 
@@ -26,14 +27,24 @@ D = pytest
 
 
 class FakeSocket:
-    """Minimal WebSocket stand-in that records what it was sent."""
+    """Minimal WebSocket stand-in that records what it was sent.
+
+    `client_state` is not optional decoration: both managers refuse to accept a
+    socket that is no longer CONNECTING, because Starlette's own `accept()` does
+    not check and a second accept kills the connection with an unhandled ASGI
+    exception. A double that does not model the state the real object exposes
+    cannot exercise that path, and would instead fail on an AttributeError - which
+    is how the gap was found rather than guessed at.
+    """
 
     def __init__(self):
         self.accepted = False
+        self.client_state = WebSocketState.CONNECTING
         self.sent: list[dict] = []
 
     async def accept(self):
         self.accepted = True
+        self.client_state = WebSocketState.CONNECTED
 
     async def send_json(self, payload):
         self.sent.append(payload)

@@ -54,7 +54,15 @@ WS_SUBSCRIPTIONS = Gauge(
 WS_CONNECTS_TOTAL = Counter(
     "ws_connects_total",
     "WebSocket connection attempts by outcome",
-    ["outcome"],  # accepted | rejected_ip | rejected_user
+    # accepted | rejected_ip | rejected_user | already_accepted
+    #
+    # `already_accepted` is a connection that reached a manager with a socket that
+    # was no longer waiting to be accepted. It is always a bug upstream of the
+    # manager - a double-accept, or a socket closed before it was opened - and it
+    # used to surface as an unhandled ASGI exception that killed the connection
+    # with no close frame and nothing logged. Counted so it can be alerted on
+    # instead of being a story someone reads in a log.
+    ["outcome"],
 )
 WS_DISCONNECTS_TOTAL = Counter(
     "ws_disconnects_total",
