@@ -52,14 +52,47 @@ class Settings(BaseSettings):
     #
     # Publishers now hand frames to a bounded queue drained by a fixed writer
     # pool, so each writer holds one connection regardless of burst size and the
-    # pool becomes a throughput knob rather than a correctness cliff. Sizing is
-    # measured, not guessed: ~0.6ms per publish end to end, so a writer retires
-    # roughly 1600 publishes/second.
+    # pool becomes a throughput knob rather than a correctness cliff.
+    #
+    # MEASURED, not guessed. `harness/bench_publish_queue.py` drains 20,000 real
+    # Redis publishes per configuration, three runs each, best-of:
+    #
+    #     1 writer    7,045 frames/s
+    #     2 writers  10,222  (1.45x)
+    #     4 writers  11,823  (1.68x)
+    #     8 writers  13,598  (1.93x)   <- configured, and the measured peak
+    #    16 writers   9,783  (regresses)
+    #    32 writers  11,323  (regresses)
+    #
+    # Two things worth stating plainly. Scaling stops at 8 and then *degrades*:
+    # more writers contend for the same Redis and measure slower, so raising
+    # this past 8 would cost throughput rather than buy it.
+    #
+    # And the 0.6ms figure that used to justify this number came from the
+    # fan-out phase, which measures in-process socket delivery and says nothing
+    # about a Redis round trip. The writer pool had never actually been observed
+    # publishing to Redis, and the existing burst phase enqueues no-op operations
+    # - so it measured the queue's plumbing and nothing else.
     publish_writers: int = 8
     # Overflow policy differs by delivery class, deliberately - see
     # `app/websocket/publish_queue.py`. Prices drop-oldest (coalescing keeps the
     # newest, which is what the client would have done anyway); critical frames
     # are dropped *and* owed a resync, because they must never vanish silently.
+    # The depths below are read against the measured drain rate above, because a
+    # queue depth only means something next to how fast it empties. At ~13,600
+    # frames/s:
+    #
+    #     ephemeral 20,000 frames -> 1.5s of headroom
+    #     critical  10,000 frames -> 0.7s of headroom
+    #
+    # That is the honest size of the safety margin: not a large buffer, but enough
+    # to ride out a GC pause or a momentary Redis stall without coalescing a price
+    # or owing a resync. Anything longer than that and overflow is *by design* -
+    # ephemeral coalesces (which is what the client would have done anyway), and
+    # critical spills with a resync owed, which is why that alert exists.
+    #
+    # If these are ever raised, re-run the benchmark: the numbers above are the
+    # only reason to believe a larger depth buys anything.
     publish_queue_ephemeral: int = 20_000
     publish_queue_critical: int = 10_000
 
