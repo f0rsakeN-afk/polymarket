@@ -139,12 +139,32 @@ async def main(kind: str, market_id: str, value: float | None = None) -> None:
                     "realized_pnl": 3.5,
                 }
             else:
-                payload = {
-                    "type": "notification",
-                    "id": f"probe-{int(__import__('time').time())}",
+                # Mirror the real frame from `notification_service.create`, which
+                # carries the notification twice: flat for the portfolio toast,
+                # nested for the notification bell.
+                #
+                # A flat-only probe looks like it works - it publishes, the socket
+                # receives it, nothing errors - and then proves nothing, because
+                # each consumer reads one shape or the other and silently ignores
+                # what it did not expect. That is how this path stayed untested:
+                # the harness spoke a shape the application never sent.
+                nid = f"probe-{int(__import__('time').time())}"
+                notification = {
+                    "id": nid,
+                    "type": "system",
                     "title": "Probe notification",
-                    "message": "Private feed probe",
-                    "severity": "info",
+                    "body": "Private feed probe",
+                    "data": {},
+                    "read_at": None,
+                    "created_at": None,
+                }
+                payload = {
+                    **notification,
+                    # Stamped last, exactly as `publish_notification` does: the
+                    # outer type is the transport, the inner one is the
+                    # notification's kind.
+                    "type": "notification",
+                    "notification": notification,
                 }
             await ps._redis.publish(channel, json.dumps(payload))
         else:

@@ -124,17 +124,17 @@ on the host against the published DB ports • not inside a container.
 # Migrations must be applied first (idempotent: skips rows that already exist)
 uv run alembic upgrade head
 
-# Seed (default test password: testpass123)
+# Seed. Generates a password per run and prints it once at the end.
 uv run python -m scripts.seed
 
-# Custom password for the seeded accounts
+# Or choose the password yourself (better before a demo)
 SEED_PASSWORD=otherpass uv run python -m scripts.seed
 ```
 
 | Account | Email | Password | Role |
 |---------|-------|----------|------|
-| `admin` | `admin@predictx.io` | `testpass123` (or `$SEED_PASSWORD`) | admin — approval, moderation, resolution |
-| `demo` | `demo@predictx.io` | `testpass123` (or `$SEED_PASSWORD`) | trader — wallet, portfolio, orders |
+| `admin` | `admin@predictx.io` | printed by the seeder, or `$SEED_PASSWORD` | admin — approval, moderation, resolution |
+| `demo` | `demo@predictx.io` | printed by the seeder, or `$SEED_PASSWORD` | trader — wallet, portfolio, orders |
 | `alice`, `bob`, … (18 background) | `alice@predictx.io`, … | same | not login accounts; they populate the feed and leaderboards |
 
 What it creates: 2 demo accounts + 18 background accounts with wallets and

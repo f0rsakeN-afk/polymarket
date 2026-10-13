@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test"
 import { execSync } from "node:child_process"
+import { shouldSkip } from "./skip-guards"
 
 /**
  * The one property the entire system exists for.
@@ -52,10 +53,13 @@ async function firstCardPrices(page: import("@playwright/test").Page) {
  * ignored - which is worse than an honest skip that says what is missing.
  */
 test.describe("markets grid is live", () => {
-  test.skip(!MARKET_ID, "E2E_MARKET_ID not set - needs a seeded market to move")
+  // `shouldSkip`, not an inline `!process.env.REDIS_PASSWORD` - see
+  // `e2e/skip-guards.ts`. The truthiness form reads an *empty* password as
+  // unset, and an empty string is exactly what a passwordless Redis supplies, so
+  // this describe block silently skipped in CI while reporting itself as covered.
   test.skip(
-    !process.env.REDIS_PASSWORD,
-    "REDIS_PASSWORD not set - the publisher needs the same Redis the app uses",
+    shouldSkip(process.env, MARKET_ID),
+    "needs E2E_MARKET_ID and REDIS_PASSWORD - a seeded market and the app's Redis",
   )
 
   test("a published price reaches the card without a reload", async ({ page }) => {

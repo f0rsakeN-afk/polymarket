@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test"
 import { execSync } from "node:child_process"
+import { shouldSkip } from "./skip-guards"
 
 /**
  * Every surface, asked whether it is actually live.
@@ -53,7 +54,7 @@ async function firstCardYes(page: Page): Promise<number | null> {
   })
 }
 
-const skip = !MARKET_ID || !process.env.REDIS_PASSWORD
+const skip = shouldSkip(process.env, MARKET_ID)
 
 test.describe("every public surface is live", () => {
   test.skip(skip, "needs E2E_MARKET_ID and REDIS_PASSWORD - a seeded market and the app's Redis")
