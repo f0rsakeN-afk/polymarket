@@ -27,7 +27,17 @@ import { resolve } from "node:path"
  * delivers.
  */
 
-const API = process.env.E2E_API ?? "http://localhost:8000/api/v1"
+const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3000"
+/**
+ * Readiness budget for a dev-server-backed run.
+ *
+ * Generous on purpose. Next compiles a route on first request, and `warmRoutes`
+ * pays that cost up front so this budget only has to cover ordinary latency -
+ * but if the server restarts mid-suite the first page load genuinely can take
+ * tens of seconds, and a tight timeout turns that into a red test that means
+ * nothing. A timeout here should indicate a real failure.
+ */
+const READY_TIMEOUT = 30_000
 const BACKEND = process.env.E2E_BACKEND_DIR ?? "../../../backend"
 /**
  * Credentials come from a gitignored file written by `harness/seed_user`.
@@ -40,7 +50,13 @@ const BACKEND = process.env.E2E_BACKEND_DIR ?? "../../../backend"
  * The seeder generates a fresh password on every run and writes it there, so the
  * value rotates rather than living in history forever.
  */
-type Credentials = { email: string; password: string; user_id: string }
+type Credentials = {
+  email: string
+  password: string
+  user_id: string
+  /** Minted by the harness against a real Session; see the `cookies` fixture. */
+  access_token: string
+}
 
 /**
  * Read *after* seeding, never at module load.
@@ -82,6 +98,63 @@ function seed(): string | null {
   }
 }
 
+/**
+ * Track the private socket using Playwright's own WebSocket events.
+ *
+ * An earlier version replaced `window.WebSocket` via `addInitScript`. That is
+ * the kind of instrumentation that breaks the thing it measures: Next's dev
+ * client uses a WebSocket for hot reload, and patching the global took it out.
+ * The symptom was a page that rendered its server-rendered shell perfectly, made
+ * no API calls at all, and passed or failed depending on whether the HMR socket
+ * happened to connect first - intermittent, unexplainable, and caused entirely
+ * by the probe.
+ *
+ * `page.on("websocket")` observes sockets without touching the page at all.
+ */
+function trackPrivateSocket(page: Page): { created: boolean } {
+  const state = { created: false }
+  page.on("websocket", (ws) => {
+    if (ws.url().includes("/ws/notifications/")) state.created = true
+  })
+  return state
+}
+
+/**
+ * Block until a GET matching `pattern` has completed.
+ *
+ * Deliberately a poll over a listener installed by the caller *before*
+ * navigation, not `page.waitForResponse`. A `waitForResponse` registered after
+ * `goto` has already missed it - the orders query fires during navigation and
+ * is frequently finished before the call that is meant to wait for it.
+ */
+function trackLoaded(page: Page, pattern: RegExp): () => boolean {
+  let seen = false
+  page.on("response", (r) => {
+    if (r.request().method() === "GET" && pattern.test(r.url())) seen = true
+  })
+  return () => seen
+}
+
+/**
+ * Block until the private socket has been opened.
+ *
+ * Playwright reports socket *creation*, not readiness - it has no `open` event -
+ * so a brief settle follows. This is not the blind sleep it replaces: the wait
+ * is anchored to an observable event, and 500ms is generous for a localhost
+ * handshake that has already had a request/response round-trip behind it.
+ *
+ * Waiting for a frame instead does not work, because the server sends nothing
+ * on an idle private feed - the socket stays silent until something is published,
+ * so the wait would time out against a perfectly healthy connection.
+ */
+async function waitForPrivateSocket(
+  socket: { created: boolean },
+  page: Page
+): Promise<void> {
+  await expect.poll(() => socket.created, { timeout: READY_TIMEOUT }).toBe(true)
+  await page.waitForTimeout(500)
+}
+
 /** Publish a private frame, exactly as the order service does. */
 function publishPrivate(kind: "fill" | "position" | "notification"): boolean {
   try {
@@ -99,42 +172,68 @@ function publishPrivate(kind: "fill" | "position" | "notification"): boolean {
 /**
  * Worker-scoped: authenticate once, not once per test.
  *
- * Login is rate limited, and the limit is not generous - three logins inside a
- * run is enough to earn a 429. Beyond being an annoyance that teaches people to
- * re-run tests, it hides real failures: a 429 reads exactly like "the page did
- * not react", so a test suite that re-authenticates per test quietly stops
- * measuring what it claims to.
+ * Auth uses the session token the seed harness mints, *not* `POST /auth/login`.
+ *
+ * Login is rate limited, and the limit bites exactly when you re-run a failing
+ * suite - which is when you most need it to work. That is the worst possible
+ * failure mode, because a 429 is indistinguishable from "the page did not
+ * react": the session never establishes, every auth-gated query stays disabled,
+ * and the page sits at a spinner forever. It reads as a broken feature and costs
+ * an hour chasing a bug that is not there. It was the dominant cause of
+ * intermittent failures in this file - failures that moved between tests from run
+ * to run, which is the signature of something environmental rather than
+ * something in the page.
+ *
+ * The harness already creates the Session + RefreshToken pair a login would and
+ * mints a bound access token, so there is no reason for a test to go through the
+ * public, abuse-protected endpoint to get one.
  */
 type Cookies = Array<{ name: string; value: string }>
+
+/** Pages these tests open, so the dev server can be asked to compile them up front. */
+const PRIVATE_ROUTES = ["/portfolio", "/orders", "/wallet"]
+
+/**
+ * Make the dev server compile each page before a test depends on it.
+ *
+ * Next's dev server compiles a route on first request, and that routinely takes
+ * longer than any sane per-test readiness timeout. The result is the worst kind
+ * of flake: the first test to touch a route times out, every later run of that
+ * test passes because the route is now warm, and nobody can reproduce the
+ * failure to fix it. It moved between portfolio, orders and wallet across runs
+ * purely by which one went first.
+ *
+ * Compiling has no side effects and needs no browser, so the cost is paid once
+ * here, outside any test's timing.
+ */
+async function warmRoutes(routes: string[]): Promise<void> {
+  await Promise.all(
+    routes.map(async (route) => {
+      try {
+        await fetch(`${BASE_URL}${route}`, { redirect: "manual" })
+      } catch {
+        /* warming is best-effort; a failure here is not the test's problem */
+      }
+    })
+  )
+}
 
 const test = base.extend<
   { signedIn: void },
   { cookies: Cookies }
 >({
   cookies: [
-    // Worker scope: one login shared by every test in this file.
     async ({}, use) => {
       seed()
-      // Read again post-seed: the password was just rotated.
+      // Read again post-seed: the token and password are both freshly minted.
       const creds = readCredentials()
-      const res = await fetch(`${API}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: creds.email, password: creds.password }),
-      })
-      if (!res.ok) {
+      if (!creds.access_token) {
         throw new Error(
-          `login failed: ${res.status}. The endpoint is rate limited - if this is ` +
-            `429, another run is still inside the window rather than anything wrong here.`,
+          "no access_token in the credentials file - re-run backend/harness/seed_user.py",
         )
       }
-      await use(
-        (res.headers.getSetCookie?.() ?? []).map((c) => {
-          const pair = c.split(";")[0] ?? ""
-          const i = pair.indexOf("=")
-          return { name: pair.slice(0, i), value: pair.slice(i + 1) }
-        }),
-      )
+      await warmRoutes(PRIVATE_ROUTES)
+      await use([{ name: "access_token", value: creds.access_token }])
     },
     { scope: "worker" },
   ],
@@ -146,19 +245,22 @@ const test = base.extend<
   },
 })
 
-const bodyOf = (page: Page) =>
-  page.evaluate(() => (document.body.innerText ?? "").replace(/\s+/g, " "))
-
 test.describe("private surfaces are live", () => {
   test.skip(skip, "needs E2E_USER_ID (harness/seed_user) and REDIS_PASSWORD")
 
   test("portfolio reacts to a position:update", async ({ page, signedIn }) => {
     void signedIn
+    const socket = trackPrivateSocket(page)
+    const portfolioLoaded = trackLoaded(page, /\/api\/v1\/positions/)
     await page.goto("/portfolio")
-    await page.waitForTimeout(2500)
     // Redirecting back to sign-in means the session did not take, and the test
     // would otherwise "pass" by asserting on a sign-in page.
     expect(page.url()).not.toContain("login")
+    // Wait for real readiness rather than sleeping: a frame published before the
+    // socket handshake is legitimately lost, which makes a correct page look
+    // broken and makes failures land on whichever test drew the short straw.
+    await expect.poll(portfolioLoaded, { timeout: READY_TIMEOUT }).toBe(true)
+    await waitForPrivateSocket(socket, page)
 
     // Assert the refetch, not a content change - and for the same reason
     // documented on the orders test below: a published frame is a hint, not a
@@ -222,11 +324,24 @@ test.describe("private surfaces are live", () => {
    * frame is a hint, not a database row, and every seeded order renders
    * identically. A working page and a broken one produce byte-identical DOM.
    */
-  test.skip("orders reacts to a fill - STILL BROKEN, second cause unknown", async ({ page, signedIn }) => {
+  test("orders reacts to a fill", async ({ page, signedIn }) => {
     void signedIn
+    const socket = trackPrivateSocket(page)
+    const ordersLoaded = trackLoaded(page, /\/api\/v1\/orders\//)
     await page.goto("/orders")
-    await page.waitForTimeout(2500)
     expect(page.url()).not.toContain("login")
+
+    // Wait for the page to have loaded its orders *and* connected the private
+    // socket, before publishing.
+    //
+    // This used to be a fixed 2500ms sleep, which is a coin flip: publish too
+    // early and the frame arrives before the socket is connected, so a correct
+    // page looks broken. Which test failed depended only on which one drew the
+    // short straw that run - it moved between orders and wallet rather than
+    // pointing at either. Waiting on the actual readiness signals is what the
+    // test means to express.
+    await expect.poll(ordersLoaded, { timeout: READY_TIMEOUT }).toBe(true)
+    await waitForPrivateSocket(socket, page)
 
     // Assert the *refetch*, not a content change.
     //
@@ -248,15 +363,29 @@ test.describe("private surfaces are live", () => {
       .toBe(true)
   })
 
-  /** SKIPPED - renders "Not authenticated" despite a valid session. See above. */
-  test.skip("wallet reflects a balance change pushed privately", async ({ page, signedIn }) => {
+  test("wallet re-reads the balance when a private frame moves money", async ({ page, signedIn }) => {
     void signedIn
+    const socket = trackPrivateSocket(page)
     await page.goto("/wallet")
-    await page.waitForTimeout(2500)
     expect(page.url()).not.toContain("login")
 
-    const before = await bodyOf(page)
+    // The wallet must actually be *loaded*, not merely reachable. The bug this
+    // replaced presented as "Not authenticated" on a perfectly valid session, so
+    // a test that only checked the path would have passed against a broken page.
+    await expect(page.getByText("Available", { exact: true })).toBeVisible({ timeout: READY_TIMEOUT })
+    await expect(page.getByText("Not authenticated")).toHaveCount(0)
+    await waitForPrivateSocket(socket, page)
+
+    // Assert the *refetch*, not a content change - same reasoning as the orders
+    // test above. The published frame is a hint, not a ledger row, so the balance
+    // is $0.00 before and after and a text comparison would be comparing a
+    // screenshot to itself.
+    let refetched = false
+    page.on("request", (r) => {
+      if (r.method() === "GET" && /\/api\/v1\/wallet\//.test(r.url())) refetched = true
+    })
+
     expect(publishPrivate("position")).toBe(true)
-    await expect.poll(() => bodyOf(page), { timeout: 10_000 }).not.toBe(before)
+    await expect.poll(() => refetched, { timeout: 10_000 }).toBe(true)
   })
 })

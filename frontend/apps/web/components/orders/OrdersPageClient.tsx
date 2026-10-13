@@ -203,8 +203,13 @@ export function OrdersPageClient() {
         msg?.type === "position:update" ||
         msg?.notification?.type === "order_filled"
       ) {
+        // `queryKeys.orders()` with no filters is `["orders"]` - the bare
+        // prefix, which is what "every orders query, whatever its filters"
+        // means. It used to be `["orders", undefined]`, which react-query's
+        // prefix match did not recognise, so the invalidation hit nothing and
+        // this page silently never refreshed. See the note on the helper.
         qc.invalidateQueries({ queryKey: queryKeys.orders() })
-        qc.invalidateQueries({ queryKey: ["positions"] })
+        qc.invalidateQueries({ queryKey: queryKeys.positions() })
       }
     },
     [qc]

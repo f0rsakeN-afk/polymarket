@@ -7,11 +7,33 @@ export const queryKeys = {
   twoFactorStatus: () => ["auth", "2fa", "status"] as const,
 
   // Markets
-  markets: (params?: Record<string, unknown>) => ["markets", params] as const,
+  /**
+ * Params are omitted from the key entirely when absent - never `undefined`.
+ *
+ * `["orders", undefined]` looks interchangeable with `["orders"]` and is not.
+ * react-query matches keys by prefix, segment for segment, and `undefined`
+ * does not equal `{ status: "all" }`. So a helper called with no params
+ * produces a key that cannot prefix-match any real query, and
+ * `invalidateQueries`/`removeQueries` against it silently matches nothing
+ * while appearing to have worked.
+ *
+ * That is not theoretical. It cost the orders page its entire private feed:
+ * a fill arrived, the handler matched it, and the invalidation targeted a key
+ * no query in the app could ever have - so the page never updated and nothing
+ * errored, because every individual step was correct. It also meant logout
+ * failed to clear the orders and notifications caches, leaving the previous
+ * user's data readable by the next user of a shared browser.
+ *
+ * The bare `["orders"]` is the correct spelling of "every orders query,
+ * whatever its filters", which is what these call sites always mean.
+ */
+  markets: (p?: Record<string, unknown>) =>
+    p ? (["markets", p] as const) : (["markets"] as const),
   market: (slug: string) => ["market", slug] as const,
   marketActivity: (slug: string) => ["market-activity", slug] as const,
   marketTrades: (slug: string) => ["market-trades", slug] as const,
-  globalTrades: (marketSlug?: string) => ["global-trades", marketSlug] as const,
+  globalTrades: (marketSlug?: string) =>
+    marketSlug ? (["global-trades", marketSlug] as const) : (["global-trades"] as const),
   // Non-infinite variants of the same feeds • MUST be distinct keys from the
   // infinite queries above: they cache a single page object, not {pages, pageParams}.
   // The "…", "simple" segment keeps them out of each other's exact-key lookups while
@@ -23,12 +45,15 @@ export const queryKeys = {
   comments: (slug: string) => ["comments", slug] as const,
   faqs: (slug: string) => ["faqs", slug] as const,
   relatedMarkets: (slug: string) => ["related-markets", slug] as const,
-  priceHistory: (slug: string, interval?: string) => ["price-history", slug, interval] as const,
+  priceHistory: (slug: string, interval?: string) =>
+    interval ? (["price-history", slug, interval] as const) : (["price-history", slug] as const),
   marketCategories: () => ["market-categories"] as const,
   orderBook: (slug: string) => ["orderbook", slug] as const,
 
   // Orders
-  orders: (filters?: Record<string, unknown>) => ["orders", filters] as const,
+  /** See `markets` - same prefix-matching trap, and it cost the orders feed. */
+  orders: (p?: Record<string, unknown>) =>
+    p ? (["orders", p] as const) : (["orders"] as const),
   order: (id: string) => ["order", id] as const,
   quote: (key: string) => ["quote", key] as const,
 
@@ -43,7 +68,8 @@ export const queryKeys = {
   trades: () => ["trades"] as const,
 
   // Notifications
-  notifications: (params?: Record<string, unknown>) => ["notifications", params] as const,
+  notifications: (params?: Record<string, unknown>) =>
+    params ? (["notifications", params] as const) : (["notifications"] as const),
   notificationPreferences: () => ["notification-preferences"] as const,
 
   // Alerts
@@ -69,5 +95,6 @@ export const queryKeys = {
 
   // Treasury
   treasury: () => ["treasury"] as const,
-  treasuryLogs: (params?: Record<string, unknown>) => ["treasury-logs", params] as const,
+  treasuryLogs: (params?: Record<string, unknown>) =>
+    params ? (["treasury-logs", params] as const) : (["treasury-logs"] as const),
 } as const
