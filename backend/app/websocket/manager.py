@@ -21,6 +21,7 @@ from collections import defaultdict, deque
 
 import redis.asyncio as redis
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from app.config import settings
 from app.middleware.metrics import (
@@ -1227,7 +1228,34 @@ class UserConnectionManager:
         # Track pending cleanup tasks so they can be awaited on shutdown
         self._pending_cleanups: set[asyncio.Task[None]] = set()
 
-    async def connect(self, websocket: WebSocket, user_id: str):
+    async def connect(self, websocket: WebSocket, user_id: str) -> bool:
+        """Accept and register the socket. Returns whether it is really live.
+
+        The return value is not decoration: it matches `ConnectionManager.connect`,
+        and the route needs it because **Starlette's `accept()` fails silently**.
+        It only sends when the socket is in CONNECTING state - if the handshake
+        has already gone out, it is a no-op that raises nothing. So a socket that
+        is not actually connected can be registered as though it were, with the
+        connection gauge incremented and a Redis subscription taken out for a
+        client that is already gone. Nothing logs, because nothing failed.
+
+        That is the shape of the crash this was hardened against: the backend
+        logged an unhandled `Expected ASGI message 'websocket.send' ...
+        but got 'websocket.accept'` from inside this call, meaning uvicorn had
+        already completed a handshake on that connection. Reproduced against
+        ~1200 connect/disconnect lifecycles without a repeat, so the trigger is
+        rare and not yet identified - but the silence here is not the reason it
+        was invisible. A connect that reports whether it worked is debuggable;
+        one that returns nothing and assumes success is not.
+        """
+        if websocket.client_state is not WebSocketState.CONNECTING:
+            # Already accepted or closed. Say so rather than pretending.
+            logger.warning(
+                f"User WS connect for user={user_id} skipped: socket is "
+                f"{websocket.client_state.value}, not CONNECTING"
+            )
+            return False
+
         await websocket.accept()
         async with self._user_locks[user_id]:
             self._user_socks[user_id].add(websocket)
@@ -1237,6 +1265,7 @@ class UserConnectionManager:
         # notification socket and the capacity gauge under-reports real load.
         WS_CONNECTIONS.inc()
         logger.info(f"User WS connected: user={user_id}")
+        return True
 
     def touch(self, websocket: WebSocket) -> None:
         self._ws_last_seen[websocket] = time.monotonic()

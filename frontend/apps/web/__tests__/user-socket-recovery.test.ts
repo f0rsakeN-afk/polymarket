@@ -18,7 +18,14 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { act, cleanup, renderHook } from "@testing-library/react"
-import { useUserSocket } from "@/hooks/use-user-socket"
+
+// Imported per test rather than at module scope: the hook keeps its connection
+// registry in module state on purpose (one socket per user, shared by every
+// subscriber), so a static import hands each test the *previous* test's
+// connection and no new socket is ever constructed. `vi.resetModules()` gives
+// each test its own registry - production API stays free of a test-only reset.
+type UseUserSocket = typeof import("@/hooks/use-user-socket")["useUserSocket"]
+let useUserSocket: UseUserSocket
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
@@ -52,14 +59,20 @@ class FakeWebSocket {
 let received: Array<Record<string, unknown>>
 const handler = (d: unknown) => { received.push(d as Record<string, unknown>) }
 
-const mount = () =>
-  renderHook(() => useUserSocket({ userId: "user-1", onMessage: handler, enabled: true }))
+const mount = async () => {
+  const mod = await import("@/hooks/use-user-socket")
+  useUserSocket = mod.useUserSocket
+  return renderHook(() =>
+    useUserSocket({ userId: "user-1", onMessage: handler, enabled: true })
+  )
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
   FakeWebSocket.instances = []
   received = []
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket)
+  vi.resetModules()
 })
 
 afterEach(() => {
@@ -72,8 +85,8 @@ const tick = () => act(() => { vi.advanceTimersByTime(30_000) })
 const resyncs = () => received.filter((m) => m.type === "__ws_resync__")
 
 describe("heartbeat", () => {
-  it("answers the server's ping", () => {
-    mount()
+  it("answers the server's ping", async () => {
+    await mount()
     const ws = FakeWebSocket.latest()
     act(() => ws.open())
 
@@ -87,8 +100,8 @@ describe("heartbeat", () => {
     expect(pongs[0].ts).toBe(7)
   })
 
-  it("does not hand the ping to the consumer as if it were data", () => {
-    mount()
+  it("does not hand the ping to the consumer as if it were data", async () => {
+    await mount()
     const ws = FakeWebSocket.latest()
     act(() => ws.open())
 
@@ -99,8 +112,8 @@ describe("heartbeat", () => {
 })
 
 describe("recovery from a silent death", () => {
-  it("redials when the network comes back", () => {
-    mount()
+  it("redials when the network comes back", async () => {
+    await mount()
     const first = FakeWebSocket.latest()
     act(() => first.open())
     act(() => first.vanish())  // no close event - the laptop slept
@@ -111,8 +124,8 @@ describe("recovery from a silent death", () => {
     expect(first.closed).toBe(true)
   })
 
-  it("redials when the tab becomes visible again", () => {
-    mount()
+  it("redials when the tab becomes visible again", async () => {
+    await mount()
     const first = FakeWebSocket.latest()
     act(() => first.open())
     act(() => first.vanish())
@@ -123,13 +136,13 @@ describe("recovery from a silent death", () => {
     expect(first.closed).toBe(true)
   })
 
-  it("replaces the socket on a tab switch, which is how the sleep case repairs", () => {
+  it("replaces the socket on a tab switch, which is how the sleep case repairs", async () => {
     // A socket killed by a suspended machine can still report OPEN - the
     // browser may not notice until it next writes - so `readyState` cannot
     // distinguish it from a healthy one. Tab focus is the only browser-side
     // evidence that time passed, so the socket is replaced rather than trusted:
     // one handshake, against a portfolio that silently missed fills.
-    mount()
+    await mount()
     const ws = FakeWebSocket.latest()
     act(() => ws.open())
 
@@ -141,8 +154,8 @@ describe("recovery from a silent death", () => {
 })
 
 describe("catch-up after a reconnect", () => {
-  it("announces a resync on reconnect, not on first connect", () => {
-    mount()
+  it("announces a resync on reconnect, not on first connect", async () => {
+    await mount()
     const first = FakeWebSocket.latest()
     act(() => first.open())
 
@@ -159,8 +172,8 @@ describe("catch-up after a reconnect", () => {
     expect(resyncs()[0]!.reason).toBe("reconnect")
   })
 
-  it("keeps retrying rather than parking", () => {
-    mount()
+  it("keeps retrying rather than parking", async () => {
+    await mount()
 
     for (let i = 0; i < 20; i++) {
       tick()

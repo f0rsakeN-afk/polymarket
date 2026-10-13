@@ -392,4 +392,44 @@ test.describe("private surfaces are live", () => {
     expect(publishPrivate("position")).toBe(true)
     await expect.poll(() => refetched, { timeout: 10_000 }).toBe(true)
   })
+
+  test("one event produces one notification", async ({ page, signedIn }) => {
+    void signedIn
+    // Counts private sockets opened by this page. The portfolio page and the
+    // notification bell both subscribe, so this is where per-subscriber sockets
+    // showed up first.
+    const sockets: string[] = []
+    page.on("websocket", (ws) => {
+      if (ws.url().includes("/ws/notifications/")) sockets.push(ws.url())
+    })
+
+    const socket = trackPrivateSocket(page)
+    await page.goto("/portfolio")
+    expect(page.url()).not.toContain("login")
+    // Readiness is the socket itself, not a heading: what matters here is that
+    // the page is listening, and waiting on page furniture would be a proxy for
+    // something this test does not actually care about.
+    await waitForPrivateSocket(socket, page)
+
+    // Exactly one, not one per consumer. The server broadcasts to every socket it
+    // holds for a user, so N sockets means every private frame arrives N times.
+    expect(sockets).toHaveLength(1)
+
+    await page.locator('[aria-label^="Notifications"]').first().click()
+    expect(publishPrivate("notification")).toBe(true)
+
+    // The bell prepends each frame it receives, so a duplicated frame is a
+    // duplicated row. This is the reported symptom, and the assertion is on the
+    // count rather than on the bell merely showing something.
+    await expect
+      .poll(
+        async () =>
+          ((await page.locator("body").innerText()).match(/Probe notification/g) ?? []).length,
+        { timeout: 10_000 }
+      )
+      .toBe(1)
+
+    // Still one socket after traffic has flowed: the count must not grow with use.
+    expect(sockets).toHaveLength(1)
+  })
 })
