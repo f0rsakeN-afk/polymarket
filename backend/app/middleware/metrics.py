@@ -51,6 +51,11 @@ WS_SUBSCRIPTIONS = Gauge(
     "ws_subscriptions",
     "Current market subscriptions held by this worker",
 )
+ADMIN_AUDIT_WRITE_FAILURES = Counter(
+    "admin_audit_write_failures_total",
+    "Privileged actions that completed but whose audit record could not be written",
+)
+
 # ── Operational debt ─────────────────────────────────────────────────────────
 #
 # Not realtime health: the state of work the system still owes. Kept separate
