@@ -1,10 +1,16 @@
 """Tests for wallet, liquidity, split/merge, and position endpoints."""
+import asyncio
+import uuid
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import token_for
+from conftest import TestSessionFactory, create_login_session, token_for
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from app.models.wallet import Wallet
+from app.services.wallet_service import WalletService
 
 # ── Wallet ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +30,121 @@ async def test_wallet_unauthenticated(client: AsyncClient):
     resp = await client.get("/api/v1/wallet/")
     assert resp.status_code == 401
     assert resp.json()["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_wallet_provisioned_when_missing(client: AsyncClient, db_session):
+    """A user with no wallet row gets one, not a 404.
+
+    Registration creates the wallet, so this state means the invariant broke
+    upstream - a user predating that code, or a signup that half-committed.
+
+    It used to 404, and that was wrong twice: the status was a lie (this is the
+    caller's *own* wallet, not a missing resource), and the client turned the
+    null result into "Not authenticated" - so a signed-in user was told to log in
+    again for a problem logging in could not fix.
+
+    The gap survived because every fixture in this suite creates a wallet up
+    front. This one deliberately does not, which is the only way to reach it.
+    """
+    import uuid
+
+    from sqlalchemy import select
+
+    from app.deps import hash_password
+    from app.models.user import User
+    from app.models.wallet import Wallet
+
+    uid = uuid.uuid4().hex[:8]
+    user = User(
+        email=f"nowallet_{uid}@example.com",
+        username=f"nowallet_{uid}",
+        password_hash=hash_password("NoWallet!Pass1"),
+        is_email_verified=True,
+        is_active=True,
+    )
+    db_session.add(user)
+    # flush first: the UUID is generated on insert, and the session row needs it.
+    await db_session.flush()
+    await create_login_session(db_session, user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    # Confirm the precondition: no wallet exists for this user.
+    existing = await db_session.execute(select(Wallet).where(Wallet.user_id == user.id))
+    assert existing.scalar_one_or_none() is None, "fixture precondition failed"
+
+    client.cookies.set("access_token", token_for(user.id))
+    resp = await client.get("/api/v1/wallet/")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is True
+    # A zero wallet, not an error - the user can now deposit.
+    assert Decimal(data["data"]["balance"]) == Decimal(0)
+    assert Decimal(data["data"]["available_balance"]) == Decimal(0)
+    assert data["data"]["currency"] == "USDC"
+
+    # And it is a real, persisted row, so the next read is an ordinary read.
+    now_exists = await db_session.execute(select(Wallet).where(Wallet.user_id == user.id))
+    assert now_exists.scalar_one_or_none() is not None
+
+    again = await client.get("/api/v1/wallet/")
+    assert again.status_code == 200
+    assert again.json()["data"] == data["data"]
+
+
+@pytest.mark.asyncio
+async def test_wallet_provisioning_survives_concurrent_first_reads(db_session):
+    """Two simultaneous first-reads must not surface as a 500.
+
+    `Wallet.user_id` is unique, so whichever request loses the race on insert gets
+    an IntegrityError. The loser wants the same wallet the winner just created, so
+    it re-reads rather than propagating - otherwise a wallet page load 500s
+    exactly when the system is least able to explain why.
+
+    Each caller gets its own session, because that is what production does - one
+    session per request. Sharing a single session between concurrent coroutines
+    would not exercise the race at all: the second commit would fail on session
+    state, not on the unique constraint, which is a different failure that proves
+    nothing about this code.
+    """
+    uid = uuid.uuid4().hex[:8]
+    user = await _user_without_wallet(db_session, uid)
+
+    async def provision():
+        async with TestSessionFactory() as session:
+            return await WalletService.get_or_create_wallet(session, user.id)
+
+    results = await asyncio.gather(provision(), provision(), return_exceptions=True)
+
+    errors = [r for r in results if isinstance(r, Exception)]
+    assert not errors, f"concurrent provisioning raised: {errors}"
+    assert len({r.id for r in results}) == 1, "concurrent calls produced different wallets"
+
+    # Exactly one wallet row, not two.
+    rows = await db_session.execute(select(Wallet).where(Wallet.user_id == user.id))
+    assert len(rows.scalars().all()) == 1
+
+
+async def _user_without_wallet(db_session, uid: str):
+    from app.deps import hash_password
+    from app.models.user import User
+
+    user = User(
+        email=f"concurrent_{uid}@example.com",
+        username=f"concurrent_{uid}",
+        password_hash=hash_password("Concurrent!Pass1"),
+        is_email_verified=True,
+        is_active=True,
+    )
+    db_session.add(user)
+    # flush first: the UUID is generated on insert, and the session row needs it.
+    await db_session.flush()
+    await create_login_session(db_session, user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
 
 
 @pytest.mark.asyncio

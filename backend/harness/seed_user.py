@@ -22,6 +22,8 @@ import json
 import os
 import secrets
 import sys
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -31,6 +33,7 @@ from app.deps import hash_password
 from app.models.market import Market, Outcome
 from app.models.order import Order
 from app.models.user import User
+from app.models.wallet import Wallet
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "e2e-private@example.com"
 USERNAME = "e2eprivate"
@@ -60,6 +63,85 @@ def _password() -> str:
     return secrets.token_urlsafe(24)
 
 
+async def _ensure_wallet(db, user_id) -> None:
+    """Provision the wallet registration would have created.
+
+    Idempotent, and applied on *both* paths. Seeding an existing user is the
+    common case - the harness rotates a password rather than recreating anything
+    - so doing this only at creation would have left every already-seeded user
+    still missing one, and the wallet endpoint still 404ing for them.
+
+    That is what happened: the E2E user was seeded before this was fixed, the
+    wallet endpoint 404ed, and that was misread as a session problem for the
+    better part of a day. The harness was testing a state no real user reaches,
+    and every unit fixture pre-creates a wallet, so nothing else caught it.
+    """
+    existing = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
+    if existing.scalar_one_or_none() is not None:
+        return
+    db.add(Wallet(user_id=user_id, balance=0, locked_balance=0, currency="USDC"))
+    await db.commit()
+    print("provisioned missing wallet")
+
+
+async def _mint_session(db, user) -> str:
+    """Create the Session + RefreshToken pair a login would, and mint a token.
+
+    Access tokens are bound to a session (`sid`), and `get_current_user` rejects
+    a token whose session is missing, revoked or expired. So a seeded user
+    without a session is permanently unauthorized - a state no real login
+    produces, and one the browser tests had no way around except calling the
+    rate-limited login endpoint themselves.
+    """
+
+    from app.deps import create_access_token
+    from app.models.user import RefreshToken, Session
+
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+    refresh_token = RefreshToken(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=secrets.token_urlsafe(32),
+        expires_at=expires_at,
+        revoked=False,
+        device_info="e2e-harness",
+    )
+    db.add(refresh_token)
+    await db.flush()
+
+    session = Session(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        refresh_token_id=refresh_token.id,
+        expires_at=expires_at,
+        revoked=False,
+        user_agent="e2e-harness",
+        ip_address="127.0.0.1",
+    )
+    db.add(session)
+    await db.flush()
+
+    token, _ = create_access_token(
+        str(user.id),
+        # Deliberately longer-lived than a normal access token (900s).
+        #
+        # The browser tests set this cookie and nothing else - no refresh cookie,
+        # because the harness minted the session directly rather than through
+        # `POST /auth/login`. So when a standard-lifetime token expires, there is
+        # nothing to refresh with and the session is simply dead: `/auth/me`
+        # returns 401, every auth-gated query disables itself, and the page sits
+        # at a spinner forever with no error anywhere.
+        #
+        # That produced a genuinely baffling failure signature - the suite passed
+        # immediately after a seed and degraded as the token aged, with failures
+        # landing on a different test each run. An hour comfortably covers a
+        # full suite run, including re-runs while debugging.
+        expires_delta=timedelta(hours=1),
+        session_id=str(session.id),
+    )
+    return token
+
+
 async def main() -> None:
     password = _password()
     maker = _get_async_session_maker()
@@ -69,8 +151,11 @@ async def main() -> None:
         if user:
             user.password_hash = hash_password(password)
             await db.commit()
+            await _ensure_wallet(db, user.id)
+            token = await _mint_session(db, user)
+            await db.commit()
             print(f"exists: {EMAIL} id={user.id} (password rotated)")
-            await _write_credentials(user.id, password)
+            await _write_credentials(user.id, password, token)
             await seed_activity(user.id)
             return
 
@@ -85,15 +170,36 @@ async def main() -> None:
         db.add(user)
         await db.commit()
         await db.refresh(user)
+        await _ensure_wallet(db, user.id)
+        token = await _mint_session(db, user)
+        await db.commit()
         print(f"created: {EMAIL} id={user.id}")
-        await _write_credentials(user.id, password)
+        await _write_credentials(user.id, password, token)
         await seed_activity(user.id)
 
 
-async def _write_credentials(user_id, password: str) -> None:
+async def _write_credentials(user_id, password: str, access_token: str) -> None:
     """Hand the generated credential to the browser tests, and nowhere else."""
     CREDENTIALS_PATH.write_text(
-        json.dumps({"email": EMAIL, "password": password, "user_id": str(user_id)}),
+        json.dumps(
+            {
+                "email": EMAIL,
+                "password": password,
+                "user_id": str(user_id),
+                # A ready-to-use access token, so the browser tests can
+                # authenticate without calling /auth/login at all.
+                #
+                # Login is rate limited, and the limit bites exactly when a
+                # developer re-runs a failing suite - which is when you most need
+                # it to work. Worse, a 429 is indistinguishable from "the page
+                # didn't react": the session never establishes, every
+                # auth-gated query stays disabled, and the page sits at a spinner
+                # forever. That reads as a broken feature and costs an hour of
+                # chasing a bug that isn't there. This was the dominant cause of
+                # intermittent private-feed test failures.
+                "access_token": access_token,
+            }
+        ),
         encoding="utf-8",
     )
     try:

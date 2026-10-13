@@ -20,6 +20,42 @@ logger = logging.getLogger("PredictX")
 class WalletService:
 
     @staticmethod
+    async def get_or_create_wallet(db: AsyncSession, user_id) -> Wallet:
+        """Return the user's wallet, provisioning one if it is missing.
+
+        Signup normally creates this row, so reaching the create branch means the
+        invariant broke somewhere upstream. Treating that as fatal strands the
+        user - they cannot deposit, cannot see a balance, and cannot tell whether
+        the problem is their account or the application. Repairing it costs one
+        row and makes the endpoint self-healing.
+
+        The `user_id` column is unique, so two concurrent first-reads can both
+        decide to create and one will lose on the unique constraint. That loser
+        re-reads rather than propagating an `IntegrityError`: the losing request
+        wants the same wallet the winner just created, so there is nothing to
+        report. Without the re-read this would be a 500 on a wallet page load -
+        exactly the kind of failure that surfaces as a support ticket instead of
+        being handled.
+        """
+        result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
+        wallet = result.scalar_one_or_none()
+        if wallet:
+            return wallet
+
+        wallet = Wallet(user_id=user_id, balance=0, locked_balance=0, currency="USDC")
+        db.add(wallet)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
+            wallet = result.scalar_one_or_none()
+            if wallet is None:
+                raise
+        await db.refresh(wallet)
+        return wallet
+
+    @staticmethod
     async def withdraw(
         db: AsyncSession,
         user: User,

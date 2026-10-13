@@ -14,6 +14,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Did the server actually say "you are not signed in"?
+ *
+ * Callers that need to choose between "not authenticated" and "that request
+ * failed" have to ask the error rather than assume, because a query's `data` is
+ * null for every one of those cases and `data === null` proves nothing. Guessing
+ * produces confident nonsense - the wallet page telling a signed-in user they
+ * were not signed in, purely because a request 500ed.
+ */
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403)
+}
+
 interface ApiErrorData {
   success: false
   error: string

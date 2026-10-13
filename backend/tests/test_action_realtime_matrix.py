@@ -379,14 +379,24 @@ async def test_the_resolution_frame_names_the_winner(client, test_user, test_mar
     between information and noise.
     """
     bus = _Bus()
+    # Authenticate as the admin. This used to post unauthenticated and then
+    # *skip* if the call was rejected - so the one test asserting the frame says
+    # who won was skipped in exactly the setup where it could not prove anything,
+    # and a green suite said nothing about resolution frames.
+    #
+    # `admin_user` was already a parameter of this test, unused. Resolution is
+    # an admin action; the skip was covering for a missing token, not for a
+    # missing feature.
+    client.cookies.set("access_token", token_for(admin_user.id))
     with patch("app.api.markets.redis_pubsub", bus, create=True):
         resp = await client.post(
             f"/api/v1/markets/{test_market.slug}/resolve",
             json={"winning_outcome_id": str(test_market.outcomes[0].id)},
             headers={},
         )
-    if resp.status_code not in (200, 201):
-        pytest.skip("resolution requires an admin token in this setup")
+    assert resp.status_code in (200, 201), (
+        f"admin resolution returned {resp.status_code}: {resp.text[:200]}"
+    )
 
     frames = [d for _, t, d in bus.market if t == "market:resolved"]
     assert frames, "no market:resolved frame"
