@@ -15,7 +15,7 @@ from app.api.exceptions import (
 from app.api.responses import PaginatedResponse, success_response
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.audit import AuthAuditEvent
+from app.models.audit import AdminAuditEvent, AuthAuditEvent
 from app.models.market import (
     STATUS_ACTIVE,
     STATUS_PENDING_REVIEW,
@@ -23,6 +23,8 @@ from app.models.market import (
     Market,
 )
 from app.models.user import RefreshToken, Session, User
+from app.services import admin_audit
+from app.services.admin_audit import AdminAuditService
 from app.services.audit_service import AuthAuditService
 from app.services.cache_service import (
     cache_invalidate_market,
@@ -150,6 +152,17 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host if request.client else None
     ua = request.headers.get("user-agent")
     await AuthAuditService.log_account_banned(db, str(user.id), str(admin.id), ip, ua)
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.USER_BANNED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="user",
+        target_id=str(user.id),
+        summary=f"Banned {user.email}",
+        payload={"email": user.email},
+    )
 
     logger.info(f"User {user.id} banned by admin {admin.id}")
     return success_response({"status": "banned", "user_id": str(user.id)}, message="User banned")
@@ -171,6 +184,17 @@ async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host if request.client else None
     ua = request.headers.get("user-agent")
     await AuthAuditService.log_account_unbanned(db, str(user.id), str(admin.id), ip, ua)
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.USER_UNBANNED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="user",
+        target_id=str(user.id),
+        summary=f"Unbanned {user.email}",
+        payload={"email": user.email},
+    )
 
     logger.info(f"User {user.id} unbanned by admin {admin.id}")
     return success_response({"status": "unbanned", "user_id": str(user.id)}, message="User unbanned")
@@ -232,11 +256,124 @@ async def list_audit_events(
     )
 
 
+@router.get("/admin-actions", summary="List privileged actions (admin)")
+async def list_admin_actions(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    actor_id: str | None = Query(None),
+    action: str | None = Query(None, max_length=64),
+    target_type: str | None = Query(None, max_length=32),
+    target_id: str | None = Query(None, max_length=64),
+    success: str | None = Query(None),
+):
+    """The privileged-action trail, filterable by who did it.
+
+    `actor_id` is the filter that was impossible before. The actor used to live
+    inside a JSON blob on an auth event, so "show me everything this admin did"
+    meant reading every row and parsing every blob - which is why an audit log
+    nobody can query is an audit log nobody reads.
+
+    Filtered results report the total that matched, not the page size, so an
+    export can page through without silently truncating.
+    """
+    await _get_admin_user(request, db)
+
+    filters = []
+    if actor_id:
+        try:
+            filters.append(AdminAuditEvent.actor_id == uuid.UUID(actor_id))
+        except ValueError:
+            raise ValidationError(f"Invalid actor_id format: {actor_id}")
+    if action:
+        filters.append(AdminAuditEvent.action == action)
+    if target_type:
+        filters.append(AdminAuditEvent.target_type == target_type)
+    if target_id:
+        filters.append(AdminAuditEvent.target_id == target_id)
+    if success in ("success", "failure"):
+        filters.append(AdminAuditEvent.success == success)
+
+    total = (
+        await db.execute(select(func.count()).select_from(AdminAuditEvent).where(*filters))
+    ).scalar() or 0
+
+    result = await db.execute(
+        select(AdminAuditEvent)
+        .where(*filters)
+        .order_by(AdminAuditEvent.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = result.scalars().all()
+
+    return PaginatedResponse(
+        data=[
+            {
+                "id": str(e.id),
+                "actor_id": str(e.actor_id) if e.actor_id else None,
+                "actor_email": e.actor_email,
+                "action": e.action,
+                "target_type": e.target_type,
+                "target_id": e.target_id,
+                "summary": e.summary,
+                "payload": e.payload,
+                "ip_address": e.ip_address,
+                "success": e.success,
+                "failure_reason": e.failure_reason,
+                "created_at": e.created_at,
+            }
+            for e in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < total,
+    )
+
+
 @router.post("/distribute-protocol-fees", summary="Distribute accumulated protocol fees to treasury (admin)")
 async def distribute_protocol_fees(request: Request, db: AsyncSession = Depends(get_db)):
-    """Withdraw protocol fees from all markets to the treasury wallet."""
-    await _get_admin_user(request, db)
-    result = await LiquidityService.distribute_protocol_fees(db)
+    """Withdraw protocol fees from all markets to the treasury wallet.
+
+    The one endpoint that moves real money, and until now the one with no record
+    of who invoked it - so a disputed treasury balance had nothing to point at.
+
+    Failures are recorded as well as successes. An admin whose attempt is
+    rejected is exactly the kind of event worth having in the trail, and a log
+    holding only what went through is a log of what happened to be permitted.
+    """
+    admin = await _get_admin_user(request, db)
+    try:
+        result = await LiquidityService.distribute_protocol_fees(db)
+    except Exception as exc:
+        await AdminAuditService.log_action(
+            db,
+            action=admin_audit.PROTOCOL_FEES_DISTRIBUTED,
+            actor_id=str(admin.id),
+            actor_email=admin.email,
+            request=request,
+            target_type="treasury",
+            summary="Protocol fee distribution FAILED",
+            success=False,
+            failure_reason=f"{type(exc).__name__}: {exc}"[:255],
+        )
+        raise
+
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.PROTOCOL_FEES_DISTRIBUTED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="treasury",
+        summary="Distributed protocol fees to treasury",
+        payload={
+            "total_distributed": result.get("total_distributed"),
+            "markets_processed": result.get("markets_processed"),
+        },
+    )
     return success_response(result, message="Protocol fees distributed to treasury")
 
 
@@ -344,7 +481,7 @@ async def list_markets_admin(
 @router.post("/markets/{market_id}/approve", summary="Approve a submitted market (admin)")
 async def approve_market(market_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Publish a user-submitted market: status → active, visible and tradable."""
-    await _get_admin_user(request, db)
+    admin = await _get_admin_user(request, db)
     market = await _pending_market(db, market_id)
 
     # An already-expired submission would go straight into the catalogue dead •
@@ -356,6 +493,19 @@ async def approve_market(market_id: str, request: Request, db: AsyncSession = De
         )
 
     await _set_market_status(db, market, STATUS_ACTIVE)
+    # Approval decides what becomes tradeable. Previously it wrote nothing at all,
+    # so the set of live markets could not be attributed to anyone.
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.MARKET_APPROVED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="market",
+        target_id=str(market.id),
+        summary=f"Approved market {market.slug}",
+        payload={"slug": market.slug, "question": market.question},
+    )
     logger.info(f"Market approved: {market.slug} ({market.id})")
     return success_response(
         {"id": str(market.id), "slug": market.slug, "status": market.status},
@@ -369,10 +519,21 @@ async def reject_market(market_id: str, request: Request, db: AsyncSession = Dep
 
     The author keeps read access to their own submission (see GET /markets/{slug}).
     """
-    await _get_admin_user(request, db)
+    admin = await _get_admin_user(request, db)
     market = await _pending_market(db, market_id)
 
     await _set_market_status(db, market, STATUS_REJECTED)
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.MARKET_REJECTED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="market",
+        target_id=str(market.id),
+        summary=f"Rejected market {market.slug}",
+        payload={"slug": market.slug, "question": market.question},
+    )
     logger.info(f"Market rejected: {market.slug} ({market.id})")
     return success_response(
         {"id": str(market.id), "slug": market.slug, "status": market.status},
