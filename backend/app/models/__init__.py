@@ -1,5 +1,5 @@
 from app.models.alert import Alert
-from app.models.audit import AuthAuditEvent
+from app.models.audit import AdminAuditEvent, AuthAuditEvent
 from app.models.base import Base
 from app.models.comment import Comment
 from app.models.dispute import Dispute
@@ -19,6 +19,7 @@ from app.models.wallet import Transaction, Wallet
 
 __all__ = [
     "Alert",
+    "AdminAuditEvent",
     "AuthAuditEvent",
     "Base",
     "Comment",
