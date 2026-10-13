@@ -242,8 +242,18 @@ const test = base.extend<
     { scope: "worker" },
   ],
   signedIn: async ({ cookies, context }, use) => {
+    // Cookie domain is derived from the base URL, not hardcoded to `localhost`.
+    //
+    // A cookie scoped to `localhost` is simply not sent to `127.0.0.1` - the two
+    // are different hosts as far as the browser is concerned, even on the same
+    // machine. So the session silently did not exist: every auth-gated query
+    // stayed disabled, every page sat at a spinner, and every private-feed test
+    // failed while the 14 public tests passed. It read exactly like a broken
+    // realtime feed, which is why CI is the first place it showed up - locally
+    // both the dev server and the suite use `localhost` and agree.
+    const domain = new URL(BASE_URL).hostname
     await context.addCookies(
-      cookies.map((c) => ({ ...c, domain: "localhost", path: "/" })),
+      cookies.map((c) => ({ ...c, domain, path: "/" })),
     )
     await use()
   },
