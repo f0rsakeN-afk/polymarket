@@ -1,0 +1,142 @@
+# Alerting rules for the realtime path.
+#
+# Every rule here corresponds to something that has actually gone wrong in this
+# codebase, or could, silently:
+#
+#   * Frames dropped for queue overflow - the cascade the publish queue exists to
+#     prevent, and which no user would ever report, because the symptom is "the
+#     site felt slow for a minute" rather than an error.
+#   * Frames owed a resync - a client was told nothing it needed to know. This is
+#     the one that can cost a user money: a fill notification that never arrived
+#     is a position they do not know they hold.
+#   * A queue that is not draining - the leading indicator of the above, and the
+#     only chance to act before anything is actually lost.
+#
+# Thresholds are deliberately conservative. A realtime feed that pages an on-call
+# engineer is a feed that gets muted, and a muted alert is worth less than no
+# alert at all. These fire on conditions that mean something is actually wrong,
+# not on conditions that are merely busy.
+
+groups:
+  # ── Publish path ────────────────────────────────────────────────────────────
+  - name: realtime-publish
+    interval: 30s
+    rules:
+      - alert: RealtimePublishFailures
+        # The circuit breaker is open, or Redis is refusing writes outright. Every
+        # publish that fails is a frame nobody receives.
+        expr: increase(ws_publish_failures_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis publish failures ({{ $value }} in 5m)"
+          description: >-
+            Realtime frames are failing to reach Redis. State still converges via
+            REST on reconnect, but every affected client is now seeing a stale
+            feed and refetching to correct it - which adds load exactly when the
+            system is already struggling. Check Redis health and the circuit
+            breaker before it cascades.
+
+      - alert: RealtimeQueueSaturated
+        # The leading indicator. Depth is only meaningful relative to the bound,
+        # so the ratio is what alerts - a fixed number would be wrong the moment
+        # someone tuned the queue.
+        expr: |
+          max by (delivery) (
+            ws_publish_queue_depth{delivery="critical"}
+          ) > 0
+          and
+          max by (delivery) (
+            ws_publish_queue_depth{delivery="critical"}
+          )
+          /
+          10000 > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Critical publish queue over 50% full"
+          description: >-
+            The queue for frames that must not be lost is filling. If it
+            reaches capacity, fills and orderbook updates will be dropped and
+            clients owed a resync. Raise publish_writers, or find whatever is
+            blocking Redis. This fires *before* anything is lost, on purpose.
+
+      - alert: RealtimeCriticalFramesDropped
+        # The one that matters. Every one of these is a fill or a position change
+        # a client was not told about.
+        expr: increase(ws_publish_dropped_total{delivery="critical"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical realtime frames dropped ({{ $value }} in 10m)"
+          description: >-
+            Fills, orderbook or position updates were discarded because the
+            publish queue was full. Affected clients are queued a resync marker,
+            so this degrades rather than loses data - but it is a hard signal the
+            realtime path cannot keep up with current load, and it will get worse.
+
+      - alert: RealtimeClientsOwedResync
+        # Distinct from the drop count: this is whether reconciliation is
+        # actually catching up, rather than a burst that recovered.
+        expr: increase(ws_publish_spill_owed_total[1h]) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many clients owed a private-feed resync ({{ $value }} in 1h)"
+          description: >-
+            Sustained drops are forcing reconciliation traffic on the API. Users
+            see it as the portfolio flickering. If this is not returning to zero,
+            the realtime path is persistently under-provisioned rather than
+            spiking.
+
+      - alert: RealtimePublishStalled
+        # Nothing queued at all while sockets are connected means the writers are
+        # dead - not "quiet". A queue nobody is draining still accepts frames.
+        expr: |
+          rate(ws_publish_queued_total[10m]) == 0
+          and
+          ws_connections > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Publish queue idle while sockets are connected"
+          description: >-
+            Frames are being offered and none are being written. The writer pool
+            is not running - most likely bound to a previous event loop, or
+            cancelled during a reconnect. This looks identical to a quiet market
+            from the client side, which is exactly why it needs an alert.
+
+  # ── Gateway ─────────────────────────────────────────────────────────────────
+  - name: realtime-gateway
+    interval: 30s
+    rules:
+      - alert: RealtimeSocketFanoutDropped
+        # Sockets are being reaped for failed writes. Either clients are on bad
+        # connections, or the fan-out cannot keep up.
+        expr: increase(ws_sends_total{status="failed"}[10m]) / clamp_min(increase(ws_sends_total[10m]), 1) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of socket sends failing"
+          description: >-
+            Clients are being disconnected for failed writes. Check client
+            bandwidth and whether send timeouts are too tight for the current
+            fan-out size.
+
+      - alert: RealtimeConnectionSaturation
+        expr: ws_connections > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway at {{ $value }} connections"
+          description: >-
+            Approaching the point where fan-out cost per publish becomes the
+            bottleneck. Scale out before this becomes a latency problem - the
+            queue absorbs rate but not a full event loop.
