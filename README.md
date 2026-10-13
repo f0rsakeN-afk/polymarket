@@ -67,11 +67,15 @@ up rather than duplicating.
 
 | Email | Password | Role | Use it to show |
 |---|---|---|---|
-| `admin@predictx.io` | `testpass123` | admin | market approval, moderation, disputes, resolution |
-| `demo@predictx.io` | `testpass123` | trader | wallet, portfolio, positions, order placement |
+| `admin@predictx.io` | printed at the end of the seed run | admin | market approval, moderation, disputes, resolution |
+| `demo@predictx.io` | printed at the end of the seed run | trader | wallet, portfolio, positions, order placement |
 
-Override the password with `SEED_PASSWORD=... python scripts/seed.py` before
-seeding. Both accounts have `is_email_verified=True`, so there is no confirmation
+The seeder generates a strong password per run and prints it once at the end.
+Set `SEED_PASSWORD=... python scripts/seed.py` beforehand if you want a known
+value instead - worth doing before a demo so you are not reading a password off
+a scrollback buffer on screen.
+
+Both accounts have `is_email_verified=True`, so there is no confirmation
 step in the way.
 
 The seed also creates 18 background accounts (`alice@predictx.io` and so on, same

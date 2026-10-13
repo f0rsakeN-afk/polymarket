@@ -2,6 +2,7 @@ import { test as base, expect, type Page } from "@playwright/test"
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { shouldSkip } from "./skip-guards"
 
 /**
  * The private feed, asked whether it is live.
@@ -82,7 +83,10 @@ const PYTHON: string =
   process.env.E2E_PYTHON ?? `${process.cwd()}/${BACKEND}/.venv/bin/python`
 
 const USER_ID = process.env.E2E_USER_ID
-const skip = !USER_ID || !process.env.REDIS_PASSWORD
+// See `e2e/skip-guards.ts`: the inline version of this guard read an empty
+// REDIS_PASSWORD as "not configured", so CI - which runs a passwordless Redis -
+// would have skipped this whole file and reported a green run measuring nothing.
+const skip = shouldSkip(process.env, USER_ID)
 
 /** Write the user directly, using the app's model and its own password hashing. */
 function seed(): string | null {

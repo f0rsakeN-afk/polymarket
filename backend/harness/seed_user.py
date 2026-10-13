@@ -207,6 +207,12 @@ async def _write_credentials(user_id, password: str, access_token: str) -> None:
     except OSError:
         pass
     print(f"credentials -> {CREDENTIALS_PATH}")
+    # Machine-readable, so CI can capture the id instead of re-reading the JSON
+    # with a relative path that is correct in exactly one working directory.
+    # Getting that path wrong in a workflow produces an empty variable, which the
+    # suite then reads as "not configured" and skips - a green run that measured
+    # nothing, which is the failure mode this line exists to prevent.
+    print(f"USER_ID={user_id}")
 
 
 async def seed_activity(user_id) -> None:
