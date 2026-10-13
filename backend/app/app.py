@@ -25,6 +25,8 @@ from app.api.handlers import (
     integrity_error_handler,
     validation_exception_handler,
 )
+from app.api.health import mark_started
+from app.api.health import router as health_router
 from app.api.liquidity import router as liquidity_router
 from app.api.market_activity import router as market_activity_router
 from app.api.markets import router as markets_router
@@ -46,6 +48,7 @@ from app.config import settings
 from app.database import _get_engine, _get_replica_engine
 from app.middleware.metrics import MetricsMiddleware, clean_multiproc_dir
 from app.middleware.request_id import RequestIDMiddleware
+from app.services.ops_signals import ops_loop
 from app.websocket.manager import manager, redis_pubsub
 from app.websocket.routes import router as ws_router
 
@@ -217,12 +220,32 @@ async def lifespan(app: FastAPI):
     grid_task = asyncio.create_task(manager.grid_loop())
     logger.info("WebSocket grid flush started (250ms)")
 
+    # Operational debt, refreshed on a timer: live worker count and how many
+    # markets are past close and unresolved.
+    #
+    # This is the signal that would have caught a dead worker pool. Markets close
+    # and settle in Celery, so a pool that stops leaves markets open indefinitely
+    # - no winner announced, positions live, escrow locked - while every socket
+    # stays connected and every page reports live. Counted and aged rather than
+    # merely reported, because "a backlog exists" and "the backlog is six hours
+    # old" call for different reactions.
+    #
+    # Started here rather than only in a worker because the *read* belongs with
+    # the process that serves /metrics: a gauge nobody scrapes is storage.
+    ops_task = asyncio.create_task(ops_loop())
+    logger.info("Operational debt refresh started (30s)")
+
+    # Everything is up. `/health/startup` reports success from here, so an
+    # orchestrator does not restart a container that is merely booting slowly.
+    mark_started()
+
     yield
 
     logger.info("Shutting down...")
     heartbeat_task.cancel()
     grid_task.cancel()
-    for task in (heartbeat_task, grid_task):
+    ops_task.cancel()
+    for task in (heartbeat_task, grid_task, ops_task):
         try:
             await task
         except (asyncio.CancelledError, Exception):
@@ -298,67 +321,17 @@ app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(treasury_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(ws_router)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# Health has no prefix: `/health/ready` is already referenced by the compose
+# healthchecks and the nginx config, and those paths must not move.
+app.include_router(health_router)
 
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
     """Prometheus scrape endpoint (aggregate across workers in multiprocess mode)."""
     from app.middleware.metrics import metrics_response
+
     return metrics_response()
-
-
-@app.get("/health/ready")
-async def health_ready():
-    """Readiness probe • verifies DB and Redis connectivity."""
-    import time
-
-    checks = {}
-    unhealthy = False
-
-    # Check DB
-    try:
-        from sqlalchemy import text
-        t0 = time.perf_counter()
-        async with _get_engine().begin() as conn:
-            await conn.execute(text("SELECT 1"))
-        latency_ms = (time.perf_counter() - t0) * 1000
-        checks["db"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
-    except Exception as e:
-        checks["db"] = {"status": "error", "latency_ms": None}
-        if settings.app_env != "production":
-            checks["db"]["error"] = str(e)  # show in dev/staging for debugging
-        unhealthy = True
-
-    # Check Redis
-    try:
-        from app.redis import get_redis, redis_cb
-        t0 = time.perf_counter()
-        r = await get_redis()
-        await redis_cb.call(lambda: r.ping())
-        latency_ms = (time.perf_counter() - t0) * 1000
-        checks["redis"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
-    except Exception as e:
-        checks["redis"] = {"status": "error", "latency_ms": None}
-        if settings.app_env != "production":
-            checks["redis"]["error"] = str(e)  # show in dev/staging for debugging
-        unhealthy = True
-
-    from fastapi.responses import JSONResponse
-
-    status_code = 200 if not unhealthy else 503
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "status": "ok" if not unhealthy else "degraded",
-            "checks": checks,
-            "version": app.version,
-        },
-    )
 
 
 @app.get("/")

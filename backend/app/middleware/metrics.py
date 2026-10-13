@@ -51,6 +51,25 @@ WS_SUBSCRIPTIONS = Gauge(
     "ws_subscriptions",
     "Current market subscriptions held by this worker",
 )
+# ── Operational debt ─────────────────────────────────────────────────────────
+#
+# Not realtime health: the state of work the system still owes. Kept separate
+# because these describe consequences, and a consequence is what an operator can
+# act on - "14 markets past close and unsettled, oldest six hours" rather than
+# "a worker may be down".
+CELERY_WORKERS_ALIVE = Gauge(
+    "celery_workers_alive",
+    "Celery workers that have checked in recently",
+)
+MARKETS_UNRESOLVED = Gauge(
+    "markets_unresolved",
+    "Markets past their close time that are not yet resolved",
+)
+MARKETS_UNRESOLVED_OLDEST_AGE = Gauge(
+    "markets_unresolved_oldest_age_seconds",
+    "Age in seconds of the oldest past-close unresolved market, or 0 when none",
+)
+
 WS_CONNECTS_TOTAL = Counter(
     "ws_connects_total",
     "WebSocket connection attempts by outcome",

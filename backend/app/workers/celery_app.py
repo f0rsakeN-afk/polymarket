@@ -2,6 +2,7 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.config import settings
+from app.workers.heartbeat import register_signals
 
 celery_app = Celery(
     "PredictX",
@@ -81,3 +82,10 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=4, minute=0),
     },
 }
+
+
+# Workers announce themselves on start and keep a heartbeat running for as long
+# as they are alive. Wired here rather than inside tasks on purpose: a heartbeat
+# that only fires between tasks would mark a worker dead exactly when it is busy,
+# which is when its silence matters most.
+register_signals()

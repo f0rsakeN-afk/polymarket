@@ -244,7 +244,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         #
         # Preflights are also the cheapest requests the API serves, so spending
         # abuse budget on them protects nothing and costs correctness.
-        if method in ("GET", "OPTIONS") or path in ("/health", "/health/ready", "/", "/docs", "/openapi.json", "/redoc"):
+        # Prefixed, not an exact-match list. The health surface has grown a
+        # `/health/live`, `/health/startup` and `/health/details`, and an exact
+        # list meant every new probe path silently fell *into* rate limiting -
+        # so an orchestrator polling liveness would eventually get 429 and restart
+        # a perfectly healthy container. The failure is invisible until it happens
+        # and looks exactly like an application problem.
+        #
+        # `/health*` is exempt as a prefix: probes are infrastructure talking to
+        # the process, not a user, and are exactly the traffic that must never be
+        # throttled - least of all during the incident the limiter is reacting to.
+        if method in ("GET", "OPTIONS") or path.startswith("/health") or path in (
+            "/", "/docs", "/openapi.json", "/redoc"
+        ):
             return await call_next(request)
 
         ip = _get_client_ip(request)
