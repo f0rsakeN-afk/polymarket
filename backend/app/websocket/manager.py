@@ -243,6 +243,31 @@ _market_locks = MarketLockTable()
 
 # ── Connection Manager ────────────────────────────────────────────────────────
 
+# Running more than one API process is supported, and the part that actually
+# needed proving was refcounted subscription release.
+#
+# Grid subscriptions are reference-counted so closing the last socket for a
+# market releases the Redis channel. With one process that is obviously right.
+# With two, it is only right if each process counts *its own* sockets and
+# releases *its own* subscription - and the failure if it does not is the worst
+# shape available: process A closes its last socket, releases the channel, and
+# process B's socket stays connected, still reports `connected`, still renders
+# live, and receives nothing. No error, no reconnect, no alert. The page just
+# stops updating.
+#
+# Measured rather than assumed. `harness/scale_out.py` runs two API processes
+# against one Redis and asserts exactly that:
+#
+#   * a frame published once reaches sockets on both processes;
+#   * closing process A's sockets does not stop process B's socket receiving -
+#     market frames and private frames both;
+#   * one user's private frames do not reach another user's socket on either
+#     process, since sharing state must not become sharing identity;
+#   * a 300-frame burst on A does not wedge B's publish queue.
+#
+# All pass. The per-process refcounting is correct, and Redis genuinely is the
+# only thing the two processes share.
+
 
 class ConnectionManager:
     """
