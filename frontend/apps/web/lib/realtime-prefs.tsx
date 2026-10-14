@@ -83,6 +83,28 @@ export interface RealtimePrefs {
   showLiveBadge: boolean
   /** Show the quiet border tint on a card that just moved. */
   showActiveTint: boolean
+  /**
+   * Speak significant price moves aloud.
+   *
+   * Default **off**, deliberately. Speaking is more intrusive than a flash: it
+   * cannot be looked past, it queues behind whatever is already being read, and
+   * a screen reader interrupts rather than waits. Someone scanning a grid of
+   * thirty markets does not want thirty markets read at them.
+   *
+   * Separate from `motion` on purpose rather than derived from it. They are
+   * correlated but not identical - "I want to see the flash" does not imply "I
+   * want to be interrupted" - and conflating them would mean a user could not
+   * silence speech while keeping the visual feedback that makes realtime legible.
+   */
+  announcePrices: boolean
+  /**
+   * Shortest gap between spoken announcements, in ms.
+   *
+   * This is the throttle that makes the feature usable: a busy market produces
+   * frames many times a second, and speech cannot keep up with that. Changes are
+   * coalesced into one announcement per market per window.
+   */
+  announceIntervalMs: number
 }
 
 export const DEFAULT_PREFS: RealtimePrefs = {
@@ -95,6 +117,10 @@ export const DEFAULT_PREFS: RealtimePrefs = {
   relative: 0.02,
   showLiveBadge: true,
   showActiveTint: true,
+  announcePrices: false,
+  // Speech is measured in words per second; two seconds is long enough that a
+  // sequence of moves reads as a sentence rather than a stutter.
+  announceIntervalMs: 2_000,
 }
 
 const STORAGE_KEY = "predictx:realtime-prefs"
