@@ -82,7 +82,15 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     if not hashed:
         return False
-    return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+    try:
+        return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+    except (ValueError, TypeError):
+        # A malformed hash must read as "this does not verify", never as a crash.
+        # bcrypt raises on an unparseable salt, so any row whose password_hash
+        # is not a valid bcrypt string would otherwise turn a login attempt into
+        # a 500 - which is both wrong and, by being distinguishable from a
+        # normal rejection, a small oracle about how that row is stored.
+        return False
 
 
 _DUMMY_PASSWORD_HASH: str | None = None
