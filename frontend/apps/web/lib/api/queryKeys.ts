@@ -6,6 +6,9 @@ export const queryKeys = {
   sessions: () => ["auth", "sessions"] as const,
   twoFactorStatus: () => ["auth", "2fa", "status"] as const,
 
+  // Account
+  deletionImpact: () => ["account", "deletion-impact"] as const,
+
   // Markets
   /**
  * Params are omitted from the key entirely when absent - never `undefined`.

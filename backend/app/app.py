@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 from sqlalchemy.exc import DataError, IntegrityError
 
+from app.api.account import router as account_router
 from app.api.admin import router as admin_router
 from app.api.alerts import router as alerts_router
 from app.api.auth import router as auth_router
@@ -320,6 +321,7 @@ app.include_router(flags_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(treasury_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(account_router, prefix="/api/v1")
 app.include_router(ws_router)
 # Health has no prefix: `/health/ready` is already referenced by the compose
 # healthchecks and the nginx config, and those paths must not move.

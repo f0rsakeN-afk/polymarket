@@ -22,6 +22,25 @@ class User(Base, UUIDMixin, TimestampMixin):
     is_2fa_enabled = Column(Boolean, default=False, nullable=False)
     is_2fa_pending = Column(Boolean, default=False, nullable=False)  # setup in progress, not confirmed
 
+    # ── Erasure ──────────────────────────────────────────────────────────────
+    # A deleted account is a tombstone, not a removed row.
+    #
+    # Almost every table referencing a user cascades on delete, including trades,
+    # positions, orders and the transaction ledger. Deleting the row would take
+    # the user's trades off the public tape, erase the record of positions they
+    # had already settled, and destroy the financial history that the admin
+    # audit trail exists to reference. It would also cascade away referral rows
+    # that are about *other* people's accounts.
+    #
+    # So erasure wipes the identity and keeps the ledger: the row survives with
+    # every personal attribute replaced, `is_deleted` set, and the trading and
+    # financial records left intact but no longer attached to a person.
+    #
+    # Indexed because "is this address still an account" is now a real question
+    # the login and email paths ask.
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
     comments = relationship("Comment", back_populates="user")
     referrals_made = relationship("Referral", foreign_keys="Referral.referrer_id", back_populates="referrer")
     referrals_received = relationship("Referral", foreign_keys="Referral.referred_id", back_populates="referred")
