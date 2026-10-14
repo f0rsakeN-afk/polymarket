@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 import { Card, CardContent } from "@workspace/ui/components/card"
-import { ShieldCheck, Users, Bell, KeyRound } from "lucide-react"
+import { ShieldCheck, Users, Bell, KeyRound, Database } from "lucide-react"
 
 const sections = [
   {
@@ -28,6 +28,12 @@ const sections = [
     icon: ShieldCheck,
     title: "Security",
     description: "Manage 2FA, password, and account security settings.",
+  },
+  {
+    href: "/settings/account",
+    icon: Database,
+    title: "Your data",
+    description: "Download everything we hold about you, or delete your account.",
   },
 ]
 
