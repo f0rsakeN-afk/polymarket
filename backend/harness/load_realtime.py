@@ -39,8 +39,12 @@ import statistics
 import time
 from dataclasses import dataclass
 
-from app.websocket.manager import RedisPubSub, market_events_channel
+from starlette.websockets import WebSocketState
+
+from app.websocket.channels import market_events_channel
+from app.websocket.manager import RedisPubSub
 from app.websocket.manager import manager as global_manager
+from app.websocket.publish_queue import CRITICAL_FRAMES
 
 
 class LoadSocket:
@@ -434,13 +438,32 @@ async def phase_seq_atomicity(pubsub: RedisPubSub, markets: list[str]) -> None:
 
 
 class _NullSock:
-    """Collects per-market frames; `connect` only needs `accept` + `send_json`."""
+    """Collects per-market frames; `connect` only needs `accept` + `send_json`.
+
+    ## Models `client_state`, and it has to
+
+    `ConnectionManager.connect` reads `websocket.client_state` and refuses
+    anything that is not `CONNECTING`. A double without that attribute raises
+    `AttributeError` inside the manager, which killed phases 5 and 7 outright -
+    silently, because nothing runs this harness in CI and a phase that crashes
+    looks the same as a phase nobody needed.
+
+    So the double now carries the same state machine the real socket has, rather
+    than the minimum the code happened to touch last time it was written. The
+    lesson is the general one: a test double that models only what the code
+    touched *today* breaks the moment the code starts caring about something new,
+    and it breaks in a way that looks like the code being wrong.
+    """
 
     def __init__(self) -> None:
         self.frames: list[dict] = []
+        # The same state machine `WebSocket` keeps, reduced to what a harness
+        # needs: CONNECTING until `accept()`, then CONNECTED forever after.
+        self.client_state = WebSocketState.CONNECTING
 
     async def accept(self) -> None:
         """`connect()` calls this; a real socket would begin its read loop here."""
+        self.client_state = WebSocketState.CONNECTED
 
     async def send_json(self, payload: dict) -> None:
         self.frames.append(payload)
@@ -517,72 +540,95 @@ async def phase_coalescing_not_loss(pubsub: RedisPubSub, markets: list[str]) -> 
 
 
 async def phase_publish_burst(pubsub: RedisPubSub, markets: list[str]) -> None:
-    """A burst of publishes must drop nothing.
+    """A burst must not drop frames, and the cost of moving them must be real.
 
     This is the assertion that would have caught the cliff. `max_connections` is
     a hard limit, not a queue: measured directly against real Redis, 300
     concurrent publishes came back as exactly 100 succeeded and 200
-    `MaxConnectionsError`. Every publisher caught that and logged a warning, so
-    the trade was committed to Postgres and no client was told - silently, in
-    every environment, with nothing to alert on.
+    `MaxConnectionsError`. Every publisher caught that and logged a warning, so the
+    trade was committed to Postgres and no client was told - silently, in every
+    environment, with nothing to alert on.
 
     With the queue, the same burst must complete intact. Queue depth and writers
     are tuned so the backlog drains rather than overflowing, which is the whole
     design: decouple rate from concurrency so the pool is a throughput knob and
     not a correctness cliff.
+
+    ## What this phase used to measure, and why that was misleading
+
+    The ops handed to the queue were no-ops. The queue, the dispatcher and the
+    writer were all exercised, but the writer's actual cost - a Lua sequence bump
+    and a Redis `PUBLISH` - was zero. So the "frames/sec" printed here was the rate
+    at which the queue moved frames past a writer that did nothing, and anyone
+    skimming the output read it as publish throughput.
+
+    The old comment said as much, in prose, a couple of lines below the number.
+    That is not a defence: **a number outlives the comment, and nobody rereads the
+    harness.** A real figure measuring something other than its label says is
+    worse than no figure, because it is believed.
+
+    So the ops are real now - and they are the app's own `market_publish_op`,
+    not a re-implementation here. That is the part that matters for trustworthiness:
+    a harness that hand-rolls the publish is measuring code that does not ship.
+
+    Frames are counted where a client would see them, on a socket subscribed to the
+    market, rather than at the queue's internal hand-off. So this is end-to-end.
     """
     print("\n[7] Publish burst must not drop frames")
-    print("    The assertion the MaxConnectionsError cliff would have failed.")
+    print("    Real Lua sequence bump + PUBLISH per frame, via the app's own")
+    print("    publish op, counted on a socket subscribed to the market.")
 
     reset_global()
-    targets = markets[:30]
+    targets = [f"burst{i}" for i in range(30)]
 
-    # Every frame is critical, so an overflow could not be excused as coalescing.
-    delivered: list[str] = []
-    original = pubsub._dispatcher._send
+    sockets = [_NullSock() for _ in targets]
+    for ws, mid in zip(sockets, targets):
+        await global_manager.connect(ws, mid)
+        # `connect()` registers the socket locally; the Redis SUBSCRIBE is the
+        # route's job, so the harness has to do it too or it measures a gateway
+        # subscribed to nothing.
+        await pubsub.subscribe_market(mid)
+    require(await wait_for(lambda: all(is_subscribed(pubsub, m) for m in targets)),
+           "burst phase never subscribed - every publish goes nowhere")
 
-    async def counting_send(pending):
-        await original(pending)
-        delivered.append(pending.frame)
-
-    pubsub._dispatcher._send = counting_send
+    # `order:fill` is a CRITICAL frame, so the queue will not coalesce it and a
+    # missing frame cannot be excused as an ephemeral price. That is what makes
+    # "delivered == offered" an assertion about loss rather than a race with the
+    # coalescer. Asserted rather than assumed: if the frame set ever changes, this
+    # phase must fail loudly instead of quietly becoming a coalescing measurement.
+    require("order:fill" in CRITICAL_FRAMES,
+           "order:fill is no longer a critical frame, so a dropped frame here "
+           "could be coalescing rather than loss - this phase would be measuring "
+           "the wrong thing")
 
     total = 600
-    try:
-        t0 = time.perf_counter()
-        for i in range(total):
-            pubsub.enqueue_publish(
-                _make_noop(markets[i % len(targets)]),
-                frame="order:fill",
-                owe_resync_to=f"user-{i % 20}",
-            )
-        elapsed = time.perf_counter() - t0
+    per_market = total // len(targets)
 
-        require(await wait_for(lambda: len(delivered) >= total, timeout_s=30.0),
-               "burst did not drain - frames are being lost inside the queue")
-    finally:
-        pubsub._dispatcher._send = original
+    t0 = time.perf_counter()
+    for i in range(total):
+        pubsub.enqueue_publish(
+            pubsub.market_publish_op(targets[i % len(targets)], "order:fill", {"i": i}),
+            frame="order:fill",
+            owe_resync_to=f"user-{i % 20}",
+        )
+    enqueue_elapsed = time.perf_counter() - t0
 
-    rate = len(delivered) / max(elapsed, 1e-9)
-    dropped = total - len(delivered)
+    require(await wait_for(lambda: all(len(ws.frames) >= per_market for ws in sockets),
+                           timeout_s=30.0),
+           "burst did not drain - frames are being lost inside the queue")
+
+    # Counted where a client would have received them, not at the queue's hand-off.
+    delivered = sum(len(ws.frames) for ws in sockets)
+    drain_elapsed = time.perf_counter() - t0
+
+    rate = delivered / max(drain_elapsed, 1e-9)
+    dropped = total - delivered
     verdict = "PASS" if dropped == 0 else f"FAIL - {dropped} dropped"
-    print(f"\n  {total} critical frames offered in {elapsed*1000:.0f}ms")
-    print(f"    delivered           {len(delivered):>6}   [{verdict}]")
-    print(f"    enqueue was non-blocking ({elapsed*1e6/max(total,1):.1f}us/frame)")
-    # Stated precisely, because the number is easy to misread: the ops here are
-    # no-ops, so this is the *dispatcher's* drain rate - how fast the queue moves
-    # frames between hand-off and the writer - not end-to-end Redis throughput.
-    # Phases 1-3 measure the real thing.
-    print(f"    dispatcher drain    {rate:>6.0f} frames/sec  (ops are no-ops;"
-          " see phases 1-3 for real Redis throughput)")
-
-
-def _make_noop(market_id: str):
-    """A publish closure that only needs to exist - timing is the writer's cost."""
-    async def _op():
-        return None
-
-    return _op
+    print(f"\n  {total} critical frames offered in {enqueue_elapsed*1000:.0f}ms")
+    print(f"    enqueue was non-blocking ({enqueue_elapsed*1e6/max(total,1):.1f}us/frame)")
+    print(f"    delivered to sockets {delivered:>5}   [{verdict}]")
+    print(f"    end-to-end drain     {rate:>6.0f} frames/sec  (real Redis PUBLISH;"
+          " phases 1-3 give fan-out and per-publish latency)")
 
 
 async def main() -> None:

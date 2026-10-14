@@ -22,13 +22,14 @@ import asyncio
 import json
 import sys
 
-from app.websocket.manager import (
-    _SEQ_AND_PUBLISH_LUA,
+from app.websocket.channels import (
     GLOBAL_TRADES_CHANNEL,
-    RedisPubSub,
     market_events_channel,
     market_seq_key,
+    user_fills_channel,
+    user_notifications_channel,
 )
+from app.websocket.manager import _SEQ_AND_PUBLISH_LUA, RedisPubSub
 
 
 async def _publish_market(ps: RedisPubSub, market_id: str, event: dict) -> None:
@@ -112,9 +113,9 @@ async def main(kind: str, market_id: str, value: float | None = None) -> None:
             # This is the highest-consequence path in the product. A user who is
             # not told they were filled has no way of knowing to go and look.
             channel = (
-                f"user:{market_id}:fills"
+                user_fills_channel(market_id)
                 if kind in ("fill", "position")
-                else f"user:{market_id}:notifications"
+                else user_notifications_channel(market_id)
             )
             if kind == "fill":
                 payload = {
