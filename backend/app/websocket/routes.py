@@ -297,7 +297,28 @@ async def user_notifications_websocket(websocket: WebSocket, user_id: str):
     if not authenticated_user_id or authenticated_user_id != user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return
-    await user_manager.connect(websocket, user_id)
+    # `connect()` returns whether the socket is *really* live, and this route has
+    # to act on it - which the other two have always done and this one did not.
+    #
+    # Discarding it is not a style issue. On rejection the socket was never
+    # accepted, so the route went on to take a Redis subscription for a
+    # connection that does not exist and then entered the read loop, whose first
+    # `receive_text()` raises "WebSocket is not connected. Need to call accept
+    # first." That landed in the `except Exception` below and logged a full
+    # traceback for a rejection that was entirely routine - so the guard's own
+    # failure mode was producing the noise the guard was added to stop.
+    accepted = await user_manager.connect(websocket, user_id)
+    if not accepted:
+        logger.warning(f"User WS connect rejected: user={user_id}")
+        # Close, exactly as the market and trades routes do. Returning without
+        # closing leaves the handshake unfinished: the client is waiting for an
+        # accept that will never come, and `websocket_connect` blocks until it
+        # times out. It also holds a connection slot for that whole time.
+        # Starlette permits `close` from CONNECTING, so this is the correct way
+        # to refuse before accepting.
+        await websocket.close(code=1008, reason="Connection limit exceeded")
+        return
+
     await redis_pubsub.subscribe_user(user_id)
 
     try:

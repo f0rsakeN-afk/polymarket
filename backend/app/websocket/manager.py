@@ -451,15 +451,30 @@ class ConnectionManager:
         # production. The market path had no check at all, and it is the busier
         # of the two.
         #
-        # Counted rather than silently skipped: this *should* never fire, so an
-        # occurrence is a bug somewhere upstream, and a counter is the only way to
-        # find out it happened rather than assuming it did not.
-        if websocket.client_state is not WebSocketState.CONNECTING:
+        # On the uvicorn theory, which was recorded here and was wrong: that
+        # `accept()` "fails silently" because it only sends while CONNECTING, and
+        # that the crash therefore "came from uvicorn". Neither holds. `accept()`
+        # sends unconditionally and `send()` *raises* on an already-accepted
+        # socket - and it does so identically on a bare in-process `WebSocket`
+        # object, with no server in the picture at all. See
+        # `UserConnectionManager.connect` for the full correction.
+        #
+        # Counted rather than silently skipped, and split by state rather than
+        # lumped into one "already_accepted" bucket: this *should* never fire, so
+        # an occurrence is a bug upstream, and the state is the only thing that
+        # says which one. `connected` means the handshake already went out and
+        # something is accepting twice; `disconnected` means the socket was
+        # already gone and we are accepting a corpse. Those call for completely
+        # different investigations, and one combined counter cannot tell them
+        # apart - which is why the original version of this counter was
+        # unanswerable.
+        state = websocket.client_state
+        if state is not WebSocketState.CONNECTING:
             logger.warning(
                 f"WS connect for market={market_id} skipped: socket is "
-                f"{websocket.client_state.value}, not CONNECTING"
+                f"{state.value}, not CONNECTING"
             )
-            WS_CONNECTS_TOTAL.labels("already_accepted").inc()
+            WS_CONNECTS_TOTAL.labels(f"skipped_{state.name.lower()}").inc()
             return False
         if client_ip and self._ip_connections.get(client_ip, 0) >= self.MAX_CONNECTIONS_PER_IP:
             logger.warning(f"WS rejected: too many connections from IP {client_ip}")
@@ -1285,33 +1300,61 @@ class UserConnectionManager:
     async def connect(self, websocket: WebSocket, user_id: str) -> bool:
         """Accept and register the socket. Returns whether it is really live.
 
-        The return value is not decoration: it matches `ConnectionManager.connect`,
-        and the route needs it because **Starlette's `accept()` fails silently**.
-        It only sends when the socket is in CONNECTING state - if the handshake
-        has already gone out, it is a no-op that raises nothing. So a socket that
-        is not actually connected can be registered as though it were, with the
-        connection gauge incremented and a Redis subscription taken out for a
-        client that is already gone. Nothing logs, because nothing failed.
+        The return value is not decoration, and **the caller must check it**.
 
-        That is the shape of the crash this was hardened against: the backend
-        logged an unhandled `Expected ASGI message 'websocket.send' ...
-        but got 'websocket.accept'` from inside this call, meaning uvicorn had
-        already completed a handshake on that connection. Reproduced against
-        ~1200 connect/disconnect lifecycles without a repeat, so the trigger is
-        rare and not yet identified - but the silence here is not the reason it
-        was invisible. A connect that reports whether it worked is debuggable;
-        one that returns nothing and assumes success is not.
+        ## What actually happens on a double accept
+
+        `WebSocket.accept()` has no guard of its own. It conditionally waits for
+        the connect message and then sends `websocket.accept` *unconditionally*:
+
+            async def accept(self, ...):
+                if self.client_state == WebSocketState.CONNECTING:
+                    await self.receive()
+                await self.send({"type": "websocket.accept", ...})
+
+        On a socket that is already accepted, `send()` is the thing that raises -
+        its `application_state` is `CONNECTED`, and at that state the only legal
+        messages are `websocket.send` and `websocket.close`. So the connection
+        dies on:
+
+            RuntimeError: Expected ASGI message "websocket.send" or
+            "websocket.close", but got 'websocket.accept'
+
+        ## Two corrections to what this comment previously claimed
+
+        Both were wrong, and both sent the investigation in the wrong direction.
+
+        1. It is **not** a silent failure and **not** a no-op. It raises, loudly,
+           which is precisely why it showed up in the logs at all.
+        2. **uvicorn is not involved.** That error reproduces on a bare in-process
+           `WebSocket` object with a stub `send`, no server and no transport. The
+           claim that it "came from uvicorn, meaning the transport had already
+           completed a handshake" was a guess presented as a finding.
+
+        ## What is actually known about the trigger
+
+        The app has exactly two `accept()` call sites (both of these) and three
+        route callers, each of which calls `connect()` once per socket. So the
+        current code cannot produce this state on its own - which means either the
+        trigger came from a code path that has since changed, or two coroutines
+        reached `connect()` for one socket concurrently.
+
+        That is why the counter below is split by state rather than lumped
+        together: if it ever fires again, `skipped_connected` versus
+        `skipped_disconnected` is the difference between "something accepts twice"
+        and "we accepted a socket that had already gone", and those are different
+        bugs with different fixes.
         """
-        if websocket.client_state is not WebSocketState.CONNECTING:
-            # Already accepted or closed. Say so rather than pretending, and
-            # count it: this should never fire, so an occurrence is a bug
-            # somewhere upstream and a counter is the only way to learn that it
-            # happened rather than assuming it did not.
+        state = websocket.client_state
+        if state is not WebSocketState.CONNECTING:
+            # Say which state, and count it separately per state: one combined
+            # counter cannot distinguish "accepting twice" from "accepting a
+            # socket that had already gone", and those need different fixes.
             logger.warning(
                 f"User WS connect for user={user_id} skipped: socket is "
-                f"{websocket.client_state.value}, not CONNECTING"
+                f"{state.value}, not CONNECTING"
             )
-            WS_CONNECTS_TOTAL.labels("already_accepted").inc()
+            WS_CONNECTS_TOTAL.labels(f"skipped_{state.name.lower()}").inc()
             return False
 
         await websocket.accept()
