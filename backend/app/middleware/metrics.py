@@ -78,14 +78,20 @@ MARKETS_UNRESOLVED_OLDEST_AGE = Gauge(
 WS_CONNECTS_TOTAL = Counter(
     "ws_connects_total",
     "WebSocket connection attempts by outcome",
-    # accepted | rejected_ip | rejected_user | already_accepted
+    # accepted | rejected_ip | rejected_user | skipped_connected | skipped_disconnected
     #
-    # `already_accepted` is a connection that reached a manager with a socket that
-    # was no longer waiting to be accepted. It is always a bug upstream of the
-    # manager - a double-accept, or a socket closed before it was opened - and it
-    # used to surface as an unhandled ASGI exception that killed the connection
-    # with no close frame and nothing logged. Counted so it can be alerted on
-    # instead of being a story someone reads in a log.
+    # A `skipped_*` outcome is a connection that reached a manager with a socket no
+    # longer waiting to be accepted. It is always a bug upstream of the manager,
+    # and it used to surface as an unhandled ASGI exception that killed the
+    # connection with no close frame and nothing logged.
+    #
+    # Deliberately one label per state rather than a single `already_accepted`.
+    # That conflates two unrelated bugs: `skipped_connected` means the handshake
+    # already went out and something is accepting twice, while
+    # `skipped_disconnected` means we accepted a socket that had already gone.
+    # A combined counter cannot tell them apart, so an alert on it could not say
+    # which thing had started happening - which is the only question an alert on
+    # this metric exists to answer.
     ["outcome"],
 )
 WS_DISCONNECTS_TOTAL = Counter(

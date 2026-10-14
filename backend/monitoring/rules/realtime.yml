@@ -109,25 +109,47 @@ groups:
         # abrupt drop it cannot explain. The managers now refuse such a socket, so
         # this counter is how we learn that one ever arrived.
         #
+        # Two separate alerts, one per state, because they are different bugs with
+        # different fixes and a single combined counter cannot tell them apart:
+        #
+        #   skipped_connected     the handshake already went out, so something is
+        #                          accepting twice. Look for two coroutines reaching
+        #                          one socket, or a second accept outside the managers.
+        #   skipped_disconnected  we accepted a socket that had already gone - the
+        #                          peer vanished between the handshake and the
+        #                          accept. Look at the gap before `connect()`, which
+        #                          does async auth work with the socket untouched.
+        #
         # It cannot be triggered on demand: it was first seen in a production log
-        # and has not reproduced across ~1200 connection lifecycles. That is
-        # precisely why it is alerted on - the one thing worse than not
-        # reproducing is reproducing silently.
+        # and has not reproduced since. That is precisely why it is alerted on -
+        # the one thing worse than not reproducing is reproducing silently.
         #
         # `increase(...[10m]) > 0` rather than a ratio: any occurrence is a bug,
         # and there is no "acceptable rate" to tune against.
-        expr: increase(ws_connects_total{outcome="already_accepted"}[10m]) > 0
+        expr: increase(ws_connects_total{outcome="skipped_connected"}[10m]) > 0
         labels:
           severity: critical
         annotations:
-          summary: "WebSocket accept attempted on an already-connected socket ({{ $value }} in 10m)"
+          summary: "WebSocket accept attempted on an already-accepted socket ({{ $value }} in 10m)"
           description: >-
-            A WebSocket connection reached a manager with a socket that was no
-            longer in CONNECTING state, so the accept was refused. Affected
-            clients are dropped without a close frame and see an unexplained
-            disconnect. Check the gateway logs for
-            "already accepted"/"not CONNECTING", and whether any code path calls
-            accept twice or consumes websocket.connect before connecting.
+            A WebSocket connection reached a manager with a socket already past
+            CONNECTING, so the accept was refused. Something is accepting the same
+            socket twice. Check for two coroutines reaching one socket, or any
+            accept outside the two manager `connect()` methods.
+
+      - alert: RealtimeAcceptOnClosedSocket
+        # The other half of the above, and a different investigation.
+        expr: increase(ws_connects_total{outcome="skipped_disconnected"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket accept attempted on a socket that had already closed ({{ $value }} in 10m)"
+          description: >-
+            A WebSocket connection reached a manager after the socket was already
+            disconnected, so the accept was refused. Usually the peer went away
+            during the async work between the handshake and `connect()` - token
+            validation, in particular - rather than a double accept. No client is
+            harmed, but the counts of accepted connections will be short.
 
       - alert: RealtimePublishStalled
         # Nothing queued at all while sockets are connected means the writers are

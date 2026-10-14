@@ -18,22 +18,33 @@ message and then sends `websocket.accept` *unconditionally*:
             await self.receive()
         await self.send({"type": "websocket.accept", ...})
 
-Hand it a socket that has already been accepted, or closed, and the server
-answers with exactly the message above. The connection dies with no close frame,
-nothing is logged at route level, and the client sees an abrupt drop it cannot
-explain.
+Hand it a socket that has already been accepted, or closed, and `send()` refuses
+it: at `application_state == CONNECTED` the only legal messages are
+`websocket.send` and `websocket.close`, so the second `accept` raises the error
+above. The connection dies with no close frame, and the client sees an abrupt
+drop it cannot explain.
 
-Starlette's own `send()` would normally catch this on a single object, because it
-tracks `application_state`. The production crash came from *uvicorn*, meaning the
-socket object was no longer in `CONNECTING` while the transport had already
-completed a handshake - so the defence has to live at the call site, which is
-where it now does.
+## Two corrections to what this file previously claimed
 
-The market path (`ConnectionManager.connect`) had no check at all, and it is the
-busier of the two.
+Both claims below were wrong, and both pointed the investigation away from the
+answer. They are recorded because the wrong story is more dangerous than no
+story: it reads like a finding.
 
-These tests pin the guard rather than the symptom, because the symptom needs a
-race to reproduce and the guard is a property of the code.
+1. **"The production crash came from uvicorn."** It does not. The exact error
+   reproduces on a bare in-process `WebSocket` with a stub `send` - no server, no
+   transport, no asyncio task involved. `test_the_error_needs_no_server` asserts
+   that, so the claim cannot come back.
+2. **"`accept()` fails silently."** It does not. It sends `websocket.accept`
+   unconditionally and `send()` *raises*. The failure was never silent; it was
+   just unlabelled.
+
+## What is actually known about the trigger
+
+The app has exactly two `accept()` call sites and three route callers, each
+calling `connect()` once per socket - so today's code cannot reach this state on
+its own. Either the trigger came from a path that has since changed, or two
+coroutines reached one socket concurrently. Which is why the skip counter is split
+by state: if it fires again, the state tells you which of those it was.
 """
 
 import asyncio
@@ -41,6 +52,7 @@ import asyncio
 import pytest
 from starlette.websockets import WebSocket, WebSocketState
 
+from app.middleware.metrics import WS_CONNECTS_TOTAL
 from app.websocket.manager import ConnectionManager, UserConnectionManager
 
 SCOPE = {"type": "websocket", "path": "/ws/markets/x", "headers": []}
@@ -130,6 +142,76 @@ async def test_user_connect_refuses_an_already_connected_socket():
 
     assert accepted is False
     assert _SENT == []
+
+
+@pytest.mark.asyncio
+async def test_the_error_needs_no_server():
+    """The production error reproduces with no uvicorn, no transport, no server.
+
+    This pins the correction to the original explanation, which claimed the crash
+    "came from uvicorn" because the transport had completed a handshake behind
+    Starlette's back. It did not - `send()` refuses the message on a plain
+    in-process object. Without this, that story looks plausible again and sends
+    the next person looking at the gateway.
+    """
+    sent: list[str] = []
+
+    async def send(message):
+        sent.append(message["type"])
+
+    ws = WebSocket(SCOPE, _receiver(), send)
+    await ws.accept()
+
+    with pytest.raises(RuntimeError) as exc:
+        await ws.accept()
+
+    assert str(exc.value) == (
+        "Expected ASGI message \"websocket.send\" or \"websocket.close\", "
+        "but got 'websocket.accept'"
+    ), "the error text changed - re-check the explanation in this file's docstring"
+    # One accept went out, the second never did.
+    assert sent == ["websocket.accept"]
+
+
+@pytest.mark.asyncio
+async def test_the_skip_counter_distinguishes_the_two_states():
+    """`skipped_connected` and `skipped_disconnected` are different bugs.
+
+    A single combined counter - which is what shipped first - cannot tell an
+    operator whether something is accepting twice or whether we accepted a socket
+    that had already gone. An alert built on the combined counter cannot answer
+    the only question it exists to answer.
+    """
+    from app.middleware.metrics import WS_CONNECTS_TOTAL
+
+    manager = ConnectionManager()
+    ws = WebSocket(SCOPE, _receiver(), _record)
+    await _make_connected(ws)
+
+    before_connected = WS_CONNECTS_TOTAL.labels("skipped_connected")._value.get()
+    before_disconnected = WS_CONNECTS_TOTAL.labels("skipped_disconnected")._value.get()
+
+    assert await manager.connect(ws, "market-x") is False
+
+    assert WS_CONNECTS_TOTAL.labels("skipped_connected")._value.get() == before_connected + 1
+    assert (
+        WS_CONNECTS_TOTAL.labels("skipped_disconnected")._value.get() == before_disconnected
+    ), "an already-accepted socket must not be counted as a closed one"
+
+
+@pytest.mark.asyncio
+async def test_a_closed_socket_is_counted_separately_from_an_accepted_one():
+    ws = WebSocket(SCOPE, _receiver(), _record)
+    await _make_connected(ws)
+    ws.application_state = WebSocketState.DISCONNECTED
+    ws.client_state = WebSocketState.DISCONNECTED
+
+    manager = ConnectionManager()
+    before = WS_CONNECTS_TOTAL.labels("skipped_disconnected")._value.get()
+
+    assert await manager.connect(ws, "market-x") is False
+
+    assert WS_CONNECTS_TOTAL.labels("skipped_disconnected")._value.get() == before + 1
 
 
 @pytest.fixture(autouse=True)
