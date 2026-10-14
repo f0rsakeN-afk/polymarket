@@ -151,6 +151,7 @@ async def test_adjudicate_dispute_upheld(client: AsyncClient, admin_user, test_u
     with patch("app.workers.tasks.resolve_market.delay"):
         resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
             "ruling": "upheld",
+            "password": "Admin!Pass1",
         })
     assert resp.status_code == 200
     data = resp.json()
@@ -181,6 +182,7 @@ async def test_adjudicate_dispute_dismissed(client: AsyncClient, admin_user, tes
     client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
         "ruling": "dismissed",
+            "password": "Admin!Pass1",
     })
     assert resp.status_code == 200
     assert resp.json()["data"]["ruling"] == "dismissed"
@@ -210,6 +212,7 @@ async def test_adjudicate_dispute_non_admin_forbidden(client: AsyncClient, admin
     client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
         "ruling": "dismissed",
+            "password": "Admin!Pass1",
     })
     assert resp.status_code == 403
 
@@ -237,6 +240,7 @@ async def test_adjudicate_dispute_invalid_ruling(client: AsyncClient, admin_user
     client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.post(f"/api/v1/disputes/{dispute_id}/adjudicate", json={
         "ruling": "invalid_ruling",
+            "password": "Admin!Pass1",
     })
     assert resp.status_code == 422
 
@@ -248,5 +252,6 @@ async def test_adjudicate_nonexistent_dispute(client: AsyncClient, admin_user):
     client.cookies.set("access_token", token_for(admin_user.id))
     resp = await client.post(f"/api/v1/disputes/{uuid.uuid4()}/adjudicate", json={
         "ruling": "dismissed",
+        "password": "Admin!Pass1",
     })
     assert resp.status_code == 404

@@ -685,7 +685,7 @@ async def test_adjudicate_dispute_admin_only(client: AsyncClient, test_user, tes
     client.cookies.set("access_token", token_for(test_user.id))
     resp = await client.post(
         f"/api/v1/disputes/{dispute.id}/adjudicate",
-        json={"ruling": "dismissed"},
+        json={"ruling": "dismissed", "password": "Admin!Pass1"},
     )
     assert resp.status_code == 403
 
