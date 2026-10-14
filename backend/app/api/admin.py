@@ -13,10 +13,10 @@ from app.api.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from app.api.middleware import _get_client_ip
 from app.api.responses import PaginatedResponse, success_response
+from app.api.step_up import require_step_up
 from app.database import get_db
-from app.deps import get_current_user, verify_password
+from app.deps import get_current_user
 from app.models.audit import AdminAuditEvent, AuthAuditEvent
 from app.models.market import (
     STATUS_ACTIVE,
@@ -25,7 +25,7 @@ from app.models.market import (
     Market,
 )
 from app.models.user import RefreshToken, Session, User
-from app.schemas.auth import AdminStepUpRequest
+from app.schemas.auth import StepUpRequest
 from app.services import admin_audit
 from app.services.admin_audit import AdminAuditService
 from app.services.audit_service import AuthAuditService
@@ -34,7 +34,6 @@ from app.services.cache_service import (
     cache_invalidate_market_lists,
 )
 from app.services.liquidity_service import LiquidityService
-from app.services.totp_service import TOTPService
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -337,74 +336,9 @@ async def list_admin_actions(
     )
 
 
-async def require_step_up(request, admin, data: AdminStepUpRequest) -> None:
-    """Prove the admin is present, not just holding a session.
-
-    The threat is specific and worth stating: an admin session is a bearer token.
-    Anyone who obtains one - a stolen cookie, an XSS, a laptop left open, a
-    shoulder-surfed session - otherwise gets to move accumulated protocol fees to
-    the treasury with nothing but the cookie. Everything else an admin can do is
-    recoverable or self-evident; this one is not.
-
-    Requires the password always, and a TOTP code when the admin has 2FA enabled -
-    so the step is *to the strongest factor available* rather than a fixed bar
-    that happens to suit whoever is calling.
-
-    The 2FA requirement is decided here, on the server. A client that omitted
-    `code` when 2FA was enabled would otherwise quietly downgrade the action to
-    password-only, which is exactly the shape of attack step-up exists to stop.
-    """
-    # The same password the login path guards, so it gets the same protection.
-    #
-    # Adding a password check to an endpoint turns it into a password oracle
-    # unless it is throttled - and the per-IP limit alone is not enough, because
-    # an attacker rotating source addresses gets a fresh allowance each time. The
-    # login path already solves this with progressive friction keyed on the
-    # account; reusing it here means the admin's password is guarded identically
-    # wherever it is checked, which is the only consistent place to draw that
-    # line.
-    from fastapi import HTTPException
-
-    from app.services.rate_limit_service import RateLimitService
-
-    ip = _get_client_ip(request)
-    rl_result, is_slowed = await RateLimitService.check_with_friction(admin.email, ip)
-    if is_slowed and rl_result.retry_after:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many attempts. Slow down.",
-            headers={"Retry-After": str(int(rl_result.retry_after))},
-        )
-    if not rl_result.allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded",
-            headers={"Retry-After": str(int(rl_result.retry_after))},
-        )
-
-    if not verify_password(data.password, admin.password_hash):
-        await RateLimitService.record_failure(admin.email, ip)
-        raise UnauthorizedError("Incorrect password", error_code="STEP_UP_PASSWORD_INVALID")
-
-    if admin.is_2fa_enabled:
-        if not data.code:
-            raise ValidationError(
-                "2FA is enabled for this account - a current code is required",
-                error_code="STEP_UP_2FA_REQUIRED",
-            )
-        secret = TOTPService.decrypt_secret(admin.totp_secret_encrypted)
-        if not TOTPService.verify_code(secret, data.code):
-            await RateLimitService.record_failure(admin.email, ip)
-            raise UnauthorizedError("Invalid 2FA code", error_code="STEP_UP_2FA_INVALID")
-
-    # Proven present. Clear the friction so a legitimate admin who fat-fingered
-    # the code is not left in a penalty box for their next attempt.
-    await RateLimitService.reset_friction(admin.email, ip)
-
-
 @router.post("/distribute-protocol-fees", summary="Distribute accumulated protocol fees to treasury (admin)")
 async def distribute_protocol_fees(
-    data: AdminStepUpRequest,
+    data: StepUpRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
