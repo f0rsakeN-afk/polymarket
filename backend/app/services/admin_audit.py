@@ -40,6 +40,15 @@ PROTOCOL_FEES_DISTRIBUTED = "protocol_fees_distributed"
 # A privileged action refused because step-up credentials were wrong. Audited
 # because an actor repeatedly guessing at them is itself worth a row.
 STEP_UP_FAILED = "step_up_failed"
+# A dispute ruling. An upheld ruling resolves the market and pays out, so this
+# is the most consequential privileged action in the system - and it lives in
+# `api/disputes.py`, not `api/admin.py`, which is why the original coverage
+# sweep never saw it.
+DISPUTE_ADJICATED = "dispute_adjudicated"
+# An admin pulling a user's financial record. A read, so no step-up - there is no
+# irreversible action - but "who looked at whose finances" is a question an
+# operator must be able to answer, so it is recorded like the rest.
+USER_RECORD_VIEWED = "user_record_viewed"
 
 
 class AdminAuditService:

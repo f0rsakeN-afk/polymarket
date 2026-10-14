@@ -30,6 +30,8 @@ PRIVILEGED_ACTIONS = {
     "user_unbanned",
     "protocol_fees_distributed",
     "step_up_failed",
+    "dispute_adjudicated",
+    "user_record_viewed",
 }
 
 

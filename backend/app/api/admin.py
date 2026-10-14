@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select, update
@@ -102,15 +103,90 @@ async def list_users(
 
 @router.get("/users/{user_id}", summary="Get user detail (admin)")
 async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Get a single user's details."""
-    await _get_admin_user(request, db)
+    """A single user, and enough of their financial record to investigate them.
+
+    ## Why this grew
+
+    This returned profile fields only, so an admin given "this user says they
+    lost money" had nothing to look at - while every answer lived in tables that
+    were already there. The transaction ledger carries `balance_after` and a
+    `reference_id` pointing at the order that caused it, which is exactly what
+    makes a balance question answerable.
+
+    Two design points worth stating:
+
+    - **Counts by default, rows on request.** A user with years of trades would
+      make an unconditional dump unusable, and an admin rarely needs every row -
+      they need the shape first. `?include=trades,positions,transactions` fetches
+      the detail, capped and newest-first, because an unbounded response to an
+      investigation query is how an endpoint becomes a denial-of-service lever
+      an admin can aim at their own server.
+    - **Reads are audited.** An admin pulling a user's financial history is a
+      privileged action with privacy weight, and it was previously invisible. It
+      goes in the same trail as everything else.
+
+    This is a read, so it needs no step-up - there is no irreversible action to
+    take. But it is recorded, because "who looked at whose finances" is a
+    question an operator has to be able to answer.
+    """
+    admin = await _get_admin_user(request, db)
 
     result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise NotFoundError("User not found")
 
-    return success_response({
+    from app.models.dispute import Dispute
+    from app.models.order import Order
+    from app.models.position import Position
+    from app.models.trade import Trade
+    from app.models.wallet import Transaction, Wallet
+
+    include = {
+        part.strip() for part in (request.query_params.get("include") or "").split(",") if part.strip()
+    }
+    detail_limit = min(int(request.query_params.get("limit") or 50), 200)
+
+    async def recent(model, *order_by):
+        stmt = select(model).where(model.user_id == user.id)
+        for column in order_by:
+            stmt = stmt.order_by(column.desc())
+        rows = (await db.execute(stmt.limit(detail_limit))).scalars().all()
+        return [_serialisable(r) for r in rows]
+
+    wallet = (
+        await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+    ).scalar_one_or_none()
+
+    async def count(model) -> int:
+        return int(
+            await db.scalar(select(func.count()).select_from(model).where(model.user_id == user.id))
+            or 0
+        )
+
+    open_orders = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(Order)
+            .where(Order.user_id == user.id, Order.status == "pending")
+        )
+        or 0
+    )
+
+    # Flags an admin acts on, computed rather than left for them to derive. A
+    # user whose balances do not reconcile, or who holds funds locked in orders
+    # they cannot reach, is a support case before it is a dispute.
+    findings: list[str] = []
+    if wallet is None:
+        findings.append("no_wallet")
+    if open_orders:
+        findings.append("has_open_orders")
+    if wallet and wallet.locked_balance and Decimal(str(wallet.locked_balance)) > 0:
+        findings.append("has_locked_funds")
+    if user.is_deleted:
+        findings.append("account_erased")
+
+    payload = {
         "id": str(user.id),
         "email": user.email,
         "username": user.username,
@@ -121,7 +197,69 @@ async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         "is_2fa_pending": user.is_2fa_pending,
         "referral_code": user.referral_code,
         "created_at": user.created_at,
-    })
+        "is_deleted": user.is_deleted,
+        "wallet": (
+            {
+                "balance": str(wallet.balance),
+                "locked_balance": str(wallet.locked_balance),
+                "currency": wallet.currency,
+            }
+            if wallet
+            else None
+        ),
+        "counts": {
+            "orders": await count(Order),
+            "open_orders": open_orders,
+            "positions": await count(Position),
+            "trades": await count(Trade),
+            "transactions": await count(Transaction),
+            "disputes": await count(Dispute),
+        },
+        "findings": findings,
+    }
+
+    if "trades" in include:
+        payload["trades"] = await recent(Trade, Trade.executed_at)
+    if "orders" in include:
+        payload["orders"] = await recent(Order, Order.created_at)
+    if "positions" in include:
+        payload["positions"] = await recent(Position, Position.created_at)
+    if "transactions" in include:
+        payload["transactions"] = await recent(Transaction, Transaction.created_at)
+
+    await AdminAuditService.log_action(
+        db,
+        action=admin_audit.USER_RECORD_VIEWED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="user",
+        target_id=str(user.id),
+        summary=f"Viewed financial record for {user.email}",
+        payload={"include": sorted(include), "findings": findings},
+    )
+
+    return success_response(payload)
+
+
+def _serialisable(row) -> dict:
+    """Row → plain data, with the types JSON cannot hold converted.
+
+    Decimal as a string, not a float: an admin reconciling a balance against the
+    ledger is exactly the person who would be misled by a rounded number, and
+    `float()` on money is where that starts.
+    """
+    out: dict = {}
+    for column in row.__table__.columns:
+        value = getattr(row, column.name, None)
+        if isinstance(value, Decimal):
+            value = str(value)
+        elif isinstance(value, datetime):
+            value = value.isoformat()
+        elif isinstance(value, uuid.UUID):
+            value = str(value)
+        out[column.name] = value
+    return out
 
 
 @router.patch("/users/{user_id}/ban", summary="Ban user (admin)")
