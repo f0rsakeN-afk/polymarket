@@ -64,6 +64,19 @@ PORT_A, PORT_B = "8010", "8011"
 
 sys.path.insert(0, str(BACKEND))
 
+# Channel names come from the app, not from strings re-spelled here.
+#
+# This harness proves a frame reaches another process's socket by publishing to
+# the exact channel that process subscribes to - so if the two spell it
+# differently the proof passes while demonstrating nothing, which is the same
+# silent failure the harness suite kept hitting. `app.websocket.channels` imports
+# nothing, so importing it here does not pull the application into a driver that
+# otherwise only talks to it over HTTP and WebSocket.
+from app.websocket.channels import (  # noqa: E402 - must follow the sys.path.insert above
+    market_events_channel,
+    user_fills_channel,
+)
+
 
 def _credentials() -> dict:
     return json.loads((REPO / ".e2e-credentials.json").read_text())
@@ -291,13 +304,13 @@ async def main() -> None:
             await s.connect()
         await asyncio.sleep(1.0)
 
-        await _publish(f"market:{market_id}:events",
+        await _publish(market_events_channel(market_id),
                        {"type": "market:price_update", "seq": 1,
                         "payload": {"market_id": market_id, "outcome": "Yes", "price": 0.61}})
         check("market frame reaches process A's socket", await a_market.saw("market:price_update"))
         check("market frame reaches process B's socket", await b_market.saw("market:price_update"))
 
-        await _publish(f"user:{user}:fills",
+        await _publish(user_fills_channel(user),
                        {"type": "order:fill", "id": "scale-1", "title": "Scale probe"})
         check("private frame reaches process A's socket", await a_priv.saw("order:fill"))
         check("private frame reaches process B's socket", await b_priv.saw("order:fill"))
@@ -309,10 +322,10 @@ async def main() -> None:
         await a_priv.close()
         await asyncio.sleep(1.5)
 
-        await _publish(f"market:{market_id}:events",
+        await _publish(market_events_channel(market_id),
                        {"type": "market:price_update", "seq": 2,
                         "payload": {"market_id": market_id, "outcome": "Yes", "price": 0.62}})
-        await _publish(f"user:{user}:fills",
+        await _publish(user_fills_channel(user),
                        {"type": "order:fill", "id": "scale-2", "title": "After A left"})
 
         got_market = await _await(lambda: len(b_market.frames) > before, timeout=6.0)
@@ -326,7 +339,7 @@ async def main() -> None:
         try:
             await x_priv.connect()
             await asyncio.sleep(0.8)
-            await _publish(f"user:{user}:fills",
+            await _publish(user_fills_channel(user),
                            {"type": "order:fill", "id": "scale-3", "title": "Not for you"})
             await asyncio.sleep(1.2)
             leaked = any(f.get("id") == "scale-3" for f in x_priv.frames)
@@ -339,7 +352,7 @@ async def main() -> None:
         print("\n[4] a burst on A does not wedge B's queue")
         b_before = len(b_market.frames)
         for i in range(300):
-            await _publish(f"market:{market_id}:events",
+            await _publish(market_events_channel(market_id),
                            {"type": "market:price_update", "seq": 10 + i,
                             "payload": {"market_id": market_id, "outcome": "Yes", "price": 0.6}})
         check("B keeps up with a burst originating elsewhere",
