@@ -1195,7 +1195,14 @@ class OrderService:
                 )
             )
             referral = ref_result.scalar_one_or_none()
-            if referral:
+            # `referrer_id` is SET NULL when the referrer leaves, and that is a
+            # state this path can now actually meet rather than one to assume
+            # away. There is no wallet to credit in that case, so no reward is
+            # paid: correct, not a silent loss - the reward died with the account
+            # that would have received it. The `if ref_wallet` guard below is
+            # what handles it; `Wallet.user_id IS NULL` matches nothing because
+            # that column is NOT NULL, so this resolves without raising.
+            if referral and referral.referrer_id:
                 reward = Decimal(str(settings.referral_reward_amount))
                 ref_wallet_result = await db.execute(
                     select(Wallet).where(Wallet.user_id == referral.referrer_id).with_for_update()
