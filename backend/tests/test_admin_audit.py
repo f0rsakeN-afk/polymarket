@@ -29,7 +29,29 @@ PRIVILEGED_ACTIONS = {
     "user_banned",
     "user_unbanned",
     "protocol_fees_distributed",
+    "step_up_failed",
 }
+
+
+@pytest.fixture(autouse=True)
+async def _clear_rate_limit_friction():
+    """Reset the step-up friction counter around every test here.
+
+    `record_failure` writes to shared Redis, so a test that deliberately guesses
+    wrong passwords leaves the next test throttled - which is how a correct test
+    fails because of an unrelated one, and how a suite quietly starts depending
+    on its own ordering.
+    """
+    from app.redis import get_redis_sync
+
+    def _wipe() -> None:
+        redis = get_redis_sync()
+        for key in redis.scan_iter(match="rl:*"):
+            redis.delete(key)
+
+    _wipe()
+    yield
+    _wipe()
 
 
 async def _as_admin(client: AsyncClient, admin_user) -> None:
@@ -139,7 +161,10 @@ async def test_money_movement_is_recorded_with_its_amount(
     )
 
     await _as_admin(client, admin_user)
-    resp = await client.post("/api/v1/admin/distribute-protocol-fees")
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "Admin!Pass1"},
+    )
 
     assert resp.status_code == 200, resp.text
     rows = await _rows(db_session, AdminAuditEvent.action == "protocol_fees_distributed")
@@ -174,7 +199,10 @@ async def test_a_failed_money_movement_is_recorded_too(
     # propagates the exception instead of mapping it - the point of this test is
     # the audit row, not the error-handling chain.
     with pytest.raises(RuntimeError, match="frozen"):
-        await client.post("/api/v1/admin/distribute-protocol-fees")
+        await client.post(
+            "/api/v1/admin/distribute-protocol-fees",
+            json={"password": "Admin!Pass1"},
+        )
 
     rows = await _rows(db_session, AdminAuditEvent.action == "protocol_fees_distributed")
 
@@ -284,3 +312,158 @@ def _ok(value):
         return value
 
     return _inner()
+
+# ── Step-up on money movement ────────────────────────────────────────────────
+#
+# An admin session is a bearer token. Anyone holding one - stolen cookie, XSS,
+# unattended laptop - otherwise gets to move accumulated protocol fees to the
+# treasury with nothing but the cookie. Everything else an admin can do is
+# recoverable or self-evident; this one is not.
+
+
+async def _fees_ok(_db):
+    """Stands in for the real distribution. Async, and takes the session."""
+    return {"total_distributed": "10.00", "markets_processed": 1}
+
+
+@pytest.mark.asyncio
+async def test_money_movement_refuses_a_session_with_no_password(
+    client: AsyncClient, db_session, admin_user, monkeypatch
+):
+    """The core of it: a live admin session is not sufficient authority."""
+    from app.services.liquidity_service import LiquidityService
+
+    monkeypatch.setattr(
+        LiquidityService, "distribute_protocol_fees", staticmethod(_fees_ok)
+    )
+    await _as_admin(client, admin_user)
+
+    resp = await client.post("/api/v1/admin/distribute-protocol-fees", json={})
+
+    assert resp.status_code >= 400, (
+        "a fee distribution succeeded on a bare admin session - the session alone "
+        "is being treated as authority to move money"
+    )
+    rows = await _rows(db_session, AdminAuditEvent.action == "protocol_fees_distributed")
+    assert not rows, "the distribution happened despite failing step-up"
+
+
+@pytest.mark.asyncio
+async def test_wrong_password_is_refused_and_recorded(
+    client: AsyncClient, db_session, admin_user, monkeypatch
+):
+    from app.services.liquidity_service import LiquidityService
+
+    monkeypatch.setattr(
+        LiquidityService, "distribute_protocol_fees", staticmethod(_fees_ok)
+    )
+    await _as_admin(client, admin_user)
+
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "definitely-not-it"},
+    )
+
+    assert resp.status_code >= 400
+    assert resp.json().get("error_code") == "STEP_UP_PASSWORD_INVALID"
+
+    step_ups = await _rows(db_session, AdminAuditEvent.action == "step_up_failed")
+    assert len(step_ups) == 1, (
+        "a failed step-up was not recorded - repeated guessing at privileged "
+        "credentials is exactly the thing worth a row"
+    )
+    assert step_ups[0].success == "failure"
+
+
+@pytest.mark.asyncio
+async def test_correct_password_allows_the_action(
+    client: AsyncClient, db_session, admin_user, monkeypatch
+):
+    from app.services.liquidity_service import LiquidityService
+
+    monkeypatch.setattr(
+        LiquidityService, "distribute_protocol_fees", staticmethod(_fees_ok)
+    )
+    await _as_admin(client, admin_user)
+
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "Admin!Pass1"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    rows = await _rows(db_session, AdminAuditEvent.action == "protocol_fees_distributed")
+    assert len(rows) == 1, "a successful step-up did not produce an audit row"
+
+
+@pytest.mark.asyncio
+async def test_2fa_admin_cannot_downgrade_to_password_only(
+    client: AsyncClient, db_session, admin_user, monkeypatch
+):
+    """The server decides the required factor, not the client.
+
+    A client that simply omitted `code` would otherwise quietly reduce a
+    2FA-protected action to password-only - which is precisely the shape of
+    attack step-up exists to prevent, and it would be a downgrade nobody had to
+    work for.
+    """
+    from app.services.liquidity_service import LiquidityService
+
+    monkeypatch.setattr(
+        LiquidityService, "distribute_protocol_fees", staticmethod(_fees_ok)
+    )
+    admin_user.is_2fa_enabled = True
+    admin_user.totp_secret_encrypted = "irrelevant-for-this-assertion"
+    await db_session.commit()
+
+    await _as_admin(client, admin_user)
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "Admin!Pass1"},  # correct password, no code
+    )
+
+    assert resp.status_code >= 400, (
+        "a 2FA-enabled admin completed a privileged action without a TOTP code"
+    )
+    assert resp.json().get("error_code") == "STEP_UP_2FA_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_step_up_is_friction_limited_so_it_is_not_a_password_oracle(
+    client: AsyncClient, db_session, admin_user, monkeypatch
+):
+    """Adding a password check to an endpoint turns it into a brute-force oracle.
+
+    The per-IP limit alone is not enough - an attacker rotating source addresses
+    gets a fresh allowance each time. So failures feed the same progressive
+    friction the login path uses for the same password; otherwise the admin's
+    password would be guarded strictly at sign-in and not at all here.
+
+    Rate limiting is switched on for this test alone: `conftest` disables it
+    suite-wide, which would otherwise make this assertion pass vacuously - the
+    same trap that would have let the CORS preflight bug through.
+    """
+    from app.config import settings as app_settings
+    from app.services.liquidity_service import LiquidityService
+
+    monkeypatch.setattr(app_settings, "rate_limit_enabled", True)
+
+    monkeypatch.setattr(
+        LiquidityService, "distribute_protocol_fees", staticmethod(_fees_ok)
+    )
+    await _as_admin(client, admin_user)
+
+    statuses = []
+    for _ in range(8):
+        resp = await client.post(
+            "/api/v1/admin/distribute-protocol-fees",
+            json={"password": f"wrong-guess-{_}"},
+        )
+        statuses.append(resp.status_code)
+        if resp.status_code == 429:
+            break
+
+    assert 429 in statuses, (
+        f"eight wrong passwords never throttled the step-up: {statuses}. This is "
+        "a password oracle with an IP-based limit and nothing else."
+    )
