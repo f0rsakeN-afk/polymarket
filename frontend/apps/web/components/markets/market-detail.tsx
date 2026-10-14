@@ -11,6 +11,7 @@ import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHisto
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { useMarketSocket, WS_GAP, WS_RESYNC } from "@/hooks/use-market-socket"
+import { usePriceAnnouncer } from "@/lib/price-announcer"
 import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -142,6 +143,20 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     marketIdRef.current = market?.id
   }, [market?.id])
 
+  // Announcements. `lastAnnouncedRef` is what makes the spoken "from" match what
+  // the user was last told rather than the previous tick - see lib/price-announcer,
+  // where ten 0.3-point ticks are meant to read as one 3-point move.
+  const { announce: announcePrice, enabled: announcePricesEnabled } = usePriceAnnouncer()
+  // The outcome's display name, for the binary branch where the frame carries no
+  // outcome_prices to name it with. Read through a ref so the WS handler does not
+  // take `market` as a dependency and re-subscribe the socket on every load.
+  const yesOutcomeNameRef = useRef<string>("Yes")
+  useEffect(() => {
+    // `outcomes` is always populated on the detail endpoint (unlike the list
+    // response), and the first one is the market's primary outcome.
+    yesOutcomeNameRef.current = market?.outcomes?.[0]?.name ?? "Yes"
+  }, [market?.outcomes])
+
   const handleWSMessage = useCallback((data: unknown) => {
     const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; volume?: number; winning_outcome_name?: string; id?: string; market_id?: string; market_slug?: string; market_question?: string; outcome?: string; side?: string; price?: string | number; amount?: string | number; executed_at?: string | null; username?: string }
 
@@ -211,6 +226,43 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             msg
           ) as typeof prev
       )
+
+      // Speak it, for users who asked to hear it.
+      //
+      // Off by default and opt-in, because a live market produces frames many
+      // times a second and speech cannot keep up - see lib/price-announcer for
+      // the coalescing. Staged here, where the frame is already being interpreted,
+      // rather than inside a price component: one place per socket means one
+      // market cannot be announced twice by two components showing the same
+      // number, which would double every announcement.
+      if (announcePricesEnabled) {
+        const now = Date.now()
+        for (const [name, price] of Object.entries(msg.outcome_prices ?? {})) {
+          if (typeof price !== "number" || !Number.isFinite(price)) continue
+          announcePrice({
+            marketId: `${slug}:${name}`,
+            outcome: name,
+            // `from` is deliberately the new price. The announcer keeps its own
+            // baseline of what it last *spoke* and ignores this. Handing it a
+            // second, per-frame baseline from here is precisely what would let
+            // the spoken "from" drift away from what the user actually heard.
+            from: price,
+            to: price,
+            at: now,
+          })
+        }
+        // Binary frames carry yes_price/no_price and no outcome_prices at all, so
+        // an outcome-prices-only reader would be silent on most markets.
+        if (!msg.outcome_prices && typeof msg.yes_price === "number" && Number.isFinite(msg.yes_price)) {
+          announcePrice({
+            marketId: slug,
+            outcome: yesOutcomeNameRef.current,
+            from: msg.yes_price,
+            to: msg.yes_price,
+            at: now,
+          })
+        }
+      }
     }
     if (msg.type === "market:resolved") {
       sileo.info({
@@ -262,7 +314,12 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(slug) })
       queryClient.invalidateQueries({ queryKey: ["market-trades", slug] })
     }
-  }, [slug, queryClient])
+    // `announcePrice` and `announcePricesEnabled` are real dependencies, not noise:
+    // they change when the user turns announcements on or off, and leaving them
+    // out would mean the handler stays stale until the socket is torn down and
+    // rebuilt - so the preference would appear to do nothing until they navigated
+    // away and back. Re-subscribing on a preference change is cheap and correct.
+  }, [slug, queryClient, announcePrice, announcePricesEnabled])
 
   const { status: wsStatus } = useMarketSocket({
     marketId: market?.id ?? "",
