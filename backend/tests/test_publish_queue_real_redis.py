@@ -6,14 +6,15 @@ resync - and useless for testing the *machine*. A queue can implement every rule
 correctly and still fall over at depth, because the thing it is buffering against
 is a Redis round trip it has never actually made.
 
-`load_realtime`'s burst phase has the same blind spot, and worse: it enqueues
-`_make_noop` operations, so it measures the queue's internal bookkeeping and
-reports a healthy drain while nothing is ever published anywhere.
-
 So these run the writers against real Redis at the configured depths. Speed is
 deliberately not asserted - that belongs to `harness/bench_publish_queue.py` and
 would be flaky here - but *correctness at depth* is a property of the code and
 can be pinned.
+
+(`load_realtime`'s burst phase had the same blind spot: it enqueued `_make_noop`
+operations and reported a healthy drain while nothing was ever published anywhere.
+Fixed - it now enqueues the app's own publish op. This file remains the one that
+sweeps depth, which is what pins the two queue settings.)
 """
 
 import asyncio

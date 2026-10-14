@@ -34,6 +34,22 @@ from app.middleware.metrics import (
     WS_SUBSCRIPTIONS,
 )
 from app.redis import get_redis, redis_cb
+
+# Channel names, key names and the resync marker live in `app.websocket.channels`
+# so the harnesses can name them without importing the application - see that
+# module's docstring for why that drift is the failure worth designing against.
+#
+# Re-exported here because `from app.websocket.manager import market_events_channel`
+# is the established import throughout the codebase, and one definition of each
+# name matters more than where the definition physically sits.
+from app.websocket.channels import (  # noqa: F401 - re-exported, see above
+    GLOBAL_TRADES_CHANNEL,
+    WS_RESYNC,
+    market_events_channel,
+    market_seq_key,
+    user_fills_channel,
+    user_notifications_channel,
+)
 from app.websocket.publish_queue import Delivery, Pending, PublishDispatcher
 
 # Bound concurrent broadcast tasks to avoid OOM at 5k msg/s (H9 fix)
@@ -44,10 +60,12 @@ _broadcast_sem = asyncio.Semaphore(200)
 # keys when unsubscribing from Redis, which is why the sentinel is namespaced.
 GLOBAL_TRADES_KEY = "__global_trades__"
 
-# Exact Redis channel carrying the platform-wide trade feed.
-# Matched as a whole string, never by prefix: it splits into two `:`-separated
-# parts, so prefix routing ("global" matches no known prefix) dropped it.
-GLOBAL_TRADES_CHANNEL = "global:trades"
+# `GLOBAL_TRADES_CHANNEL` now lives in `app.websocket.channels` alongside every
+# other wire name, and is re-exported below.
+#
+# Its one subtlety, preserved here because it cost a bug: it must be matched as a
+# whole string, never by prefix. It splits into two `:`-separated parts, so
+# prefix routing ("global" matches no known prefix) silently dropped it.
 
 
 class GridFlushStats:
@@ -137,39 +155,6 @@ def next_grid_interval(
         # cadence is the thing making them stale.
         return max(floor, current * 0.5)
     return min(base, current + step)
-
-
-# Marker telling a client its private feed has a hole it should repair.
-#
-# Must stay byte-identical to `WS_RESYNC` in
-# `frontend/apps/web/lib/ws-resync.ts`. It is a wire contract with no shared
-# schema behind it, which is exactly the kind of thing that drifts silently -
-# the server would send a frame the client does not recognise and the resync
-# would simply never happen, with nothing failing anywhere. The value is pinned
-# by a test for that reason.
-WS_RESYNC = "__ws_resync__"
-
-
-def market_events_channel(market_id: str) -> str:
-    """The single Redis channel carrying every frame for one market.
-
-    Price updates used to go to a separate `market:{id}:price` channel from
-    everything else. Two channels for one logical feed is two orderings: the
-    publishes are independent round-trips, so two concurrent orders could land
-    as price(A), price(B), trade(A), trade(B), book(A), book(B) and every client
-    would render a book that contradicted the price printed beside it, with no
-    way to detect it. One channel is one order.
-
-    The `market:{id}:price` *key* (an HSET cache read by `market_service`) is
-    unaffected - it was never a channel and is still written by every price
-    publish.
-    """
-    return f"market:{market_id}:events"
-
-
-def market_seq_key(market_id: str) -> str:
-    """Counter backing the per-market frame sequence number."""
-    return f"market:{market_id}:seq"
 
 
 # Atomic "allocate a sequence number and publish it" script.
@@ -1658,8 +1643,8 @@ class RedisPubSub:
 
     async def subscribe_user(self, user_id: str):
         await self._acquire(
-            f"user:{user_id}:fills",
-            f"user:{user_id}:notifications",
+            user_fills_channel(user_id),
+            user_notifications_channel(user_id),
         )
 
     async def unsubscribe_user(self, user_id: str):
@@ -1672,8 +1657,8 @@ class RedisPubSub:
         on every tick whether or not the user was still connected.
         """
         await self._release(
-            f"user:{user_id}:fills",
-            f"user:{user_id}:notifications",
+            user_fills_channel(user_id),
+            user_notifications_channel(user_id),
         )
 
     async def subscribe_global_trades(self):
@@ -1712,7 +1697,7 @@ class RedisPubSub:
         """
         async def _op():
             await self._redis.publish(
-                f"user:{user_id}:notifications",
+                user_notifications_channel(user_id),
                 json.dumps({"type": WS_RESYNC}),
             )
 
@@ -1834,7 +1819,7 @@ class RedisPubSub:
 
         async def _op():
             await self._redis.publish(
-                f"user:{user_id}:fills",
+                user_fills_channel(user_id),
                 json.dumps({**order_data, "type": "order:fill"}),
             )
 
@@ -1849,7 +1834,7 @@ class RedisPubSub:
 
         async def _op():
             await self._redis.publish(
-                f"user:{user_id}:notifications",
+                user_notifications_channel(user_id),
                 json.dumps({**data, "type": "notification"}),
             )
 
@@ -1876,13 +1861,40 @@ class RedisPubSub:
 
         async def _op():
             await self._redis.publish(
-                f"user:{user_id}:notifications", json.dumps(frame)
+                user_notifications_channel(user_id), json.dumps(frame)
             )
 
         # `position:update` travels this path, so the frame name is the caller's
         # declared type - that is what makes the queue classify it as critical.
         self.enqueue_publish(_op, frame=frame.get("type") or "user_event",
                              label="user_event", owe_resync_to=user_id)
+
+    def market_publish_op(
+        self, market_id: str, event_type: str, data: dict | None = None
+    ):
+        """The unit of work that bumps a market's `seq` and publishes to its channel.
+
+        Split out of `publish_market_event` so the queue's payload and the load
+        harness's payload are *the same code*. When the Lua was inlined here, the
+        harness had to either await the public method (which re-enters the queue,
+        so the burst would be serialised and measure nothing) or re-implement the
+        Lua itself (so the thing being measured was not the thing that ships).
+
+        Returns a coroutine function rather than performing the publish, because
+        the queue is what decides *when* it happens.
+        """
+        frame = {"type": event_type, "market_id": market_id, **(data or {})}
+
+        async def _op():
+            await self._redis.eval(
+                _SEQ_AND_PUBLISH_LUA,
+                2,
+                market_seq_key(market_id),
+                market_events_channel(market_id),
+                self._seq(market_id, frame),
+            )
+
+        return _op
 
     async def publish_market_event(self, market_id: str, event_type: str, data: dict | None = None):
         """Push any market-scoped frame (`trade:new`, `orderbook:update`, ...).
@@ -1894,20 +1906,15 @@ class RedisPubSub:
         if not self._redis:
             return
 
-        async def _op():
-            await self._redis.eval(
-                _SEQ_AND_PUBLISH_LUA,
-                2,
-                market_seq_key(market_id),
-                market_events_channel(market_id),
-                self._seq(market_id, {"type": event_type, "market_id": market_id, **(data or {})}),
-            )
-
         # The event type drives the delivery class: `orderbook:update` and
         # `trade:new` must not vanish, `market:price_update` may. Market-scoped
         # frames have no private channel, so overflow relies on the `seq` gap to
         # drive the client's refetch - which is automatic.
-        self.enqueue_publish(_op, frame=event_type, label="market_event")
+        self.enqueue_publish(
+            self.market_publish_op(market_id, event_type, data),
+            frame=event_type,
+            label="market_event",
+        )
 
     async def publish_global_trade(self, trade_data: dict):
         """Push to the platform-wide trade feed.

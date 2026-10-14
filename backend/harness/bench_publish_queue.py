@@ -8,11 +8,16 @@ but that number comes from `load_realtime`'s fan-out phase, which measures
 **in-process socket fan-out**. It says nothing about the thing the writers
 actually do, which is a round trip to Redis.
 
-The existing burst phase in `load_realtime` enqueues `_make_noop` operations, so
-it measures the queue's internal plumbing and never touches Redis at all. Which
-means the writer pool has never been observed doing its job against the system it
-publishes to. Everything downstream of that assumption - the pool size, both
-depths, and the alert thresholds written to match - rests on it.
+This bench was written because `load_realtime`'s burst phase enqueued `_make_noop`
+operations: it measured the queue's internal plumbing and never touched Redis at
+all, so the writer pool had never been observed doing its job against the system
+it publishes to.
+
+That has since been fixed - `load_realtime` phase 7 now enqueues the app's own
+`market_publish_op` and counts frames on a subscribed socket. What this bench adds
+on top is the **depth sweep**, which is what sets `publish_queue_critical` and
+`publish_queue_ephemeral`: where the queue starts coalescing ephemeral frames, and
+where it starts refusing to drop critical ones.
 
 Queue depth is only meaningful relative to drain rate. A 20,000-frame queue is a
 generous buffer or a trivial one depending entirely on how fast writers retire
