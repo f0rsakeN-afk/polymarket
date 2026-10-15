@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { LogOut, Monitor, Moon, Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
+import { Gavel, Landmark, LogOut, Monitor, Moon, Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
 import { sileo } from "sileo"
 
 import { useTheme } from "next-themes"
@@ -11,7 +11,7 @@ import { useTheme } from "next-themes"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { api } from "@workspace/api-client/client"
 import { Spinner } from "@workspace/ui/components/spinner"
-import { Button } from "@workspace/ui/components/button"
+import { Button, buttonVariants } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +23,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 const SECTIONS = [
   { href: "/users", icon: Users, label: "Users" },
+  { href: "/disputes", icon: Gavel, label: "Disputes" },
   { href: "/markets", icon: Scale, label: "Moderation" },
+  { href: "/treasury", icon: Landmark, label: "Treasury" },
   { href: "/audit", icon: ScrollText, label: "Audit trail" },
 ]
 
@@ -44,23 +46,60 @@ const SECTIONS = [
  * whose destination depends on configuration is a redirect whose behaviour
  * depends on something the operator cannot see.
  */
-function NoAccess() {
+/**
+ * Two states, not one.
+ *
+ * A signed-out operator and a signed-in non-operator are different problems with
+ * different fixes, and showing them the same screen makes one of them
+ * unactionable. Before, both landed on "Admin access required" with a link to the
+ * storefront — a dead end for anyone not already signed in elsewhere.
+ *
+ * The distinction is `user` rather than `user?.is_admin`, because the gate cannot
+ * distinguish "not an admin" from "not signed in" by looking at a failed check
+ * alone: both arrive as an absent `is_admin`.
+ *
+ * This is the second line of defence, not the first. `proxy.ts` sends everyone but
+ * an admin here already; this covers the cases the proxy cannot see — a cookie
+ * replay that did not land, a `matcher` that missed a prefix, an account whose
+ * admin flag was revoked mid-session.
+ */
+function NoAccess({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
       <div className="max-w-md space-y-4 text-center">
         <ShieldAlert className="mx-auto size-8 text-destructive" />
-        <h1 className="text-lg font-semibold">Admin access required</h1>
+        <h1 className="text-lg font-semibold">
+          {signedIn ? "Admin access required" : "Sign in to continue"}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          This account does not have admin access, so there is nothing to show
-          here.
+          {signedIn
+            ? "This account does not have admin access, so there is nothing to show here."
+            : "You are not signed in. Admin access is granted per account."}
         </p>
+
+        <div className="space-y-2">
+          <Link
+            href="/login"
+            className={cn(
+              buttonVariants({ variant: signedIn ? "outline" : "default", size: "sm" }),
+              "w-full"
+            )}
+          >
+            {signedIn ? "Sign in as someone else" : "Sign in"}
+          </Link>
+          <a
+            href={process.env.NEXT_PUBLIC_SITE_URL ?? "/"}
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-full")}
+          >
+            Go to the site
+          </a>
+        </div>
+
         <p className="text-xs text-muted-foreground">
-          If that is unexpected, ask an existing admin to check your role — the
-          attempt is recorded in the audit trail.
+          {signedIn
+            ? "If that is unexpected, ask an existing admin to check your role — the attempt is recorded in the audit trail."
+            : "Signing in here does not sign you in anywhere else."}
         </p>
-        <Button variant="outline" size="sm" className="w-full">
-          <a href={process.env.NEXT_PUBLIC_SITE_URL ?? "/"}>Go to the site</a>
-        </Button>
       </div>
     </div>
   )
@@ -117,7 +156,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (!user?.is_admin) return <NoAccess />
+  if (!user?.is_admin) return <NoAccess signedIn={Boolean(user)} />
 
   return (
     <div className="flex min-h-dvh flex-col">

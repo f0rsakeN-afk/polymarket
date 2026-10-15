@@ -19,11 +19,13 @@ from app.api.step_up import require_step_up
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.audit import AdminAuditEvent, AuthAuditEvent
+from app.models.dispute import Dispute
 from app.models.market import (
     STATUS_ACTIVE,
     STATUS_PENDING_REVIEW,
     STATUS_REJECTED,
     Market,
+    Outcome,
 )
 from app.models.user import RefreshToken, Session, User
 from app.schemas.auth import StepUpRequest
@@ -376,6 +378,156 @@ async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(
 
     logger.info(f"User {user.id} unbanned by admin {admin.id}")
     return success_response({"status": "unbanned", "user_id": str(user.id)}, message="User unbanned")
+
+
+@router.get("/disputes", summary="List disputes for moderation (admin)")
+async def list_disputes(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    status: str | None = Query("open", max_length=20),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """The moderation queue for disputes.
+
+    ## Why this had to be added
+
+    Adjudication existed as an endpoint and now has an audit trail and step-up, and
+    there was still no way to *find* a dispute to rule on: the only read was
+    `GET /disputes/market/{market_id}`, which needs a market id you already have.
+    A moderator given "someone disputed X" could not get to the ruling from here.
+
+    Evidence and the market's question come along in the same row. A ruling
+    without the claim being disputed is a coin toss with a payout attached, and
+    making the moderator open the market first would mean the decision is taken
+    away from the evidence.
+    """
+    admin = await _get_admin_user(request, db)
+    _ = admin  # authorisation happens here; the actor is recorded on the ruling
+
+    # `"all"` is a literal, not a status - there is no dispute in that state, so
+    # it is a filter for "do not filter". Anything else is matched exactly.
+    #
+    # The condition is *omitted* rather than passed as `None`, because
+    # `Select.where(None)` does not mean "no filter" in SQLAlchemy 2: it compiles
+    # to `WHERE NULL`, which is false for every row. An unfiltered queue that
+    # silently returns nothing is a moderation queue that looks empty - the worst
+    # possible failure, because it looks like a quiet day rather than a broken
+    # query. (My first attempt at this filter was the opposite mistake - a
+    # conditional expression that read as if `None` were a no-op - and the test
+    # asserting that `?status=all` returns ruled disputes is what caught it.)
+    condition = None if status in (None, "", "all") else Dispute.status == status
+
+    count_stmt = select(func.count()).select_from(Dispute)
+    rows_stmt = (
+        select(Dispute, Market)
+        .join(Market, Market.id == Dispute.market_id)
+        # Oldest first, deliberately: a dispute is waiting on the people holding
+        # the money, and the one that has waited longest is costing them the most.
+        # Newest-first is what an audit log wants; this is a work queue, and the
+        # two want opposite orders.
+        .order_by(Dispute.created_at)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    if condition is not None:
+        count_stmt = count_stmt.where(condition)
+        rows_stmt = rows_stmt.where(condition)
+
+    total = int(await db.scalar(count_stmt) or 0)
+    rows = (await db.execute(rows_stmt)).all()
+
+    from app.models.user import User as _User
+
+    data = []
+    for dispute, market in rows:
+        proposer = await db.get(_User, dispute.user_id)
+        data.append(
+            {
+                "id": str(dispute.id),
+                "market_id": str(dispute.market_id),
+                "market_slug": market.slug,
+                "market_question": market.question,
+                "market_status": market.status,
+                "proposed_outcome_id": (
+                    str(market.proposed_outcome_id) if market.proposed_outcome_id else None
+                ),
+                "user_id": str(dispute.user_id),
+                "proposer_username": getattr(proposer, "username", None),
+                "evidence": dispute.evidence,
+                "evidence_url": dispute.evidence_url,
+                "status": dispute.status,
+                "created_at": dispute.created_at,
+            }
+        )
+
+    return PaginatedResponse(
+        data=data,
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < total,
+    )
+
+
+@router.get("/disputes/{dispute_id}", summary="Get dispute detail (admin)")
+async def get_dispute(
+    dispute_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """One dispute with its market and proposed outcome.
+
+    Modelled on the market's `resolution_criteria`, which is what an upheld ruling
+    is judged against - so the evidence and the criterion can be read side by side
+    rather than in two tabs and a memory.
+    """
+    await _get_admin_user(request, db)
+
+    result = await db.execute(
+        select(Dispute, Market)
+        .join(Market, Market.id == Dispute.market_id)
+        .where(Dispute.id == _parse_dispute_id(dispute_id))
+    )
+    row = result.one_or_none()
+    if not row:
+        raise NotFoundError("Dispute not found")
+    dispute, market = row
+
+    proposed_name = None
+    if market.proposed_outcome_id:
+        outcome = await db.get(Outcome, market.proposed_outcome_id)
+        proposed_name = getattr(outcome, "name", None)
+
+    return success_response(
+        {
+            "id": str(dispute.id),
+            "market_id": str(dispute.market_id),
+            "market_slug": market.slug,
+            "market_question": market.question,
+            "market_status": market.status,
+            "resolution_criteria": market.resolution_criteria,
+            "resolution_source": market.resolution_source,
+            "proposed_outcome_id": (
+                str(market.proposed_outcome_id) if market.proposed_outcome_id else None
+            ),
+            "proposed_outcome_name": proposed_name,
+            "user_id": str(dispute.user_id),
+            "evidence": dispute.evidence,
+            "evidence_url": dispute.evidence_url,
+            "status": dispute.status,
+            "created_at": dispute.created_at,
+        }
+    )
+
+
+def _parse_dispute_id(dispute_id: str):
+    """Reject malformed ids as 422 rather than letting asyncpg raise inside a
+    session left in a failed state."""
+    try:
+        return uuid.UUID(dispute_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValidationError("Invalid dispute id", error_code="INVALID_ID")
 
 
 @router.get("/audit-events", summary="List auth audit events (admin)")

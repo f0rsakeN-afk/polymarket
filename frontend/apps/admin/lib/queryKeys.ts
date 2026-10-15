@@ -20,4 +20,15 @@ export const queryKeys = {
     ["admin", "markets", status, page] as const,
   adminActions: (page: number, filters: Record<string, string | undefined>) =>
     ["admin", "actions", page, filters] as const,
+  adminDisputes: (status: string, page: number) =>
+    ["admin", "disputes", status, page] as const,
+  adminDispute: (disputeId: string) => ["admin", "dispute", disputeId] as const,
+  /**
+   * Not under the `admin` root on purpose. A treasury read is served from
+   * `GET /treasury`, which is the same read a settlement job makes - and
+   * invalidating the whole admin cache would refetch every operator list because
+   * a balance changed. Keyed by what it *is*, so only things that can actually
+   * move a balance invalidate it.
+   */
+  treasury: () => ["treasury", "summary"] as const,
 }

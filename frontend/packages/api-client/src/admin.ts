@@ -110,6 +110,61 @@ export interface BanResult {
 }
 
 /**
+ * A dispute as it appears in the moderation queue.
+ *
+ * `market_question` and `evidence` travel in the same row on purpose. A ruling
+ * taken from the summary line alone is a coin toss with a payout attached, and
+ * making the moderator open the market in another tab means the decision gets
+ * made from memory.
+ */
+export interface AdminDisputeRow {
+  id: string
+  market_id: string
+  market_slug: string
+  market_question: string
+  market_status: string
+  proposed_outcome_id: string | null
+  user_id: string
+  proposer_username: string | null
+  evidence: string | null
+  evidence_url: string | null
+  status: string
+  created_at: string
+}
+
+export interface AdminDisputeDetail extends AdminDisputeRow {
+  /** The criterion an upheld ruling is judged against. */
+  resolution_criteria: string | null
+  resolution_source: string | null
+  proposed_outcome_name: string | null
+}
+
+export interface AdjudicateResult {
+  dispute_id: string
+  ruling: string
+  /** `null` when the ruling did not resolve the market - not every uphold ends here. */
+  market_status: string | null
+}
+
+export interface TreasurySummary {
+  balance: string
+  total_fees_collected: string
+  total_fees_distributed: string
+}
+
+export interface FeeDistributionResult {
+  total_distributed: string
+  markets_processed: number
+}
+
+/** Step-up credentials, attached to a privileged write. */
+export interface StepUpBody {
+  password: string
+  /** Omitted unless the server asks for it - see `useStepUp`. */
+  code?: string
+}
+
+/**
  * Query strings built by hand, one key at a time.
  *
  * Absent filters are *omitted* rather than sent empty. Beyond producing URLs
@@ -196,6 +251,50 @@ export const adminApi = {
         event: params.event,
         success: params.success,
       })}`
+    ),
+
+  /**
+   * The dispute queue. Defaults to open, oldest first.
+   *
+   * `status: "all"` because "why did that one get rejected?" is a real question
+   * with no other way to answer it, and a queue that only shows pending work
+   * cannot answer it.
+   */
+  disputes: (params: { status?: string; page?: number; pageSize?: number } = {}) =>
+    api.get<Page<AdminDisputeRow>>(
+      `/api/v1/admin/disputes${qs({
+        status: params.status ?? "open",
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 25,
+      })}`
+    ),
+
+  dispute: (disputeId: string) =>
+    api.get<NormalizedResponse<AdminDisputeDetail>>(`/api/v1/admin/disputes/${disputeId}`),
+
+  /**
+   * Rule on a dispute.
+   *
+   * Not under `/admin` because it is not an administrative setting - it is the
+   * market's own resolution path, and an admin reaching it through the admin
+   * namespace would suggest the two are interchangeable.
+   */
+  adjudicate: (
+    disputeId: string,
+    body: { ruling: "upheld" | "dismissed"; admin_note?: string } & StepUpBody
+  ) =>
+    api.post<NormalizedResponse<AdjudicateResult>>(
+      `/api/v1/disputes/${disputeId}/adjudicate`,
+      body
+    ),
+
+  treasury: () =>
+    api.get<NormalizedResponse<TreasurySummary>>("/api/v1/treasury"),
+
+  distributeProtocolFees: (body: StepUpBody) =>
+    api.post<NormalizedResponse<FeeDistributionResult>>(
+      "/api/v1/admin/distribute-protocol-fees",
+      body
     ),
 }
 

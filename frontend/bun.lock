@@ -35,6 +35,7 @@
       "dependencies": {
         "@tanstack/react-query": "^5.103.1",
         "@workspace/api-client": "workspace:*",
+        "@workspace/schemas": "workspace:*",
         "@workspace/ui": "workspace:*",
         "lucide-react": "^1.37.0",
         "next": "^16.3.3",
@@ -68,6 +69,7 @@
       "dependencies": {
         "@tanstack/react-virtual": "^3.14.9",
         "@workspace/api-client": "workspace:*",
+        "@workspace/schemas": "workspace:*",
         "@workspace/ui": "workspace:*",
         "lucide-react": "^1.37.0",
         "next": "^16.3.3",
@@ -120,6 +122,19 @@
         "globals": "^17.6.0",
         "typescript": "^5",
         "typescript-eslint": "^8.60.0",
+      },
+    },
+    "packages/schemas": {
+      "name": "@workspace/schemas",
+      "version": "0.0.0",
+      "dependencies": {
+        "zod": "^4.6.5",
+      },
+      "devDependencies": {
+        "@workspace/eslint-config": "workspace:*",
+        "@workspace/typescript-config": "workspace:*",
+        "eslint": "^9",
+        "typescript": "^7.0.2",
       },
     },
     "packages/typescript-config": {
@@ -857,6 +872,8 @@
     "@workspace/api-client": ["@workspace/api-client@workspace:packages/api-client"],
 
     "@workspace/eslint-config": ["@workspace/eslint-config@workspace:packages/eslint-config"],
+
+    "@workspace/schemas": ["@workspace/schemas@workspace:packages/schemas"],
 
     "@workspace/typescript-config": ["@workspace/typescript-config@workspace:packages/typescript-config"],
 
