@@ -9,21 +9,9 @@ export const queryKeys = {
   // Account
   deletionImpact: () => ["account", "deletion-impact"] as const,
 
-  // Admin
-  /**
-   * One root for every admin list, so a mutation can invalidate them all.
-   *
-   * `["admin", "users", ...]` would prefix-match only the users list, and
-   * banning a user has to refresh the detail view too - two lists drift apart
-   * otherwise and the operator sees a stale status until they navigate.
-   */
-  adminRoot: () => ["admin"] as const,
-  adminUsers: (page: number, search: string) => ["admin", "users", page, search] as const,
-  adminUser: (userId: string, include?: string[]) =>
-    ["admin", "user", userId, ...(include ?? [])] as const,
-  adminMarkets: (status: string, page: number) => ["admin", "markets", status, page] as const,
-  adminActions: (page: number, filters: Record<string, string | undefined>) =>
-    ["admin", "actions", page, filters] as const,
+  // Admin query keys live in `apps/admin`, which owns them. Duplicating
+  // them here would be two lists to keep in step, and the admin app has no
+  // use for the consumer keys above.
 
   // Markets
   /**

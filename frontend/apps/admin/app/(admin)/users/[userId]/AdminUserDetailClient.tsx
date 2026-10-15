@@ -5,9 +5,9 @@ import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
 import { ArrowLeft, TriangleAlert } from "lucide-react"
 
-import { adminApi, type AdminUserDetail } from "@/lib/api/admin"
-import { apiErrorMessage } from "@/lib/api/client"
-import { queryKeys } from "@/lib/api/queryKeys"
+import { adminApi, type AdminUserDetail } from "@workspace/api-client/admin"
+import { apiErrorMessage } from "@workspace/api-client/client"
+import { queryKeys } from "@/lib/queryKeys"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -143,7 +143,7 @@ export function AdminUserDetailClient({ userId }: { userId: string }) {
             {apiErrorMessage(error, "Unknown error")}
           </p>
           <Link
-            href="/admin/users"
+            href="/users"
             className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             <ArrowLeft className="size-3.5" />
@@ -164,7 +164,7 @@ export function AdminUserDetailClient({ userId }: { userId: string }) {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <Link
-            href="/admin/users"
+            href="/users"
             className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-ml-2")}
           >
             <ArrowLeft className="size-3.5" />

@@ -1,5 +1,5 @@
 import { api, apiErrorCode } from "./client"
-import type { NormalizedResponse } from "@/lib/api/client"
+import type { NormalizedResponse } from "./client"
 
 /**
  * The admin surface.

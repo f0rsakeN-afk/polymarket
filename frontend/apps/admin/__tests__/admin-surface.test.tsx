@@ -25,7 +25,7 @@ const adminApi = vi.hoisted(() => ({
   auditEvents: vi.fn(),
 }));
 
-vi.mock("@/lib/api/admin", () => ({ adminApi }));
+vi.mock("@workspace/api-client/admin", () => ({ adminApi }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -40,9 +40,9 @@ vi.mock("@/hooks/use-auth", () => ({
 
 vi.mock("sileo", () => ({ sileo: { success: vi.fn(), error: vi.fn() } }));
 
-import { AdminUsersClient } from "@/app/admin/users/AdminUsersClient";
-import { AdminUserDetailClient } from "@/app/admin/users/[userId]/AdminUserDetailClient";
-import { AdminAuditClient } from "@/app/admin/audit/AdminAuditClient";
+import { AdminUsersClient } from "@/app/(admin)/users/AdminUsersClient";
+import { AdminUserDetailClient } from "@/app/(admin)/users/[userId]/AdminUserDetailClient";
+import { AdminAuditClient } from "@/app/(admin)/audit/AdminAuditClient";
 
 function renderWithQuery(ui: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -120,7 +120,7 @@ describe("admin users", () => {
     renderWithQuery(<AdminUsersClient />);
     expect(await screen.findByText("trader@example.com")).toBeTruthy();
     expect(screen.getByRole("link", { name: /trader@example.com/ }).getAttribute("href")).toBe(
-      `/admin/users/${userRow.id}`
+      `/users/${userRow.id}`
     );
   });
 

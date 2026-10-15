@@ -6,9 +6,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { Ban, RotateCcw, Search } from "lucide-react"
 
-import { adminApi, type AdminUserRow } from "@/lib/api/admin"
-import { apiErrorMessage } from "@/lib/api/client"
-import { queryKeys } from "@/lib/api/queryKeys"
+import { adminApi, type AdminUserRow } from "@workspace/api-client/admin"
+import { apiErrorMessage } from "@workspace/api-client/client"
+import { queryKeys } from "@/lib/queryKeys"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
@@ -50,7 +50,7 @@ function UserRow({
     <TableRow className="hover:bg-accent/30">
       <TableCell>
         <Link
-          href={`/admin/users/${user.id}`}
+          href={`/users/${user.id}`}
           className="text-sm font-medium hover:underline"
         >
           {user.email}

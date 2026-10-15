@@ -1,27 +1,12 @@
 /**
- * NEXT_PUBLIC_API_URL / NEXT_PUBLIC_WS_URL are the API *origin*
- * (e.g. https://api.example.com) • NOT an origin+/api/v1.
+ * Re-exported from `@workspace/api-client`.
  *
- * Normalising here means a misconfigured value can never produce
- * `https://host//api/v1/...` (trailing slash) or `.../api/v1/api/v1/...`
- * (someone appending the prefix by hand). Server code that builds canonical
- * URLs can rely on the same normalised value.
+ * The origin normalisation lives in the package because `apps/admin` needs the
+ * identical value - a misconfigured `NEXT_PUBLIC_API_URL` has to be corrected the
+ * same way in both apps, or the operator tool ends up talking to a different
+ * origin than the storefront it was built to administer.
+ *
+ * This file keeps the ~11 existing `@/lib/config` imports (and the two test
+ * mocks of it) working unchanged.
  */
-function normalizeBase(raw: string | undefined, fallback: string): string {
-  const value = (raw ?? "").trim() || fallback
-  return value.replace(/\/+$/, "").replace(/\/api\/v1$/, "")
-}
-
-/** API origin • every client path in lib/api/* already starts with `/api/v1`. */
-const apiOrigin = normalizeBase(process.env.NEXT_PUBLIC_API_URL, "http://localhost:8000")
-const wsOrigin = normalizeBase(process.env.NEXT_PUBLIC_WS_URL, "ws://localhost:8000")
-
-export const config = {
-  apiUrl: apiOrigin,
-  wsUrl: wsOrigin,
-  /**
-   * Public origin for canonical URLs, robots and sitemap.
-   * Falls back to the deployed site origin when the API is not public.
-   */
-  siteUrl: normalizeBase(process.env.NEXT_PUBLIC_SITE_URL, apiOrigin),
-} as const
+export * from "@workspace/api-client/config"

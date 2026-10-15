@@ -3,8 +3,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
-import { adminApi } from "@/lib/api/admin"
-import { queryKeys } from "@/lib/api/queryKeys"
+import { adminApi } from "@workspace/api-client/admin"
+import { queryKeys } from "@/lib/queryKeys"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"

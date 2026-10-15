@@ -1,0 +1,12 @@
+/*
+ * Admin app styles.
+ *
+ * Imports the shared design tokens and nothing else - deliberately a subset of
+ * `apps/web/app/globals.css`. That file carries the price-tick keyframes, the
+ * shimmer and the scrollbar tweaks, all of which exist for live market data. An
+ * operator tool has no live data, so shipping those rules would be dead weight
+ * describing behaviour this app does not have.
+ *
+ * The trim is the point of a separate app: it is small because it needs less.
+ */
+@import "@workspace/ui/globals.css";

@@ -1,37 +1,36 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { redirect } from "next/navigation"
-import { ShieldAlert, Users, Scale, ScrollText } from "lucide-react"
+import { redirect, usePathname } from "next/navigation"
+import { Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
 
 import { useCurrentUser } from "@/hooks/use-auth"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { cn } from "@workspace/ui/lib/utils"
 
 const SECTIONS = [
-  { href: "/admin/users", icon: Users, label: "Users" },
-  { href: "/admin/markets", icon: Scale, label: "Moderation" },
-  { href: "/admin/audit", icon: ScrollText, label: "Audit trail" },
+  { href: "/users", icon: Users, label: "Users" },
+  { href: "/markets", icon: Scale, label: "Moderation" },
+  { href: "/audit", icon: ScrollText, label: "Audit trail" },
 ]
 
 /**
- * Admin shell.
+ * The admin shell: gate, then chrome.
  *
  * ## The gate is a redirect, not a hidden nav
  *
- * Non-admins are sent to `/` rather than shown an empty page. That matters
- * because the API enforces admin itself - this is not the security boundary, it
- * is not showing someone a navigation they cannot use. A 403 with the nav still
- * rendered reads as "the app is broken for admins", which is a support ticket
- * and a bad first impression of an operator tool.
+ * Non-admins are sent to the API origin rather than shown an empty page. That
+ * matters because the API enforces admin itself - this is not the security
+ * boundary, it is not showing someone a navigation they cannot use. A 403 with
+ * the nav still rendered reads as "the app is broken for admins", which is a
+ * support ticket and a bad first impression of an operator tool.
  *
- * ## Deliberately not a route group
+ * ## Why this app has no header, footer or footer nav
  *
- * `/admin` sits outside the `(app)` group so it does not inherit the consumer
- * header, footer and mobile navigation. An operator running disputes is not a
- * user browsing markets, and giving them the storefront chrome would waste the
- * screen on everything they are not doing.
+ * An operator running a dispute queue is not a user browsing markets, and
+ * inheriting the storefront chrome would spend the screen on everything they are
+ * not doing. That, along with a separate CSP that permits no websocket, is what
+ * a separate deployable buys.
  */
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading } = useCurrentUser()
@@ -47,7 +46,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }
 
   if (!user?.is_admin) {
-    redirect("/")
+    // Outbound, not `/`: there is no index here to fall back to, and a redirect
+    // to a 404 inside an operator tool is just a worse dead end.
+    redirect(process.env.NEXT_PUBLIC_SITE_URL ?? "/")
   }
 
   return (
@@ -79,6 +80,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               )
             })}
           </nav>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {user.email}
+          </span>
         </div>
       </header>
       <main className="container mx-auto w-full max-w-7xl flex-1 px-4 py-6">
