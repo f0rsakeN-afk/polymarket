@@ -25,7 +25,7 @@
  * mistyped password.
  */
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
@@ -106,7 +106,32 @@ export function AdminLoginClient({
     },
   })
 
-  const canSubmit = email.length > 0 && password.length > 0 && (!requiresCode || code.length === 6)
+  /**
+   * The rules come from `@workspace/schemas`, not from length checks restated here.
+   *
+   * `adminLoginSchema` is parameterised by `requiresCode` so there is one rule set
+   * rather than two: a hand-written `code.length === 6` sitting next to a zod
+   * email check is how a form ends up enforcing the password one way and the code
+   * another.
+   */
+  const parsed = useMemo(
+    () =>
+      adminLoginSchema.safeParse({
+        email,
+        password,
+        ...(requiresCode ? { totp_code: code } : {}),
+      }),
+    [email, password, code, requiresCode]
+  )
+  const canSubmit = parsed.success
+  const fieldError = (field: "email" | "password" | "totp_code"): string | null => {
+    if (parsed.success) return null
+    return parsed.error.issues.find((i) => i.path[0] === field)?.message ?? null
+  }
+
+  const emailProblem = fieldError("email")
+  const passwordProblem = fieldError("password")
+  const codeProblem = fieldError("totp_code")
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
@@ -161,8 +186,10 @@ export function AdminLoginClient({
                   autoFocus
                   value={email}
                   disabled={login.isPending}
+                  aria-invalid={emailProblem ? true : undefined}
                   onChange={(event) => setEmail(event.target.value)}
                 />
+                {emailProblem ? <FieldError role="alert">{emailProblem}</FieldError> : null}
               </Field>
 
               <Field>
@@ -173,9 +200,10 @@ export function AdminLoginClient({
                   autoComplete="current-password"
                   value={password}
                   disabled={login.isPending}
-                  aria-invalid={error ? true : undefined}
+                  aria-invalid={error || passwordProblem ? true : undefined}
                   onChange={(event) => setPassword(event.target.value)}
                 />
+                {passwordProblem ? <FieldError role="alert">{passwordProblem}</FieldError> : null}
               </Field>
 
               {requiresCode ? (
@@ -203,7 +231,8 @@ export function AdminLoginClient({
                       </InputOTPGroup>
                     )}
                   />
-                </Field>
+                {codeProblem ? <FieldError role="alert">{codeProblem}</FieldError> : null}
+              </Field>
               ) : null}
 
               {error ? (

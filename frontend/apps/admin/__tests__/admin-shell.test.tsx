@@ -58,13 +58,33 @@ beforeEach(() => {
 });
 
 describe("admin shell • gate", () => {
-  it("shows a non-admin an explanation, not a redirect", () => {
-    meResult.data = null;
+  it("shows a signed-in non-admin an explanation, not a redirect", () => {
+    meResult.data = { id: "u2", is_admin: false, email: "user@x.com", username: "someone" };
     renderShell();
 
     expect(screen.getByText(/admin access required/i)).toBeTruthy();
     // The loop was this exact pair of redirects. Neither may happen.
     expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("tells a signed-out operator to sign in, rather than blaming their account", () => {
+    // The two are different problems with different fixes. Told "admin access
+    // required" when they are simply not signed in, an operator's only move is to
+    // ask someone for access they did not need.
+    meResult.data = null;
+    renderShell();
+
+    expect(screen.getByText(/sign in to continue/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^sign in$/i })).toBeTruthy();
+  });
+
+  it("offers a way to swap accounts to a signed-in non-admin", () => {
+    meResult.data = { id: "u2", is_admin: false, email: "user@x.com", username: "someone" };
+    renderShell();
+
+    // Without this the gate is a dead end on a shared machine: the operator needs
+    // to sign in as themselves, and the only offered route was the storefront.
+    expect(screen.getByRole("link", { name: /sign in as someone else/i })).toBeTruthy();
   });
 
   it("does not redirect a non-admin to its own index", () => {
