@@ -1,22 +1,43 @@
 import { z } from "zod"
 
+import {
+  emailSchema as sharedEmail,
+  passwordSchema as sharedPassword,
+  totpCodeSchema as sharedTotpCode,
+} from "@workspace/schemas/auth"
+
+/**
+ * The email and password rules now live in `@workspace/schemas`, because the
+ * admin app validates the same two fields against the same API and a third copy
+ * is a third place for them to disagree. The local names are kept so the call
+ * sites in this app are untouched.
+ *
+ * One rule changed in the move and it is worth naming: `totp_code` used to be a
+ * bare `z.string().optional()`, which accepted `"abc"`. It now goes through
+ * `totpCodeSchema`, so a six-box field can no longer be submitted holding three
+ * characters. Nothing that previously succeeded can start failing — the API would
+ * have rejected it anyway.
+ *
+ * The import is aliased because this file's own `totpCodeSchema` below is a
+ * different shape on purpose: `{ code }` for the 2FA *setup* flow, which
+ * validates a provisioning code against a QR secret, rather than a bare string
+ * for a code an operator types at a login prompt. Collapsing the two would
+ * quietly apply one flow's rules to the other.
+ */
 export const emailSchema = z.object({
-  email: z.email("Please enter a valid email"),
+  email: sharedEmail,
 })
 
 export const passwordSchema = z.object({
   email: z.email(),
-  password: z.string().min(1, "Password is required"),
-  totp_code: z.string().optional(),
+  password: sharedPassword,
+  totp_code: sharedTotpCode.optional(),
 })
 
 export const loginSchema = z.object({
-  email: z.email("Please enter a valid email"),
-  password: z.string().min(1, "Password is required"),
-  totp_code: z
-    .string()
-    .regex(/^\d{6}$/)
-    .optional(),
+  email: sharedEmail,
+  password: sharedPassword,
+  totp_code: sharedTotpCode.optional(),
 })
 
 export const registerSchema = z.object({

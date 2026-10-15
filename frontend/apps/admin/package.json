@@ -15,6 +15,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.103.1",
     "@workspace/api-client": "workspace:*",
+    "@workspace/schemas": "workspace:*",
     "@workspace/ui": "workspace:*",
     "lucide-react": "^1.37.0",
     "next": "^16.3.3",

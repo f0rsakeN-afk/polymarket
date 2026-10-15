@@ -6,6 +6,23 @@ import { Toaster } from "sileo"
 
 import "sileo/styles.css"
 
+import { configureAuthRouting } from "@workspace/api-client/client"
+
+/**
+ * Route policy, declared at module scope.
+ *
+ * Every admin route needs a session, so the shared default — an empty public
+ * list — is already correct here. Declared explicitly anyway: "we rely on the
+ * default" is one refactor away from "nobody configured this", and the failure
+ * mode is an operator whose session expired being left on a dead page with no
+ * sign-in link and nothing to click.
+ *
+ * Module scope rather than an effect, so the very first request already carries
+ * the right policy — and the first request is usually the one that discovers the
+ * session is gone.
+ */
+configureAuthRouting({ publicPaths: [], loginPath: "/login" })
+
 /**
  * The admin app's providers.
  *

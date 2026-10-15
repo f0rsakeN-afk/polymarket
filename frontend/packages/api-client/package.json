@@ -19,6 +19,7 @@
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
     "./config": "./src/config.ts",
-    "./admin": "./src/admin.ts"
+    "./admin": "./src/admin.ts",
+    "./session": "./src/session.ts"
   }
 }

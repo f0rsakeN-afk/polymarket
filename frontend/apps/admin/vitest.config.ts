@@ -21,6 +21,8 @@ export default defineConfig({
       { find: /^@workspace\/ui\//, replacement: r("../../packages/ui/src/") },
       { find: /^@workspace\/api-client$/, replacement: r("../../packages/api-client/src/index.ts") },
       { find: /^@workspace\/api-client\//, replacement: r("../../packages/api-client/src/") },
+      { find: /^@workspace\/schemas$/, replacement: r("../../packages/schemas/src/index.ts") },
+      { find: /^@workspace\/schemas\//, replacement: r("../../packages/schemas/src/") },
       { find: /^@\//, replacement: r("./") },
     ],
     dedupe: ["react", "react-dom"],
