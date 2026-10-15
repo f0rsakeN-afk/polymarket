@@ -966,12 +966,18 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
         if not data.totp_code:
             await RateLimitService.record_failure(data.email, ip)
             await AuthAuditService.log_login_fail(db, data.email, ip, ua, "2fa_code_missing")
-            raise UnauthorizedError("2FA code required")
+            # A distinct code, because "2FA code required" and "wrong password" are
+            # different states and a client cannot reliably tell them apart by
+            # matching an English sentence - which silently shows a non-2FA admin
+            # a code field after a mistyped password, or the reverse. The
+            # step-up endpoint already answers this way (`STEP_UP_2FA_REQUIRED`);
+            # login was the inconsistency.
+            raise UnauthorizedError("2FA code required", error_code="LOGIN_2FA_REQUIRED")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
             await RateLimitService.record_failure(data.email, ip)
             await AuthAuditService.log_login_fail(db, data.email, ip, ua, "wrong_2fa_code")
-            raise UnauthorizedError("Invalid 2FA code")
+            raise UnauthorizedError("Invalid 2FA code", error_code="LOGIN_2FA_INVALID")
 
     await RateLimitService.reset_friction(data.email, ip)
     access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, ua)
