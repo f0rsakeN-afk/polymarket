@@ -3,8 +3,14 @@ FROM oven/bun:1.4-slim AS deps
 WORKDIR /app
 
 COPY package.json bun.lock turbo.json .npmrc ./
+# Every workspace needs its manifest present before a frozen install, or bun
+# resolves a different tree than the lockfile describes. A new workspace added
+# here but not above fails the build with a lockfile error that reads like a
+# corrupt lock rather than a missing line in this file.
 COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
 COPY packages/ui/package.json ./packages/ui/
+COPY packages/api-client/package.json ./packages/api-client/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 
@@ -18,19 +24,29 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=deps /app/apps/admin/node_modules ./apps/admin/node_modules
 COPY --from=deps /app/packages ./packages
 
 COPY package.json bun.lock turbo.json tsconfig.json .npmrc ./
 COPY apps/web/ ./apps/web/
+COPY apps/admin/ ./apps/admin/
 COPY packages/ ./packages/
 
 ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_WS_URL
+# Where the admin gate sends a non-admin. Defaults to the API origin, which is
+# correct for most deployments; set it when the storefront lives elsewhere.
+ARG NEXT_PUBLIC_SITE_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL} \
+    NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL} \
     NODE_ENV=production
 
-RUN bunx turbo build --filter=web
+# Both apps build in one image layer. They are separate deployables that happen
+# to share a base image, which is the shape that keeps one `bun install` and one
+# set of package versions - two images would be free to drift apart, and the
+# shared API transport is exactly the code that must not.
+RUN bunx turbo build --filter=web --filter=admin
 
 # ---------------------------------------------------------------------------
 

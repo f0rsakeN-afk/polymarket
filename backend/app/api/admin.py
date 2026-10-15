@@ -35,6 +35,7 @@ from app.services.cache_service import (
     cache_invalidate_market_lists,
 )
 from app.services.liquidity_service import LiquidityService
+from app.services.order_service import OrderService
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -276,6 +277,26 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         raise ForbiddenError("Cannot ban an admin")
 
     user.is_active = False
+    # Cancel resting orders BEFORE revoking sessions.
+    #
+    # A ban stops the user trading, so any open order becomes one they can never
+    # fill or cancel: their USDC stays reserved against a market they are locked
+    # out of, and they are unreachable to tell. Account deletion refuses for
+    # exactly this reason - a ban must not create the state deletion guards against.
+    #
+    # Cancelled here rather than refused-with-409, because a ban is often urgent
+    # (fraud, abuse) and a resting order is a reason to act *faster*, not a reason
+    # to make an admin wait. The funds are released, not confiscated: the balance
+    # is untouched and comes straight back on unban.
+    #
+    # Each order is cancelled through the ordinary `cancel_order` path, so the
+    # fund release and the resulting orderbook push are identical to a
+    # user-initiated cancel - every other client's book is stale the moment a
+    # resting order vanishes, and that has to be published for each one.
+    cancelled_orders = await OrderService.cancel_open_orders_for_user(
+        db, user, reason="account_banned"
+    )
+
     # Revoke all refresh tokens + sessions so the ban takes effect immediately
     # (access JWTs expire naturally within 15 min and are rejected via is_active).
     await db.execute(
@@ -302,11 +323,27 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         target_type="user",
         target_id=str(user.id),
         summary=f"Banned {user.email}",
-        payload={"email": user.email},
+        payload={
+            "email": user.email,
+            # Named in the audit because it is money: which orders were pulled and
+            # the funds released is the first question anyone asks after a ban.
+            "cancelled_order_ids": cancelled_orders,
+            "cancelled_order_count": len(cancelled_orders),
+        },
     )
 
-    logger.info(f"User {user.id} banned by admin {admin.id}")
-    return success_response({"status": "banned", "user_id": str(user.id)}, message="User banned")
+    logger.info(
+        f"User {user.id} banned by admin {admin.id}; "
+        f"cancelled {len(cancelled_orders)} open order(s)"
+    )
+    return success_response(
+        {
+            "status": "banned",
+            "user_id": str(user.id),
+            "cancelled_order_ids": cancelled_orders,
+        },
+        message=f"User banned; {len(cancelled_orders)} open order(s) cancelled",
+    )
 
 
 @router.patch("/users/{user_id}/unban", summary="Unban user (admin)")

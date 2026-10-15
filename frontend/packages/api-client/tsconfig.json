@@ -1,0 +1,12 @@
+{
+  "extends": "@workspace/typescript-config/react-library.json",
+  "compilerOptions": {
+    // `config.ts` reads `process.env`, which is a Next.js build-time substitution
+    // rather than a Node runtime guarantee. The node types are declared explicitly
+    // so the package type-checks in CI on its own - a consumer app's tsconfig
+    // happening to include them is not something a shared package can rely on.
+    "types": ["node"]
+  },
+  "include": ["."],
+  "exclude": ["node_modules", "dist"]
+}

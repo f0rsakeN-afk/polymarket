@@ -1,7 +1,16 @@
 {
   "$schema": "https://v2-10-12.turborepo.dev/schema.json",
   "ui": "tui",
-  "globalEnv": ["NODE_ENV"],
+  // Declared rather than left implicit. `config.ts` reads these at build time to
+  // bake the API origin into the bundle, so a cache hit keyed without them would
+  // serve one environment's API URL to another - which is not a lint nit, it is a
+  // way to ship a bundle pointing at the wrong backend.
+  "globalEnv": [
+    "NODE_ENV",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_WS_URL",
+    "NEXT_PUBLIC_SITE_URL",
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
