@@ -270,7 +270,14 @@ app = FastAPI(
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 if not origins:
-    raise ValueError("CORS_ORIGINS cannot be empty • set explicit origins (e.g. CORS_ORIGINS=http://localhost:3000)")
+    raise ValueError(
+        "CORS_ORIGINS cannot be empty. It is configuration, not a default - set it "
+        "in .env (see .env.example) or the environment. It must list EVERY "
+        "front-end origin: apps/web on :3000 and apps/admin on :3001. A missing "
+        "origin does not degrade an app, it signs it out permanently - the "
+        "preflight fails, /auth/me never returns, and the only clue is a console "
+        "CORS error."
+    )
 if "*" in origins:
     raise ValueError(
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "

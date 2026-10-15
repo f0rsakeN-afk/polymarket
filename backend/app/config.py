@@ -26,7 +26,18 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
 
     # CORS • comma-separated, must NOT contain wildcards when credentials=True
-    cors_origins: str = "http://localhost:3000"
+    # Comma-separated allowlist. Empty on purpose: this is configuration, not a
+    # default, and a default here would be a second copy of the origin list that
+    # drifts from `.env` without anything failing. `app.py` refuses to start on an
+    # empty value with an explicit message, which is the right failure - a loud
+    # one at boot rather than a silently-wrong CORS policy in a browser.
+    #
+    # Two origins are needed by default in development, because there are two
+    # front ends: `apps/web` on 3000 and `apps/admin` on 3001. See `.env.example`.
+    cors_origins: str = ""
+    # The storefront's public origin. The admin app redirects a non-admin here, so
+    # it must be set wherever the admin app is deployed on its own host.
+    site_url: str = ""
 
     # Database
     database_url: str = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase"
