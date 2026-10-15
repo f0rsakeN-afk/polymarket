@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { LogOut, Monitor, Moon, Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
+import { Gavel, Landmark, LogOut, Monitor, Moon, Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
 import { sileo } from "sileo"
 
 import { useTheme } from "next-themes"
@@ -11,7 +11,7 @@ import { useTheme } from "next-themes"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { api } from "@workspace/api-client/client"
 import { Spinner } from "@workspace/ui/components/spinner"
-import { Button } from "@workspace/ui/components/button"
+import { Button, buttonVariants } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +23,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 const SECTIONS = [
   { href: "/users", icon: Users, label: "Users" },
+  { href: "/disputes", icon: Gavel, label: "Disputes" },
   { href: "/markets", icon: Scale, label: "Moderation" },
+  { href: "/treasury", icon: Landmark, label: "Treasury" },
   { href: "/audit", icon: ScrollText, label: "Audit trail" },
 ]
 
