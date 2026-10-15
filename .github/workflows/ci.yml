@@ -101,6 +101,21 @@ jobs:
         working-directory: frontend/apps/web
         run: bun run test
 
+      - name: Unit tests • admin app
+        working-directory: frontend/apps/admin
+        run: bun run test
+
+      # The build, not just the type-check.
+      #
+      # `bun run build` caught two things no other check here did: a server
+      # component calling a client hook (the type-check accepted it, and only
+      # prerender rejected it), and a stale `.next` cache hiding a broken postcss
+      # chain. Both are invisible to lint, typecheck and unit tests, so the build
+      # is part of the gate rather than something only the slow job discovers.
+      - name: Production build • admin app
+        working-directory: frontend/apps/admin
+        run: bun run build
+
   e2e-production:
     name: E2E • production build
     runs-on: ubuntu-latest

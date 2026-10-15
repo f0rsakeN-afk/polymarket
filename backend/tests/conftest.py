@@ -46,6 +46,14 @@ if "CELERY_BROKER_URL" not in os.environ:
 # Rate limiting is an infrastructure concern, not under test here • and the
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# CORS origins are configuration, not a default (see `config.py`), so the suite
+# declares the ones it needs rather than inheriting whatever is in the developer's
+# `.env`. That inheritance is the trap: a test that passes locally because of your
+# local `.env` and fails in CI - where there is no `.env` - is a green check that
+# means nothing.
+#
+# Both front ends, so a test exercising the allowlist sees the real shape.
+os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:3001"
 # The `?token=` WebSocket fallback is OFF by default (it puts a JWT in URLs).
 # The websocket suite authenticates with it on purpose, so turn it on here and
 # let test_ws_query_token_is_off_by_default flip it back for the negative case.

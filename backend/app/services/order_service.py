@@ -1419,6 +1419,54 @@ class OrderService:
         )
 
     @staticmethod
+    async def cancel_open_orders_for_user(
+        db: AsyncSession,
+        user: User,
+        reason: str = "account_disabled",
+    ) -> list[str]:
+        """Cancel every resting order for a user, releasing what they lock.
+
+        Used when an account is disabled and can no longer trade. Without it a ban
+        strands funds: the user is unreachable, so they cannot cancel, and the
+        order stays in the book reserving their USDC against a market they are no
+        longer in.
+
+        Each order goes through `cancel_order` rather than a second copy of the
+        release logic. That is not tidiness - the release and the resulting
+        orderbook push have to be identical to a user-initiated cancel, because
+        every *other* client's book view is stale the moment a resting order
+        disappears. A second implementation would eventually drift from the first
+        and start publishing fills without releasing funds, which is the kind of
+        divergence that shows up as a wallet that does not add up.
+
+        A per-order failure is tolerated and reported rather than aborting the
+        sweep: one order that raced to `filled` must not leave the rest locked.
+        """
+        cancelled: list[str] = []
+        result = await db.execute(
+            select(Order.id)
+            .where(Order.user_id == user.id, Order.status.in_(["pending", "partial"]))
+            .order_by(Order.created_at)
+        )
+        order_ids = [str(row[0]) for row in result.all()]
+
+        for order_id in order_ids:
+            try:
+                await OrderService.cancel_order(db, user, order_id)
+                cancelled.append(order_id)
+            except NotFoundError:
+                # Raced to filled/cancelled between the list and the cancel.
+                continue
+            except Exception:
+                logger.exception(
+                    "Open-order cleanup failed for user=%s order=%s reason=%s",
+                    user.id,
+                    order_id,
+                    reason,
+                )
+        return cancelled
+
+    @staticmethod
     async def cancel_order(
         db: AsyncSession,
         user: User,

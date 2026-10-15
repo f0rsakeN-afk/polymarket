@@ -9,6 +9,10 @@ export const queryKeys = {
   // Account
   deletionImpact: () => ["account", "deletion-impact"] as const,
 
+  // Admin query keys live in `apps/admin`, which owns them. Duplicating
+  // them here would be two lists to keep in step, and the admin app has no
+  // use for the consumer keys above.
+
   // Markets
   /**
  * Params are omitted from the key entirely when absent - never `undefined`.
