@@ -224,7 +224,7 @@ export function AdminUsersClient() {
             <p aria-live="polite" className="sr-only">
               {isFetching ? "Refreshing" : `Showing ${rows.length} users`}
             </p>
-            <Table noWrapper className="w-full">
+            <Table noWrapper className="w-full min-w-[720px]">
               <TableHeader className="sticky top-0 z-20 bg-muted">
                 <TableRow>
                   <TableHead>User</TableHead>

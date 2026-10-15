@@ -109,7 +109,7 @@ export function AdminAuditClient() {
             </CardContent>
           ) : (
             <div className="max-h-[65vh] overflow-auto">
-              <Table noWrapper className="w-full">
+              <Table noWrapper className="w-full min-w-[760px]">
                 <TableHeader className="sticky top-0 z-10 bg-muted">
                   <TableRow>
                     <TableHead>When</TableHead>
@@ -166,7 +166,7 @@ export function AdminAuditClient() {
           </CardContent>
         ) : (
           <div className="max-h-[65vh] overflow-auto">
-            <Table noWrapper className="w-full">
+            <Table noWrapper className="w-full min-w-[760px]">
               <TableHeader className="sticky top-0 z-10 bg-muted">
                 <TableRow>
                   <TableHead>When</TableHead>
