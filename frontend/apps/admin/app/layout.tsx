@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 
 import "./globals.css"
 import { Providers } from "@/components/providers"
+import { ThemeProvider } from "@/components/theme-provider"
 
 export const metadata: Metadata = {
   title: {
@@ -21,7 +22,13 @@ export default function AdminRootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="antialiased font-sans">
       <body>
-        <Providers>{children}</Providers>
+        {/* Dark by default, matching apps/web. An operator reading a ledger for
+            hours is the case where a light background is genuinely unpleasant,
+            and two apps on one origin disagreeing about theme reads as a bug in
+            whichever one you did not expect. */}
+        <ThemeProvider>
+          <Providers>{children}</Providers>
+        </ThemeProvider>
       </body>
     </html>
   )
