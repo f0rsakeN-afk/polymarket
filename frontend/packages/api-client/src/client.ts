@@ -305,8 +305,43 @@ function unauthenticatedMessage(): string {
     : "Session expired. Please sign in again."
 }
 
-// Routes that are publicly accessible • 401 on these means "unauthenticated", not "session expired"
-const PUBLIC_PATHS = ["/", "/markets", "/trades", "/docs", "/faq", "/legal", "/support"]
+/**
+ * Where a terminal 401 sends the browser, and which routes are viewable without a
+ * session.
+ *
+ * ## Why this is per-app rather than a constant in here
+ *
+ * This list used to be a module-level `PUBLIC_PATHS = ["/", "/markets", …]` — the
+ * *storefront's* route names, living in the package both apps import. The admin
+ * app also has a `/markets` route (the moderation queue) and its dashboard is at
+ * `/`. So on those two pages `isPublicPath` was true, `redirectToLogin` returned
+ * early, and an operator whose session had just expired was **left sitting on the
+ * page** with "unauthenticated" errors and no route out of it.
+ *
+ * That is the same failure as duplicating a CORS list: one declaration, two
+ * consumers with different meanings, and the second consumer silently gets the
+ * first one's answer. The list belongs to the app that owns the routes.
+ *
+ * ## Why the default is empty
+ *
+ * Empty fails *closed*: an unconfigured app redirects on a terminal 401 rather
+ * than assuming its routes are public. For an app with no public pages that is
+ * simply correct, and for an app that has some it is a loud omission to notice
+ * while testing a signed-out visit — rather than a silent "this page just quietly
+ * fails" that nobody looks for.
+ */
+export interface AuthRoutingPolicy {
+  /** App routes viewable without a session. Matched by prefix. */
+  publicPaths: readonly string[]
+  /** Where a terminal 401 sends the browser. */
+  loginPath: string
+}
+
+let authRouting: AuthRoutingPolicy = { publicPaths: [], loginPath: "/login" }
+
+export function configureAuthRouting(policy: Partial<AuthRoutingPolicy>): void {
+  authRouting = { ...authRouting, ...policy }
+}
 
 /**
  * Endpoints where a 401 is an *answer* rather than a failure.
@@ -327,8 +362,22 @@ const PUBLIC_PATHS = ["/", "/markets", "/trades", "/docs", "/faq", "/legal", "/s
  */
 const SESSION_PROBE_PATHS = ["/api/v1/auth/me"]
 
-function isPublicPath(pathname: string) {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+/**
+ * Should a terminal 401 bounce this pathname to the login page?
+ *
+ * Exported so it can be asserted directly. The alternative is asserting on
+ * `window.location.href` being assigned, which is a mock and a spy and no proof
+ * that the *decision* was right — the bug this replaced was a wrong decision that
+ * left the assignment unmade, so the assignment was never the thing to test.
+ */
+export function shouldRedirectToLogin(pathname: string): boolean {
+  // Already on a way in; redirecting there is a no-op loop.
+  const { loginPath } = authRouting
+  if (pathname.startsWith(loginPath)) return false
+  // A public route answers "unauthenticated" with its own UI, not a redirect.
+  return !authRouting.publicPaths.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  )
 }
 
 /** Is this a request whose 401 settles the question rather than raising it? */
@@ -338,12 +387,9 @@ function isSessionProbe(pathname: string) {
 
 function redirectToLogin() {
   if (typeof window === "undefined") return
-  const { pathname } = window.location
-  // Never redirect if already on an auth page
-  if (pathname.startsWith("/login") || pathname.startsWith("/signup")) return
-  // Don't redirect for public pages • show empty/error state instead
-  if (isPublicPath(pathname)) return
-  window.location.href = "/login"
+  if (shouldRedirectToLogin(window.location.pathname)) {
+    window.location.href = authRouting.loginPath
+  }
 }
 
 // ─── Pending request deduplication ──────────────────────────────────────────

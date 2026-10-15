@@ -1,0 +1,23 @@
+{
+  "name": "@workspace/schemas",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@workspace/eslint-config": "workspace:*",
+    "@workspace/typescript-config": "workspace:*",
+    "eslint": "^9",
+    "typescript": "^7.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts"
+  }
+}
