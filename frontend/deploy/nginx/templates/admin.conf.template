@@ -1,0 +1,76 @@
+# The operator tool.
+#
+# ## Why this is a template and not a plain conf.d file
+#
+# `${ADMIN_SERVER_NAME}` has to be substituted at container start, and the nginx
+# image only does that for `/etc/nginx/templates/*.template` - `conf.d/` is copied
+# verbatim. So the file lives in `templates/` and the compose file mounts it there.
+#
+# ## Why the substitution is safe with all those `$host` variables below
+#
+# `envsubst` in the nginx image substitutes *only variables that are defined in the
+# environment*, not every `$word` in the file - which is why `$host` and
+# `$remote_addr` survive untouched here. Getting that wrong is the classic way to
+# turn a nginx config into a file full of empty strings.
+#
+# ## Why host-based and not a path
+#
+# The admin app's routes are `/users`, `/disputes`, `/markets`, `/treasury`,
+# `/audit` and `/login` - not `/admin/users`. Serving it under a path prefix would
+# mean setting `basePath: "/admin"` on the app, and every route, every `Link`, and
+# every redirect the proxy issues would have to agree with it.
+#
+# Host-based also makes the security story honest. On a separate hostname the
+# admin app is a *different site* from the storefront, which is exactly the case
+# `COOKIE_SAMESITE=none` exists for on the API. Same-origin-by-path would have
+# avoided that - and also meant anyone holding a storefront session cookie could
+# reach the operator surface by changing one character in a URL.
+#
+# Defaults to `_` so an unset value leaves the storefront as the default vhost
+# rather than breaking nginx startup. Set `ADMIN_SERVER_NAME` to the real hostname
+# in the deployment environment.
+
+upstream admin {
+    server admin:3001;
+}
+
+server {
+    listen 80;
+    server_name ${ADMIN_SERVER_NAME};
+
+    # No caching for any admin response. A cached dispute queue or a cached
+    # `/auth/me` is an operator acting on yesterday's data, and the caching that
+    # is worth having on the storefront is worth nothing here.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer" always;
+    # Tighter than the storefront: no camera, microphone, geolocation or payment
+    # is needed to adjudicate a dispute.
+    add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()" always;
+
+    location /_next/static/ {
+        proxy_pass http://admin;
+        proxy_cache static;
+        proxy_cache_valid 200 365d;
+        add_header X-Cache-Status $upstream_cache_status;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location / {
+        proxy_pass http://admin;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # `$scheme` so the app sees https when TLS terminates upstream. Next's
+        # proxy and its secure-cookie logic both read this.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # No `Upgrade`/`Connection: upgrade` here. The admin app has no websocket
+        # - deliberately - so those headers would do nothing except make nginx
+        # hold the connection open waiting for a protocol switch that never comes.
+        proxy_buffering off;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+}
