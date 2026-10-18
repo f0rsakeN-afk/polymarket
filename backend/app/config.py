@@ -35,9 +35,41 @@ class Settings(BaseSettings):
     # Two origins are needed by default in development, because there are two
     # front ends: `apps/web` on 3000 and `apps/admin` on 3001. See `.env.example`.
     cors_origins: str = ""
+
+    # A second, wider origin allowlist used *only* by the CSRF origin check, and
+    # unioned with `cors_origins` there. It exists for integrations that are
+    # allowed to call the API from an origin the browser front ends do not use.
+    #
+    # It was previously read straight from `os.environ`, which meant it was not in
+    # `.env.example` and nobody knew it existed. An undocumented security setting
+    # is one that gets set once by accident and then never reviewed. A `*` here
+    # is deliberately **not** honoured as "allow everything" - see
+    # `app.api.origin_check.allowed_origins`.
+    allowed_origins: str = ""
     # The storefront's public origin. The admin app redirects a non-admin here, so
     # it must be set wherever the admin app is deployed on its own host.
     site_url: str = ""
+
+    # ── Auth cookies ─────────────────────────────────────────────────────────
+    #
+    # `SameSite` for the session cookies. Configurable because the correct value is
+    # a property of *deployment topology*, not of the application: an API and its
+    # front end on one site need `lax`, and an API at `api.example.com` serving a
+    # front end at `example.com` cannot work at anything else.
+    #
+    # Default `lax`, which is right for single-site deployments and for local dev
+    # - and which is *silently* wrong everywhere else. `lax` means the browser
+    # withholds the cookie from `fetch()` calls to another site, so a cross-site
+    # admin app gets no session on any request, `/auth/me` 401s forever, and the
+    # only symptom is a permanently signed-out operator. No error, no redirect,
+    # nothing in any log: the browser simply does not send what was asked for.
+    #
+    # Set `none` for a cross-site deployment. It *requires* `Secure`, so the
+    # pairing is enforced in `set_auth_cookies` and by `app.py` at boot - see
+    # `COOKIE_SAMESITE`. Not "auto": guessing from `site_url` would be right
+    # until someone deploys the front end on a subdomain, at which point it is
+    # confidently wrong and nobody knows which branch it took.
+    cookie_samesite: str = "lax"
 
     # Database
     database_url: str = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase"
