@@ -1,3 +1,4 @@
+# Same pinned version as the production Dockerfile and CI — see the note there.
 FROM oven/bun:1.3.14-slim
 
 WORKDIR /app
@@ -7,14 +8,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends libc6-compat cu
 
 COPY package.json bun.lock turbo.json .npmrc ./
 COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
 COPY packages/ui/package.json ./packages/ui/
+COPY packages/api-client/package.json ./packages/api-client/
+COPY packages/schemas/package.json ./packages/schemas/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 
+# `--frozen-lockfile` against a manifest list that omits a workspace is how the
+# admin app ends up missing its dependencies in the dev container: the install
+# succeeds, the lockfile matches, and `next dev` then fails to resolve a workspace
+# package that was never linked. Every `package.json` in the workspace belongs in
+# this list - turbo's own graph is the source of truth for that, not this file.
 RUN bun install --frozen-lockfile
 
 COPY . .
 
-EXPOSE 3000
+EXPOSE 3000 3001
 
+# `--filter=web`. The `admin` service in docker-compose.dev.yml overrides this to
+# `--filter=admin`, so both apps come from one image instead of two nearly
+# identical ones.
 CMD ["bunx", "turbo", "dev", "--filter=web", "--host", "0.0.0.0"]
