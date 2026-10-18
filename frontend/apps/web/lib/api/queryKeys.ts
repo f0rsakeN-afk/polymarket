@@ -37,6 +37,15 @@ export const queryKeys = {
   markets: (p?: Record<string, unknown>) =>
     p ? (["markets", p] as const) : (["markets"] as const),
   market: (slug: string) => ["market", slug] as const,
+  /**
+   * Markets the signed-in user submitted.
+   *
+   * A distinct top-level key, deliberately NOT under `markets`. These rows are
+   * per-user and per-page; sharing the public catalogue's prefix would let a
+   * catalogue invalidation evict them and, worse, let a `["markets"]` prefix
+   * match return them for the wrong user.
+   */
+  myMarkets: (page = 1) => ["my-markets", page] as const,
   marketActivity: (slug: string) => ["market-activity", slug] as const,
   marketTrades: (slug: string) => ["market-trades", slug] as const,
   globalTrades: (marketSlug?: string) =>

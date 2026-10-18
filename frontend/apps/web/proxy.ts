@@ -31,7 +31,23 @@ import {
 const API_BASE = appConfig.apiUrl;
 
 const PUBLIC_PATHS = ["/", "/markets", "/trades", "/faq", "/docs", "/legal", "/support"];
-const PROTECTED_PATHS = ["/portfolio", "/orders", "/positions", "/transactions", "/wallet", "/settings"];
+
+/**
+ * Checked before the public fast-path, so the ordering is what makes this work:
+ * `/markets` is public, but `/markets/mine` and `/markets/new` are matched here
+ * first and never reach it. Listing only `/markets` in either array would leave
+ * both of them readable while signed out.
+ */
+const PROTECTED_PATHS = [
+  "/portfolio",
+  "/orders",
+  "/positions",
+  "/transactions",
+  "/wallet",
+  "/settings",
+  "/markets/mine",
+  "/markets/new",
+];
 const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"];
 
 function getCookie(request: NextRequest, name: string): string | null {
