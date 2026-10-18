@@ -38,6 +38,7 @@ from app.api.middleware import (
 )
 from app.api.notifications import router as notifications_router
 from app.api.orders import router as orders_router
+from app.api.origin_check import OriginCheckMiddleware
 from app.api.positions import router as positions_router
 from app.api.referrals import router as referrals_router
 from app.api.split_merge import router as split_merge_router
@@ -283,6 +284,35 @@ if "*" in origins:
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
         "Set explicit origins in CORS_ORIGINS (e.g. CORS_ORIGINS=http://localhost:3000)"
     )
+# ── Auth cookie policy ──────────────────────────────────────────────────────
+#
+# The one configuration pair that cannot fail visibly. A wrong CORS origin prints
+# to the console; a wrong SameSite prints nothing anywhere - the browser simply
+# withholds the cookie, `/auth/me` 401s, and an operator is signed out of a tool
+# that looks like it is working. So the invalid combinations are refused here,
+# where the process refuses to start and says why.
+_SAMESITE_VALUES = ("lax", "strict", "none")
+
+if settings.cookie_samesite.strip().lower() not in _SAMESITE_VALUES:
+    raise ValueError(
+        f"COOKIE_SAMESITE must be one of {', '.join(_SAMESITE_VALUES)} - got "
+        f"{settings.cookie_samesite!r}"
+    )
+
+if settings.cookie_samesite.strip().lower() == "none":
+    # Browsers discard a SameSite=None cookie that is not Secure. That is
+    # silent: login returns 200, Set-Cookie arrives, and the next request is
+    # anonymous. Refusing to boot is the only place this can still be caught.
+    if settings.app_env != "production":
+        raise ValueError(
+            "COOKIE_SAMESITE=none requires APP_ENV=production. Browsers discard a "
+            "SameSite=None cookie without Secure, which leaves every request "
+            "unauthenticated and produces no error to debug. Use COOKIE_SAMESITE=lax "
+            "for local development - on localhost the front end and the API are the "
+            "same site regardless of port, which is exactly why this is invisible in "
+            "development and fatal in production."
+        )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -296,6 +326,13 @@ app.add_middleware(
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+# Registered here, which places it *inside* CORS: Starlette runs the
+# last-registered middleware outermost, and CORS went on first. That is the right
+# order — an unmatched origin's 403 is not readable by the rejected origin's
+# script, because CORSMiddleware withholds the headers, and that is the outcome we
+# want. Putting it outermost instead would mean it ran before request logging and
+# metrics, so a refused request left no trace.
+app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
