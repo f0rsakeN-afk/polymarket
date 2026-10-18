@@ -312,3 +312,20 @@ ends up bumped by a minor version of everything while the diff reads as incident
    Then read the diff before committing it. A correct regeneration moves a handful
    of lines; one that touches every `@next/swc-*` entry is a resolution, not a
    repair.
+
+### Running the dev containers as your own user
+
+The dev image runs as the image's `bun` user (uid 1000), not root, so a dev server
+cannot write root-owned files into the repository. For the bind mount to be
+writable from inside the container, that uid has to match yours:
+
+```bash
+export DOCKER_UID=$(id -u) DOCKER_GID=$(id -g)
+cd frontend && docker compose -f docker-compose.dev.yml up
+```
+
+Put those two in your shell profile and they stop being a thing to remember. The
+default of `1000:1000` matches the official Node and Bun images, so most people
+never need to set them — but "most people" is not a property a build should depend
+on, and the failure is a permission error partway through a first compile, which
+reads as anything except a uid mismatch.
