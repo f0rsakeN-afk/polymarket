@@ -19,6 +19,11 @@ NotificationType = Literal[
     "market_resolved",
     "market_closing_soon",
     "weekly_digest",
+    # The two ends of a market submission. Without these, proposing a market was
+    # write-only: the row went into a review queue and nothing ever came back, so
+    # the only way to learn the outcome was to go and look for it.
+    "market_submission_reviewed",
+    "market_submission_declined",
 ]
 
 

@@ -22,6 +22,27 @@ class User(Base, UUIDMixin, TimestampMixin):
     is_2fa_enabled = Column(Boolean, default=False, nullable=False)
     is_2fa_pending = Column(Boolean, default=False, nullable=False)  # setup in progress, not confirmed
 
+    # ── Ban ──────────────────────────────────────────────────────────────────
+    #
+    # Why the account was deactivated, and when.
+    #
+    # A ban without a stated reason is close to useless: the user cannot appeal
+    # what they were not told, and the next admin looking at the account has no
+    # way to judge whether the ban was right or a mistake. So the reason is a
+    # required field on the request rather than an optional note, and it lives
+    # here as well as in the audit trail because it has to be *displayable* —
+    # to the user, who is entitled to know, and to an admin opening the record.
+    #
+    # The **actor** is deliberately not stored here. Two places holding "who
+    # banned this" is two places to disagree; the audit trail already records it,
+    # with the IP and user agent. This holds only what the record needs to display.
+    #
+    # Null whenever `is_active` is True. An unban clears both, so "banned" stays a
+    # single unambiguous state rather than an account that reads as banned because
+    # a stale reason is still attached.
+    ban_reason = Column(Text, nullable=True)
+    banned_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
     # ── Erasure ──────────────────────────────────────────────────────────────
     # A deleted account is a tombstone, not a removed row.
     #
