@@ -69,6 +69,13 @@ async function checkSession(request: NextRequest) {
     apiBase: appConfig.apiUrl,
     accessToken: request.cookies.get(ACCESS_COOKIE)?.value ?? null,
     refreshToken: request.cookies.get(REFRESH_COOKIE)?.value ?? null,
+    // Forwarded because the backend fingerprints refresh tokens by User-Agent
+    // and revokes on mismatch. This refresh runs in Node, whose `fetch` sends
+    // its own UA — so without it, the first refresh after the access token
+    // expires reads as a different device, the token is revoked and the session
+    // is destroyed. That is what logged an operator out of this app roughly every
+    // fifteen minutes, and took the storefront session with it.
+    userAgent: request.headers.get("user-agent"),
   })
 }
 

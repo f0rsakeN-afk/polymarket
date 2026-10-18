@@ -164,6 +164,27 @@ async def _fresh_db():
     async with test_engine.begin() as conn:
         await conn.run_sync(lambda sa_conn: sa_conn.execute(text("TRUNCATE TABLE users, wallets, transactions, markets, outcomes, liquidity_pools, lp_shares, positions, trades, orders, referrals, sessions, refresh_tokens, comments, price_history, notifications, alerts, auth_audit_events CASCADE")))
     yield
+    # Drop the *application's* pooled engine between tests.
+    #
+    # `test_engine` uses NullPool, but `app.database._get_engine` is `@lru_cache`d
+    # around a real `AsyncAdaptedQueuePool`, and the conftest only clears that
+    # cache once at import. So the first test to touch it builds a pool whose
+    # connections belong to that test's event loop — and `pytest-asyncio` gives
+    # every test a fresh one. The next test to borrow a pooled connection gets
+    # `Task ... attached to a different loop`.
+    #
+    # It surfaced as a readiness test failing with `db: error` several files after
+    # a passing one, which reads like a bug in the health check rather than in the
+    # harness. It would equally break any future test that reaches the real engine.
+    for getter in (db_module._get_engine, db_module._get_replica_engine):
+        # `currsize` rather than calling the getter: asking for the engine just to
+        # dispose it would build one nothing ever used.
+        if getter.cache_info().currsize == 0:
+            continue
+        try:
+            await getter().dispose()
+        finally:
+            getter.cache_clear()
 
 
 # ── Reset Redis global state between tests ────────────────────────────────────

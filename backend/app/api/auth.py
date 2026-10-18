@@ -198,6 +198,19 @@ async def _issue_tokens(
     return access_token, jti, refresh_token_id, token_record
 
 
+def _revoke_refresh(token: RefreshToken) -> None:
+    """Revoke a refresh token, stamping when — once.
+
+    `revoked_at` is what the reuse grace window is measured from, so it has to be
+    the moment the token was *first* invalidated. Overwriting it on a later
+    revocation would hand anyone holding a stolen token an endless window: replay
+    it, and the countdown starts again.
+    """
+    token.revoked = True
+    if token.revoked_at is None:
+        token.revoked_at = datetime.now(UTC)
+
+
 async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
     """
     Revoke all non-revoked refresh tokens for a user in a single atomic UPDATE.
@@ -1016,7 +1029,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
         )
         token_record = result.scalar_one_or_none()
         if token_record:
-            token_record.revoked = True
+            _revoke_refresh(token_record)
             # Also revoke the linked session
             session_result = await db.execute(
                 select(Session).where(Session.refresh_token_id == token_record.id)
@@ -1113,7 +1126,7 @@ async def revoke_session(session_id: str, request: Request, db: AsyncSession = D
     )
     rt = refresh_result.scalar_one_or_none()
     if rt:
-        rt.revoked = True
+        _revoke_refresh(rt)
 
     await db.commit()
 
@@ -1185,11 +1198,48 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not token_record:
         raise UnauthorizedError("Invalid or expired refresh token")
 
-    # Reuse detection: a revoked token presented again means it was stolen
-    # (the legitimate client rotated it away). Revoke everything.
+    # Reuse detection, with a grace window.
+    #
+    # A revoked token presented again is *usually* theft, and the response has to
+    # be to kill the chain. But "usually" is not "always", and this endpoint has
+    # no way to tell a stolen token from a client that refreshed twice.
+    #
+    # It happens routinely here. Cookies are keyed by domain and path and NOT by
+    # port, so the storefront (:3000) and the admin panel (:3001) share one
+    # `refresh_token`. Whichever refreshes first rotates it, and the other then
+    # presents the revoked one on an ordinary page load. Two tabs of the same app
+    # do the same thing. Before this, that logged a user out of every device.
+    #
+    # So: inside `refresh_reuse_grace_seconds`, and from the same device, it is
+    # the duplicate it looks like — issue a fresh pair and revoke nothing. Outside
+    # the window, or from another device, the chain dies exactly as before. The
+    # window is seconds long and exists to cover a race, not to keep a stolen
+    # token usable.
     if token_record.revoked:
-        await _revoke_chain(db, str(token_record.user_id), "Refresh token reuse detected")
-        raise UnauthorizedError("Invalid or expired refresh token")
+        now = datetime.now(UTC)
+
+        within_grace = (
+            token_record.revoked_at is not None
+            and now - token_record.revoked_at
+            <= timedelta(seconds=settings.refresh_reuse_grace_seconds)
+        )
+        same_device = (token_record.device_info or "") == (ua or "")
+
+        if within_grace and same_device:
+            # Note the distinction in the audit trail without alarming anyone: this
+            # is the line between "two pages refreshed at once" and "someone has
+            # your token", and being able to see which happened is the point of
+            # keeping it.
+            logger.info(
+                "Refresh token replayed within the %ss grace window (same device) "
+                "• treated as a duplicate, not theft",
+                settings.refresh_reuse_grace_seconds,
+            )
+        else:
+            await _revoke_chain(
+                db, str(token_record.user_id), "Refresh token reuse detected"
+            )
+            raise UnauthorizedError("Invalid or expired refresh token")
 
     # Absolute cap on the whole login CHAIN. Rotation hands the new token the
     # same deadline (_anchor_refresh_chain), so renewing cannot move this
@@ -1206,7 +1256,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("Session expired • please sign in again")
 
     if token_record.expires_at <= datetime.now(UTC):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Invalid or expired refresh token")
 
@@ -1221,24 +1271,23 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     # /auth/refresh answered 401 on every call and sessions silently died
     # after one access token. Nothing caught it because no test exercised the
     # endpoint; the Redis deadline above is the bound that actually matters.
-    from datetime import timedelta
     issued_at = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
     if issued_at + timedelta(seconds=settings.refresh_chain_max_seconds) <= datetime.now(UTC):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Refresh token expired")
 
     # Bind token to user_agent/ip fingerprint for replay protection.
     stored_ua = token_record.device_info or ""
     if stored_ua != (ua or ""):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Device mismatch • please re-authenticate")
 
     # Rotate: revoke old token + old session, issue new token + new session
     # bound to the current ip/user-agent. The new token inherits this chain's
     # deadline • that inheritance is what makes the cap absolute.
-    token_record.revoked = True
+    _revoke_refresh(token_record)
     if token_record.current_session:
         token_record.current_session.revoked = True
     new_access, _jti, new_refresh, _new_record = await _issue_tokens(

@@ -42,12 +42,48 @@ export interface ValidateSessionOptions {
   apiBase: string
   accessToken: string | null
   refreshToken: string | null
+  /**
+   * The browser's `User-Agent`, forwarded on the refresh call.
+   *
+   * Not optional in practice — see `_refreshHeaders`. The backend binds each
+   * refresh token to the User-Agent it was issued to and revokes the token on a
+   * mismatch, which is a sound defence against a stolen token but means a refresh
+   * sent with a *different* UA is treated as an attacker. In the browser that
+   * never happens, because `fetch` supplies the real UA for free. In a proxy it
+   * always does: Node's `fetch` sends its own, so the request looks like it came
+   * from a different device and the session is destroyed.
+   */
+  userAgent?: string | null
   /** Injectable for tests; defaults to the global. */
   fetchImpl?: typeof fetch
 }
 
 export const ACCESS_COOKIE = "access_token"
 export const REFRESH_COOKIE = "refresh_token"
+
+/**
+ * Headers for the refresh call, carrying the browser's User-Agent.
+ *
+ * The backend fingerprints refresh tokens by User-Agent and revokes on mismatch
+ * (`Device mismatch`). A proxy-side refresh with Node's own UA therefore logs the
+ * user out on the *first* refresh after the access token expires — which is what
+ * made the admin app ask for a password roughly every fifteen minutes.
+ *
+ * Omitted entirely when there is no UA to send, rather than sent as an empty
+ * string: an empty header is a value, and the backend would compare it against the
+ * fingerprint and find it different — the same failure wearing a different hat.
+ * With no header the backend falls back to whatever the client sends, which is the
+ * pre-existing behaviour and strictly better than lying about the device.
+ */
+export function refreshRequestHeaders(
+  refreshToken: string,
+  userAgent?: string | null,
+): Record<string, string> {
+  return {
+    Cookie: `${REFRESH_COOKIE}=${refreshToken}`,
+    ...(userAgent ? { "User-Agent": userAgent } : {}),
+  }
+}
 
 /**
  * `Set-Cookie` must be read one at a time.
@@ -118,6 +154,7 @@ export async function validateSessionCookies({
   apiBase,
   accessToken,
   refreshToken,
+  userAgent,
   fetchImpl = fetch,
 }: ValidateSessionOptions): Promise<ProxySession> {
   if (accessToken) {
@@ -140,7 +177,7 @@ export async function validateSessionCookies({
   try {
     refreshRes = await fetchImpl(`${apiBase}/api/v1/auth/refresh`, {
       method: "POST",
-      headers: { Cookie: `${REFRESH_COOKIE}=${refreshToken}` },
+      headers: refreshRequestHeaders(refreshToken, userAgent),
       cache: "no-store",
     })
   } catch {

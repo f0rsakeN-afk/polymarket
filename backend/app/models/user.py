@@ -74,6 +74,21 @@ class RefreshToken(Base, UUIDMixin):
     token_hash = Column(String(255), unique=True, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked = Column(Boolean, default=False, nullable=False, index=True)
+
+    # When it was revoked, which `revoked` alone cannot say.
+    #
+    # Needed to tell a *stolen* token being replayed from a *legitimate* client
+    # refreshing twice. Those look identical to the server — both present a
+    # revoked token — but they are opposite events, and treating the second as
+    # theft logs the real user out of every device.
+    #
+    # It is not decoration: the web app and the admin app share one cookie jar,
+    # so whichever refreshes first rotates the token out from under the other, and
+    # the loser presents a revoked token on a perfectly ordinary navigation.
+    # `refresh` grants a short grace window off this column and treats a replay
+    # inside it as the duplicate it almost always is.
+    revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
     device_info = Column(Text)
 
     user = relationship("User")
