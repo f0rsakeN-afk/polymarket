@@ -26,6 +26,7 @@ import { sileo } from "sileo"
 
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -154,14 +155,11 @@ export function AdminDisputesClient() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Disputes</h1>
-          <p className="text-sm text-muted-foreground">
-            Oldest first. An upheld ruling resolves the market and pays out.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter disputes">
+      <PageHeader
+        title="Disputes"
+        description="Oldest first. An upheld ruling resolves the market and pays out."
+        actions={
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter disputes">
           {FILTERS.map((f) => (
             <Button
               key={f.value}
@@ -173,8 +171,9 @@ export function AdminDisputesClient() {
               {f.label}
             </Button>
           ))}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {isLoading ? (
         <div className="space-y-2" role="status" aria-label="Loading disputes">

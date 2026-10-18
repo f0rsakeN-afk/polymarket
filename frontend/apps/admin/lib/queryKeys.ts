@@ -31,4 +31,7 @@ export const queryKeys = {
    * move a balance invalidate it.
    */
   treasury: () => ["treasury", "summary"] as const,
+  /** The signed-in operator's own state — not a target record, so not `admin`. */
+  sessions: () => ["auth", "sessions"] as const,
+  twoFactor: () => ["auth", "2fa", "status"] as const,
 }

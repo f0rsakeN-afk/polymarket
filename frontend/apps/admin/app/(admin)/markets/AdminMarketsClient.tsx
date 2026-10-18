@@ -5,9 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { Check, X } from "lucide-react"
 
-import { adminApi } from "@workspace/api-client/admin"
+import { adminApi, type AdminMarketRow } from "@workspace/api-client/admin"
 import { apiErrorMessage } from "@workspace/api-client/client"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
+import { RejectMarketDialog } from "@/components/reject-market-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
@@ -52,44 +54,36 @@ export function AdminMarketsClient() {
       sileo.error({ title: apiErrorMessage(err, "Could not approve market") }),
   })
 
-  const reject = useMutation({
-    mutationFn: (id: string) => adminApi.rejectMarket(id),
-    onSuccess: () => {
-      refresh()
-      sileo.success({ title: "Market rejected" })
-    },
-    onError: (err) =>
-      sileo.error({ title: apiErrorMessage(err, "Could not reject market") }),
-  })
+  const [rejecting, setRejecting] = useState<AdminMarketRow | null>(null)
 
   const rows = data ?? []
   const pending = status === "pending_review"
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Moderation</h1>
-          <p className="text-sm text-muted-foreground">
-            {pending
-              ? "Markets waiting on a decision before they become tradable."
-              : "Browse by status."}
-          </p>
-        </div>
-        <div className="flex gap-1" role="group" aria-label="Filter by status">
-          {FILTERS.map((f) => (
-            <Button
-              key={f.value}
-              variant={status === f.value ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatus(f.value)}
-              aria-pressed={status === f.value}
-            >
-              {f.label}
-            </Button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        title="Moderation"
+        description={
+          pending
+            ? "Markets waiting on a decision before they become tradable."
+            : "Browse by status."
+        }
+        actions={
+          <div className="flex gap-1" role="group" aria-label="Filter by status">
+            {FILTERS.map((f) => (
+              <Button
+                key={f.value}
+                variant={status === f.value ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatus(f.value)}
+                aria-pressed={status === f.value}
+              >
+                {f.label}
+              </Button>
+            ))}
+          </div>
+        }
+      />
 
       <Card className="overflow-hidden pt-0">
         {isLoading ? (
@@ -122,6 +116,21 @@ export function AdminMarketsClient() {
                     /{market.slug} ·{" "}
                     {new Date(market.created_at).toLocaleDateString()}
                   </p>
+                  {/* The reason, on the row that needs it.
+                      "Why was this declined?" is the first question asked about
+                      every rejected submission in this list, and answering it
+                      without opening each one is the difference between triage
+                      and a click-through. Shown whatever the filter, because the
+                      queue is browsed by status and the rejected filter is where
+                      these all live. */}
+                  {market.rejection_reason ? (
+                    <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        Declined:&nbsp;
+                      </span>
+                      {market.rejection_reason}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="capitalize">
@@ -140,8 +149,7 @@ export function AdminMarketsClient() {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={reject.isPending}
-                        onClick={() => reject.mutate(market.id)}
+                        onClick={() => setRejecting(market)}
                         className="text-destructive hover:bg-destructive/10"
                       >
                         <X className="size-3.5" />
@@ -155,6 +163,16 @@ export function AdminMarketsClient() {
           </ul>
         )}
       </Card>
+
+      <RejectMarketDialog
+        key={rejecting?.id ?? "no-reject-target"}
+        market={
+          rejecting
+            ? { id: rejecting.id, slug: rejecting.slug, question: rejecting.question }
+            : null
+        }
+        onOpenChange={(open) => !open && setRejecting(null)}
+      />
     </div>
   )
 }

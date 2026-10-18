@@ -1,73 +1,169 @@
 "use client"
 
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Gavel, Landmark, LogOut, Monitor, Moon, Scale, ScrollText, ShieldAlert, Users } from "lucide-react"
-import { sileo } from "sileo"
-
-import { useTheme } from "next-themes"
-
-import { useCurrentUser } from "@/hooks/use-auth"
-import { api } from "@workspace/api-client/client"
-import { Spinner } from "@workspace/ui/components/spinner"
-import { Button, buttonVariants } from "@workspace/ui/components/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu"
-import { cn } from "@workspace/ui/lib/utils"
-
-const SECTIONS = [
-  { href: "/users", icon: Users, label: "Users" },
-  { href: "/disputes", icon: Gavel, label: "Disputes" },
-  { href: "/markets", icon: Scale, label: "Moderation" },
-  { href: "/treasury", icon: Landmark, label: "Treasury" },
-  { href: "/audit", icon: ScrollText, label: "Audit trail" },
-]
-
 /**
- * The gate, the chrome, and the way out.
+ * The shell: the gate, the rail, and the page area.
  *
- * ## Not a redirect when there is nowhere to go
+ * ## The gate stays client-side, and `proxy.ts` does not replace it
  *
- * A non-admin is sent to `NEXT_PUBLIC_SITE_URL` when it is set, and shown an
- * explicit "no access" state when it is not. The obvious alternative - redirect to
- * `/` - is an **infinite loop**: this app *has* an index, and its index sends a
- * non-admin to `/` as well, so `/users` → `/` → `/` → … until the browser gives
- * up. My first version did exactly that, on the stated reasoning that "there is
- * no index here to fall back to", which was simply wrong about the app's own
- * routing.
+ * Worth restating because "the proxy handles it, delete the gate" is the obvious
+ * next step and it would be wrong. The proxy decides from a cookie it can read;
+ * this decides from a live `/auth/me`. They fail differently — a `Set-Cookie`
+ * replay that did not land, a `matcher` that missed a prefix, an admin flag
+ * revoked mid-session — and each of those failures leaves the operator looking at
+ * an admin UI. The second opinion costs nothing when it is right.
  *
- * Failing closed with a sentence beats failing open into a spin, and a redirect
- * whose destination depends on configuration is a redirect whose behaviour
- * depends on something the operator cannot see.
- */
-/**
- * Two states, not one.
+ * ## Two states, not one
  *
- * A signed-out operator and a signed-in non-operator are different problems with
+ * A signed-out operator and a signed-in non-admin are different problems with
  * different fixes, and showing them the same screen makes one of them
- * unactionable. Before, both landed on "Admin access required" with a link to the
- * storefront — a dead end for anyone not already signed in elsewhere.
+ * unactionable. Told "admin access required" when they are merely not signed in,
+ * an operator's only move is to ask someone for access they did not need.
  *
  * The distinction is `user` rather than `user?.is_admin`, because the gate cannot
- * distinguish "not an admin" from "not signed in" by looking at a failed check
- * alone: both arrive as an absent `is_admin`.
+ * tell "not an admin" from "not signed in" by looking at a failed check alone —
+ * both arrive as an absent `is_admin`.
  *
- * This is the second line of defence, not the first. `proxy.ts` sends everyone but
- * an admin here already; this covers the cases the proxy cannot see — a cookie
- * replay that did not land, a `matcher` that missed a prefix, an account whose
- * admin flag was revoked mid-session.
+ * ## Responsiveness
+ *
+ * Below `md` the rail is an overlay with its own trigger in a sticky bar; from
+ * `md` it is a collapsible rail beside the content. The trigger is the
+ * `SidebarTrigger` from the shared component rather than a hand-rolled button, so
+ * its `aria-expanded`/`aria-controls` stay correct without anyone maintaining
+ * them.
  */
+
+import Link from "next/link"
+import { useEffect, useState } from "react"
+import { ShieldAlert } from "lucide-react"
+
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@workspace/ui/components/sidebar"
+import { buttonVariants } from "@workspace/ui/components/button"
+import { Spinner } from "@workspace/ui/components/spinner"
+import { cn } from "@workspace/ui/lib/utils"
+
+import { useCurrentUser } from "@/hooks/use-auth"
+import { AdminSidebar, ThemeToggle } from "@/components/admin-sidebar"
+
+export function AdminShell({ children }: { children: React.ReactNode }) {
+  const { data: user, isLoading, isError, error } = useCurrentUser()
+  const [open, onOpenChange] = useSidebarState()
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center" role="status">
+        <Spinner className="size-5" />
+        <span className="sr-only">Checking admin access…</span>
+      </div>
+    )
+  }
+
+  // A transport failure is not "not an admin". Saying so would tell an operator
+  // their account was revoked when the API was simply unreachable — and the fix
+  // (retry) is not what they would go and do.
+  if (isError && !isUnauthorizedError(error)) {
+    return <GateError />;
+  }
+
+  if (!user?.is_admin) return <NoAccess signedIn={Boolean(user)} />;
+
+  return (
+    // Controlled, so the operator's choice survives a reload.
+    //
+    // `SidebarProvider` writes `sidebar_state` on every toggle but only ever
+    // *reads* `defaultOpen`, which is a constant — so left alone the rail snaps
+    // back open on every full page load, and an operator who collapsed it to read
+    // a wide audit row gets it back in their face on refresh. Reading the cookie
+    // in an effect rather than during render keeps the server and client markup
+    // identical; deciding it during render is a hydration mismatch on every load.
+    <SidebarProvider open={open} onOpenChange={onOpenChange}>
+      {/* First focusable thing on the page, and the reason the rail is usable
+          with a keyboard. Tab once and you are past eight links and two group
+          headings to reach the content. It is invisible until focused, which is
+          the only time it is wanted. */}
+      <a
+        href="#admin-main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:shadow-lg focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
+
+      <AdminSidebar user={user} />
+
+      <SidebarInset className="min-w-0">
+        {/* Visible below `md`, where the rail is an overlay and there would
+            otherwise be no way to open it. `sticky` so it stays reachable after
+            scrolling a long queue — the one thing an operator needs mid-scroll is
+            a way back to navigation. */}
+        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur md:hidden">
+          <SidebarTrigger
+            aria-label="Open navigation"
+            className="-ml-1"
+          />
+          <span className="truncate text-sm font-semibold">PredictX Admin</span>
+          <div className="ml-auto">
+            <ThemeToggle />
+          </div>
+        </header>
+
+        <div
+          id="admin-main"
+          tabIndex={-1}
+          className="flex-1 px-4 py-5 outline-none sm:px-6 lg:px-8"
+        >
+          {/* `min-w-0` matters more than it looks: a wide table inside a flex
+              child without it forces the whole page to scroll sideways instead
+              of just the table's own container. `mx-auto` + a max width keeps a
+              40-column audit row readable on a 27-inch monitor instead of
+              stretching to the bezel. */}
+          <div className="mx-auto w-full min-w-0 max-w-[1600px]">{children}</div>
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+/**
+ * Read the operator's rail preference back out of the cookie the provider writes.
+ *
+ * `SidebarProvider` owns writing it; this only has to agree on the initial value.
+ * Starts expanded on both server and client so the first render matches, then
+ * corrects itself in an effect — the alternative is a hydration mismatch on every
+ * single page load for anyone who has ever collapsed the rail.
+ */
+const SIDEBAR_COOKIE = "sidebar_state";
+
+function useSidebarState(): [boolean, (next: boolean) => void] {
+  const [open, setOpen] = useState(true)
+
+  useEffect(() => {
+    const stored = document.cookie
+      .split("; ")
+      .find((c) => c.startsWith(`${SIDEBAR_COOKIE}=`))
+      ?.split("=")[1];
+    if (stored === "false") setOpen(false);
+  }, []);
+
+  return [open, setOpen];
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    (error as { status: number }).status === 401
+  );
+}
+
 function NoAccess({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
       <div className="max-w-md space-y-4 text-center">
-        <ShieldAlert className="mx-auto size-8 text-destructive" />
+        <ShieldAlert className="mx-auto size-8 text-destructive" aria-hidden />
         <h1 className="text-lg font-semibold">
           {signedIn ? "Admin access required" : "Sign in to continue"}
         </h1>
@@ -77,11 +173,11 @@ function NoAccess({ signedIn }: { signedIn: boolean }) {
             : "You are not signed in. Admin access is granted per account."}
         </p>
 
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <Link
             href="/login"
             className={cn(
-              buttonVariants({ variant: signedIn ? "outline" : "default", size: "sm" }),
+              buttonVariants({ variant: signedIn ? "outline" : "default" }),
               "w-full"
             )}
           >
@@ -89,7 +185,7 @@ function NoAccess({ signedIn }: { signedIn: boolean }) {
           </Link>
           <a
             href={process.env.NEXT_PUBLIC_SITE_URL ?? "/"}
-            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-full")}
+            className={cn(buttonVariants({ variant: "ghost" }), "w-full")}
           >
             Go to the site
           </a>
@@ -102,133 +198,40 @@ function NoAccess({ signedIn }: { signedIn: boolean }) {
         </p>
       </div>
     </div>
-  )
-}
-
-function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme()
-  const next = resolvedTheme === "dark" ? "light" : "dark"
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => setTheme(next)}
-      aria-label={`Switch to ${next} theme`}
-      title={`Switch to ${next} theme`}
-    >
-      <Monitor className="size-3.5 dark:hidden" aria-hidden />
-      <Moon className="hidden size-3.5 dark:block" aria-hidden />
-    </Button>
-  )
+  );
 }
 
 /**
- * The shell: gate, nav, identity, and an exit.
+ * The API is unreachable.
  *
- * Sign-out is here rather than buried because an operator tool is used on shared
- * and borrowed machines, and "who was in this session" has to be answerable by
- * the person sitting at the keyboard. The web app can afford to leave logout in a
- * user menu three clicks deep; this surface should not.
+ * Separate from "not an admin" on purpose. Conflating them tells an operator
+ * their permissions changed when the network did — and they go looking for a
+ * policy problem instead of retrying.
  */
-export function AdminShell({ children }: { children: React.ReactNode }) {
-  const { data: user, isLoading } = useCurrentUser()
-  const pathname = usePathname()
-  const qc = useQueryClient()
-
-  const signOut = useMutation({
-    mutationFn: () => api.post("/api/v1/auth/logout"),
-    // The local session ends whether or not the server confirms it, so this is
-    // `finally`, not `then` - a logout that fails server-side must still clear
-    // this machine.
-    onSettled: () => {
-      qc.clear()
-      sileo.success({ title: "Signed out" })
-      window.location.href = process.env.NEXT_PUBLIC_SITE_URL ?? "/"
-    },
-  })
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center" role="status">
-        <Spinner className="size-5" />
-        <span className="sr-only">Checking admin access…</span>
-      </div>
-    )
-  }
-
-  if (!user?.is_admin) return <NoAccess signedIn={Boolean(user)} />
-
+function GateError() {
   return (
-    <div className="flex min-h-dvh flex-col">
-      <a
-        href="#admin-main"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:ring-2 focus:ring-ring"
-      >
-        Skip to main content
-      </a>
+    <div className="flex min-h-dvh items-center justify-center px-4">
+      <div className="max-w-md space-y-4 text-center">
+        <ShieldAlert className="mx-auto size-8 text-amber-600" aria-hidden />
+        <h1 className="text-lg font-semibold">Could not verify your access</h1>
+        <p className="text-sm text-muted-foreground">
+          The API did not respond. This is not a permissions problem — your access
+          has not been evaluated either way.
+        </p>
+        {/* `buttonVariants` on a real `Link`, not `Button render={<Link/>}`.
 
-      <header className="sticky top-0 z-30 border-b bg-card/95 backdrop-blur">
-        <div className="container mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-          <Link href="/" className="flex items-center gap-2">
-            <ShieldAlert className="size-4 text-destructive" />
-            <span className="text-sm font-semibold">Admin</span>
-          </Link>
-
-          <nav className="flex items-center gap-1" aria-label="Admin sections">
-            {SECTIONS.map(({ href, icon: Icon, label }) => {
-              const active = pathname === href || pathname?.startsWith(`${href}/`)
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
-                    active
-                      ? "bg-accent font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                  )}
-                >
-                  <Icon className="size-3.5" aria-hidden />
-                  {label}
-                </Link>
-              )
-            })}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-1">
-            <ThemeToggle />
-            {/* Base UI's trigger renders its own button and takes no `asChild`,
-                unlike the Radix API this component's naming suggests. */}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className="rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                aria-label="Account menu"
-              >
-                {user.email}
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <div className="px-2 py-1.5">
-                  <p className="text-sm font-medium">{user.username}</p>
-                  <p className="text-xs text-muted-foreground">admin</p>
-                </div>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={() => signOut.mutate()}
-                  disabled={signOut.isPending}
-                >
-                  <LogOut className="size-3.5" />
-                  {signOut.isPending ? "Signing out…" : "Sign out"}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      </header>
-
-      <main id="admin-main" tabIndex={-1} className="container mx-auto w-full max-w-7xl flex-1 px-4 py-6 outline-none">
-        {children}
-      </main>
+            Base UI's `Button` assumes a `<button>`: pointed at an anchor it either
+            logs a mismatch error or stamps `role="button"` onto it, and a link
+            that announces itself as a button stops being findable in a screen
+            reader's list of links and stops inviting open-in-new-tab. Styling the
+            anchor directly gives identical appearance with correct semantics. */}
+        <Link
+          href="/"
+          className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-full")}
+        >
+          Try again
+        </Link>
+      </div>
     </div>
-  )
+  );
 }

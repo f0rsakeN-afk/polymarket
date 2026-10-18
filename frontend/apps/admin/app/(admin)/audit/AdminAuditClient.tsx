@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -55,46 +56,44 @@ export function AdminAuditClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Audit trail</h1>
-          <p className="text-sm text-muted-foreground">
-            Privileged actions and authentication events.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <div className="flex gap-1" role="group" aria-label="Which trail">
-            <Button
-              variant={tab === "actions" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTab("actions")}
-              aria-pressed={tab === "actions"}
-            >
-              Privileged actions
-            </Button>
-            <Button
-              variant={tab === "auth" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTab("auth")}
-              aria-pressed={tab === "auth"}
-            >
-              Auth events
-            </Button>
+      <PageHeader
+        title="Audit trail"
+        description="Privileged actions and authentication events."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <div className="flex gap-1" role="group" aria-label="Which trail">
+              <Button
+                variant={tab === "actions" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setTab("actions")}
+                aria-pressed={tab === "actions"}
+              >
+                Privileged actions
+              </Button>
+              <Button
+                variant={tab === "auth" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setTab("auth")}
+                aria-pressed={tab === "auth"}
+              >
+                Auth events
+              </Button>
+            </div>
+            {tab === "actions" ? (
+              <Button
+                variant={success === "failure" ? "default" : "outline"}
+                size="sm"
+                onClick={() =>
+                  setSuccess((s) => (s === "failure" ? undefined : "failure"))
+                }
+                aria-pressed={success === "failure"}
+              >
+                {success === "failure" ? "Showing failures" : "Failures only"}
+              </Button>
+            ) : null}
           </div>
-          {tab === "actions" && (
-            <Button
-              variant={success === "failure" ? "default" : "outline"}
-              size="sm"
-              onClick={() =>
-                setSuccess((s) => (s === "failure" ? undefined : "failure"))
-              }
-              aria-pressed={success === "failure"}
-            >
-              {success === "failure" ? "Showing failures" : "Failures only"}
-            </Button>
-          )}
-        </div>
-      </div>
+        }
+      />
 
       <Card className="overflow-hidden pt-0">
         {tab === "actions" ? (

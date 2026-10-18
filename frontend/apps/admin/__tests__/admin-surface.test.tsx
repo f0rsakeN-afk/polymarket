@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // `vi.mock` factories are hoisted above module-level code, so a plain `const`
@@ -133,17 +134,77 @@ describe("admin users", () => {
       data: { status: "banned", user_id: userRow.id, cancelled_order_ids: ["o1", "o2", "o3"] },
     });
 
+    const user = userEvent.setup();
     renderWithQuery(<AdminUsersClient />);
-    const ban = await screen.findByRole("button", { name: /ban/i });
-    ban.click();
+    await user.click(await screen.findByRole("button", { name: /^ban$/i }));
+    await user.type(await screen.findByLabelText(/why are you banning/i), "suspected fraud");
+    await user.click(screen.getByRole("button", { name: /ban account/i }));
 
     await waitFor(() =>
       expect(sileo.success).toHaveBeenCalledWith(
         expect.objectContaining({
-          description: expect.stringContaining("3 open order(s) cancelled"),
+          description: expect.stringContaining("3 resting orders cancelled"),
         })
       )
     );
+  });
+
+  it("will not send a ban with no reason", async () => {
+    // The whole point of the field. A ban that can be submitted empty is one
+    // nobody will bother filling in, and the user is left unable to appeal.
+    const user = userEvent.setup();
+    renderWithQuery(<AdminUsersClient />);
+    await user.click(await screen.findByRole("button", { name: /^ban$/i }));
+
+    // The submit button is disabled, so the only way to reach the API is typing.
+    expect(screen.getByRole("button", { name: /ban account/i })).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/why are you banning/i), "   ");
+    expect(screen.getByRole("button", { name: /ban account/i })).toBeDisabled();
+    expect(adminApi.ban).not.toHaveBeenCalled();
+  });
+
+  it("sends the reason it collected, not just the user id", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<AdminUsersClient />);
+    await user.click(await screen.findByRole("button", { name: /^ban$/i }));
+    await user.type(screen.getByLabelText(/why are you banning/i), "three failed chargebacks");
+    await user.click(screen.getByRole("button", { name: /ban account/i }));
+
+    await waitFor(() =>
+      expect(adminApi.ban).toHaveBeenCalledWith(userRow.id, {
+        reason: "three failed chargebacks",
+      })
+    );
+  });
+
+  it("says the balance is untouched, so a ban is not read as a forfeiture", async () => {
+    // An operator who thinks a ban confiscates funds will over-ban, and an
+    // operator who thinks it is trivial will under-escalate. Stating it is
+    // cheaper than correcting either mistake afterwards.
+    const user = userEvent.setup();
+    renderWithQuery(<AdminUsersClient />);
+    await user.click(await screen.findByRole("button", { name: /^ban$/i }));
+
+    expect(await screen.findByText(/balance is untouched/i)).toBeTruthy();
+  });
+
+  it("shows the recorded reason before reversing a ban", async () => {
+    // Reversing something you have not read is approving something you have not
+    // read. The unban dialog shows the reason it is lifting.
+    adminApi.users.mockResolvedValue({
+      data: [{ ...userRow, is_active: false, ban_reason: "suspected fraud" }],
+      page: 1,
+      page_size: 20,
+      has_more: false,
+      total: 1,
+    });
+
+    const user = userEvent.setup();
+    renderWithQuery(<AdminUsersClient />);
+    await user.click(await screen.findByRole("button", { name: /unban/i }));
+
+    expect(await screen.findByText("suspected fraud")).toBeTruthy();
   });
 
   it("does not offer to ban another admin", async () => {
