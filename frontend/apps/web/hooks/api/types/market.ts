@@ -4,6 +4,17 @@ export interface MarketResponse {
   question: string
   description: string | null
   category: string | null
+  subcategory: string | null
+  image_url: string | null
+  /**
+   * How the market settles.
+   *
+   * Public on purpose: the submitter wrote it as a promise about when this
+   * market closes, so anyone taking a position is entitled to read it before
+   * committing money.
+   */
+  resolution_criteria: string | null
+  resolution_source: string | null
   status: string
   total_liquidity: string
   total_volume: string
@@ -14,6 +25,16 @@ export interface MarketResponse {
   winning_outcome_name: string | null
   /** null for markets that only have the default YES/NO pair • see MarketDetailResponse */
   outcomes: Outcome[] | null
+  /**
+   * Why a submission was declined, and when.
+   *
+   * Only ever non-null for the author and admins — the endpoint 404s for anyone
+   * else rather than 403, so the existence of an unpublished submission is not
+   * disclosed. The author keeps read access to their own declined market, which
+   * is what makes this the only channel they have to learn why.
+   */
+  rejection_reason: string | null
+  rejected_at: string | null
 }
 
 export interface MarketListResponse {

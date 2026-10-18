@@ -66,6 +66,16 @@ export function UserMenu() {
           <DropdownMenuItem>
             <Link href="/markets" className="w-full">Markets</Link>
           </DropdownMenuItem>
+          {/* The two halves of one feature, kept adjacent. Proposing a market is
+              pointless without a way to check what became of it, and a user who
+              has just submitted something will look for the answer immediately —
+              not three items further down a menu. */}
+          <DropdownMenuItem>
+            <Link href="/markets/new" className="w-full">Propose a market</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem>
+            <Link href="/markets/mine" className="w-full">My markets</Link>
+          </DropdownMenuItem>
           <DropdownMenuItem>
             <Link href="/trades" className="w-full">Trades</Link>
           </DropdownMenuItem>
