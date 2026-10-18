@@ -28,6 +28,7 @@ from app.models.market import (
     Outcome,
 )
 from app.models.user import RefreshToken, Session, User
+from app.schemas.admin import BanRequest, RejectMarketRequest, UnbanRequest
 from app.schemas.auth import StepUpRequest
 from app.services import admin_audit
 from app.services.admin_audit import AdminAuditService
@@ -37,6 +38,7 @@ from app.services.cache_service import (
     cache_invalidate_market_lists,
 )
 from app.services.liquidity_service import LiquidityService
+from app.services.notification_service import NotificationService
 from app.services.order_service import OrderService
 
 logger = logging.getLogger("PredictX")
@@ -93,6 +95,11 @@ async def list_users(
                 "is_admin": u.is_admin,
                 "is_email_verified": u.is_email_verified,
                 "is_2fa_enabled": u.is_2fa_enabled,
+                # So an admin can see why an account is inactive without opening
+                # the audit trail. A row that says "banned" and nothing else is
+                # the state that gets second-guessed months later.
+                "ban_reason": u.ban_reason,
+                "banned_at": u.banned_at.isoformat() if u.banned_at else None,
                 "created_at": u.created_at,
             }
             for u in users
@@ -134,7 +141,7 @@ async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
     """
     admin = await _get_admin_user(request, db)
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == _parse_user_id(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise NotFoundError("User not found")
@@ -199,6 +206,10 @@ async def get_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         "is_2fa_enabled": user.is_2fa_enabled,
         "is_2fa_pending": user.is_2fa_pending,
         "referral_code": user.referral_code,
+        # Why the account is inactive, when it is a ban. The detail view is where
+        # an admin decides whether to lift it, so the reason belongs here.
+        "ban_reason": user.ban_reason,
+        "banned_at": user.banned_at.isoformat() if user.banned_at else None,
         "created_at": user.created_at,
         "is_deleted": user.is_deleted,
         "wallet": (
@@ -266,11 +277,22 @@ def _serialisable(row) -> dict:
 
 
 @router.patch("/users/{user_id}/ban", summary="Ban user (admin)")
-async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Ban a user • deactivates the account and revokes all tokens/sessions."""
+async def ban_user(
+    user_id: str,
+    data: BanRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ban a user • deactivates the account and revokes all tokens/sessions.
+
+    The reason is required and is shown to the user. Everything else this does
+    — cancelling resting orders, releasing reserved funds, revoking sessions — is
+    irreversible from the user's side, so an unexplained ban leaves them unable to
+    appeal and the next admin unable to tell a justified one from a mistake.
+    """
     admin = await _get_admin_user(request, db)
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == _parse_user_id(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise NotFoundError("User not found")
@@ -279,6 +301,8 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         raise ForbiddenError("Cannot ban an admin")
 
     user.is_active = False
+    user.ban_reason = data.reason.strip()
+    user.banned_at = datetime.now(UTC)
     # Cancel resting orders BEFORE revoking sessions.
     #
     # A ban stops the user trading, so any open order becomes one they can never
@@ -324,9 +348,13 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
         request=request,
         target_type="user",
         target_id=str(user.id),
-        summary=f"Banned {user.email}",
+        summary=f"Banned {user.email}: {user.ban_reason}",
         payload={
             "email": user.email,
+            # The reason is the point of this action being answerable, so it goes
+            # in the trail as well as the column.
+            "reason": user.ban_reason,
+            **({"note": data.note} if data.note else {}),
             # Named in the audit because it is money: which orders were pulled and
             # the funds released is the first question anyone asks after a ban.
             "cancelled_order_ids": cancelled_orders,
@@ -349,16 +377,35 @@ async def ban_user(user_id: str, request: Request, db: AsyncSession = Depends(ge
 
 
 @router.patch("/users/{user_id}/unban", summary="Unban user (admin)")
-async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Unban a user • sets is_active=True."""
+async def unban_user(
+    user_id: str,
+    # Optional body. Every field of `UnbanRequest` is optional, so requiring the
+    # body anyway would make `PATCH /unban` fail with a 422 when called with no
+    # body at all - a reversal whose note is optional being impossible to perform
+    # without inventing something to send.
+    data: UnbanRequest | None = None,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Unban a user • sets is_active=True.
+
+    Clears the stored reason. An account that still carries a reason it is no
+    longer banned for is a support ticket waiting to happen — and on the login
+    screen a stale reason would be shown as though it were current. The history is
+    not lost: the audit trail holds every ban and unban, with actor, IP and user
+    agent.
+    """
     admin = await _get_admin_user(request, db)
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == _parse_user_id(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise NotFoundError("User not found")
 
+    previous_reason = user.ban_reason
     user.is_active = True
+    user.ban_reason = None
+    user.banned_at = None
     await db.commit()
 
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host if request.client else None
@@ -372,8 +419,18 @@ async def unban_user(user_id: str, request: Request, db: AsyncSession = Depends(
         request=request,
         target_type="user",
         target_id=str(user.id),
-        summary=f"Unbanned {user.email}",
-        payload={"email": user.email},
+        summary=(
+            f"Unbanned {user.email}"
+            + (f": {_note}" if (_note := (data.note.strip() if data and data.note else "")) else "")
+        ),
+        payload={
+            "email": user.email,
+            **({"note": _note} if _note else {}),
+            # The reason being lifted is part of the record: "what was this
+            # account accused of, and why was it dropped?" is one question and
+            # the answer spans both rows.
+            **({"previous_reason": previous_reason} if previous_reason else {}),
+        },
     )
 
     logger.info(f"User {user.id} unbanned by admin {admin.id}")
@@ -519,6 +576,75 @@ async def get_dispute(
             "created_at": dispute.created_at,
         }
     )
+
+
+async def _notify_author(
+    db: AsyncSession,
+    market: Market,
+    admin_id,
+    ntype: str,
+    title: str,
+    body: str,
+) -> None:
+    """Tell a market's author what a moderator decided, and never let that fail.
+
+    ## Why it is wrapped at all
+
+    The action has already happened by the time this runs: the status changed and
+    the audit row is written. If the notification then raises — Redis down, the
+    notifications table unavailable — an unhandled error would return 500 to a
+    moderator who has *already* declined the market. The retry they would
+    obviously perform now fails on a second attempt, because the market is no
+    longer pending, and the operator is left believing their click did nothing.
+
+    So a courtesy row must never be able to veto the decision it reports on. It is
+    logged loudly instead: a moderation queue where nobody is told anything is
+    still a working moderation queue, whereas a 500 that reads as "declined" but
+    half-applied is not.
+
+    Skipped entirely for an admin's own submission — they just did it, and being
+    told is noise that teaches people to ignore the channel.
+    """
+    if not market.created_by or market.created_by == admin_id:
+        return
+
+    try:
+        await NotificationService.dispatch(
+            db,
+            str(market.created_by),
+            ntype,
+            title,
+            body,
+            data={
+                "market_slug": market.slug,
+                "market_id": str(market.id),
+            },
+        )
+    except Exception:
+        logger.warning(
+            "Could not notify %s about %s (%s). The decision stands; "
+            "they can see it under My markets.",
+            market.created_by,
+            market.slug,
+            ntype,
+            exc_info=True,
+        )
+
+
+def _parse_user_id(user_id: str):
+    """Parse a user id before it reaches the driver.
+
+    `uuid.UUID("not-a-uuid")` raises `ValueError` inside the query, which asyncpg
+    surfaces as an unhandled 500 on a *client* mistake — the session is left in a
+    failed state and the response says "server error" for something the caller
+    typed wrong. `/admin/users/{user_id}/ban` with a bad id did exactly that.
+
+    Same reasoning as `_parse_dispute_id`: a malformed id is a 422, not a crash.
+    """
+    try:
+        return uuid.UUID(user_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValidationError("Invalid user id", error_code="INVALID_ID")
 
 
 def _parse_dispute_id(dispute_id: str):
@@ -821,6 +947,11 @@ async def list_markets_admin(
                 "created_at": m.created_at,
                 "created_by": str(m.created_by) if m.created_by else None,
                 "created_by_email": creators[m.created_by].email if m.created_by in creators else None,
+                # Carried on the queue row so triage does not need an open per
+                # market: "why was this declined?" is the first question asked
+                # about every rejected submission in the list.
+                "rejection_reason": m.rejection_reason,
+                "rejected_at": m.rejected_at.isoformat() if m.rejected_at else None,
             }
             for m in markets
         ],
@@ -859,7 +990,27 @@ async def approve_market(market_id: str, request: Request, db: AsyncSession = De
         summary=f"Approved market {market.slug}",
         payload={"slug": market.slug, "question": market.question},
     )
-    logger.info(f"Market approved: {market.slug} ({market.id})")
+
+    # Tell the author, if there is one to tell.
+    #
+    # Approving is the end of a loop the author started: they proposed something
+    # and are waiting to find out whether it is live. Without this they have to
+    # go and look — and a market that never went live looks, from the outside,
+    # exactly like one that was quietly dropped.
+    #
+    # Skipped for an admin's own submission, which needs no news.
+    await _notify_author(
+        db,
+        market,
+        admin.id,
+        "market_submission_reviewed",
+        "Your market is live",
+        f'"{market.question}" is now open for trading.',
+    )
+
+    logger.info(
+        "Market approved: %s (%s) by=%s", market.slug, market.id, admin.id
+    )
     return success_response(
         {"id": str(market.id), "slug": market.slug, "status": market.status},
         message="Market approved and published",
@@ -867,15 +1018,26 @@ async def approve_market(market_id: str, request: Request, db: AsyncSession = De
 
 
 @router.post("/markets/{market_id}/reject", summary="Reject a submitted market (admin)")
-async def reject_market(market_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def reject_market(
+    market_id: str,
+    data: RejectMarketRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Decline a submission: status → rejected, stays hidden from the catalogue.
 
-    The author keeps read access to their own submission (see GET /markets/{slug}).
+    The author keeps read access to their own submission (see GET /markets/{slug}),
+    so `rejection_reason` is the only way they learn why. That is why the reason
+    is required rather than an optional note: a submission declined with no
+    explanation cannot be fixed, because nobody can tell whether the problem was
+    the wording, the category, or the resolution criteria.
     """
     admin = await _get_admin_user(request, db)
     market = await _pending_market(db, market_id)
 
     await _set_market_status(db, market, STATUS_REJECTED)
+    market.rejection_reason = data.reason.strip()
+    market.rejected_at = datetime.now(UTC)
     await AdminAuditService.log_action(
         db,
         action=admin_audit.MARKET_REJECTED,
@@ -884,11 +1046,38 @@ async def reject_market(market_id: str, request: Request, db: AsyncSession = Dep
         request=request,
         target_type="market",
         target_id=str(market.id),
-        summary=f"Rejected market {market.slug}",
-        payload={"slug": market.slug, "question": market.question},
+        summary=f"Rejected market {market.slug}: {market.rejection_reason}",
+        payload={
+            "slug": market.slug,
+            "question": market.question,
+            "reason": market.rejection_reason,
+            **({"note": data.note.strip()} if data.note and data.note.strip() else {}),
+        },
     )
-    logger.info(f"Market rejected: {market.slug} ({market.id})")
+    # The reason goes in the notification, not just the column. A decline the
+    # author has to go and discover is a decline they may never find — and the
+    # whole reason the field is required is that they are entitled to know.
+    await _notify_author(
+        db,
+        market,
+        admin.id,
+        "market_submission_declined",
+        "Your market was declined",
+        f'"{market.question}" was not approved: {market.rejection_reason}',
+    )
+
+    logger.info(
+        "Market rejected: %s (%s) reason=%s",
+        market.slug,
+        market.id,
+        market.rejection_reason,
+    )
     return success_response(
-        {"id": str(market.id), "slug": market.slug, "status": market.status},
+        {
+            "id": str(market.id),
+            "slug": market.slug,
+            "status": market.status,
+            "rejection_reason": market.rejection_reason,
+        },
         message="Market rejected",
     )

@@ -37,6 +37,10 @@ MARKET_REJECTED = "market_rejected"
 USER_BANNED = "user_banned"
 USER_UNBANNED = "user_unbanned"
 PROTOCOL_FEES_DISTRIBUTED = "protocol_fees_distributed"
+# A *manual* withdrawal, as distinct from the protocol-fee sweep. Two action
+# names rather than one, because "money moved" and "someone typed a number"
+# are different events and an auditor needs to tell them apart.
+TREASURY_DISTRIBUTION = "treasury_distribution"
 # A privileged action refused because step-up credentials were wrong. Audited
 # because an actor repeatedly guessing at them is itself worth a row.
 STEP_UP_FAILED = "step_up_failed"

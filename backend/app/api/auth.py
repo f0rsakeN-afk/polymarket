@@ -954,6 +954,18 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
         raise UnauthorizedError("Invalid email or password")
 
     if not user.is_active:
+        # A ban says why, and the user is entitled to know.
+        #
+        # "Account is inactive" is indistinguishable from a wrong password, a
+        # stale email or a bug, and a user who has been told nothing cannot
+        # appeal it. So the recorded reason comes back here — which is only
+        # possible because `ban_user` requires one.
+        #
+        # A deactivated account that was *deleted* rather than banned has no
+        # reason, and must not be described as banned: that would invent an
+        # accusation against someone whose account no longer exists.
+        if user.ban_reason and not user.is_deleted:
+            raise ForbiddenError(f"Account suspended: {user.ban_reason}")
         raise UnauthorizedError("Account is inactive")
 
     if not user.is_email_verified:

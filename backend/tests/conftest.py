@@ -63,6 +63,7 @@ os.environ["WS_ALLOW_QUERY_TOKEN"] = "true"
 if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_pytest_local_secret"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -512,3 +513,27 @@ async def drain_publishes(bus) -> None:
                 break
         await _asyncio.sleep(0.005)
     await bus._dispatcher.stop()
+
+
+@pytest.fixture(autouse=True)
+def _clear_health_cache():
+    """Drop the readiness memo between tests.
+
+    `app.api.health._cached` is a process-level global holding a payload built on
+    whichever event loop ran first. `pytest.ini` gives every test its own loop, so
+    a cached payload is unusable by the next test: `_check_db` raises
+    `Event loop is closed`, `_bounded` turns that into "db unavailable", and the
+    schema check is then skipped - because it is deliberately only asked once
+    reachability is known.
+
+    The visible symptom is a `KeyError: 'schema'` several tests after a passing
+    one, which reads as a bug in the check rather than in the harness. It only
+    appeared once a second module started exercising readiness, so putting the
+    fixture here rather than in that module is the point: any future test that
+    touches `/health/ready` gets it for free.
+    """
+    from app.api import health as health_module
+
+    health_module._cached = None
+    yield
+    health_module._cached = None
