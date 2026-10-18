@@ -619,10 +619,31 @@ async def create_market(
             market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount_dec
 
     await db.commit()
-    logger.info(f"Market created: {data.slug} by user={user.id} status={market.status}")
+
+    # Re-read with the outcomes eagerly loaded, rather than touching
+    # `market.outcomes` here.
+    #
+    # `commit()` expires every attribute, and `outcomes` is a lazy relationship —
+    # so reading it in the handler is IO on an expired object, which SQLAlchemy
+    # cannot await and reports as `MissingGreenlet`. The fix is to ask for the
+    # data with a query, not to reach for an attribute that is no longer loaded.
+    reloaded = (
+        await db.execute(
+            select(Market)
+            .where(Market.id == market.id)
+            .options(selectinload(Market.outcomes))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+    logger.info(f"Market created: {data.slug} by user={user.id} status={reloaded.status}")
     await cache_invalidate_market_lists()
     return success_response(
-        market_to_response(market).model_dump(),
+        # With the outcomes, not without. `MarketResponse.outcomes` is nullable
+        # because the *list* endpoint omits it, and returning null here made a
+        # freshly created market look like it had none — the caller has no way to
+        # tell "no outcomes" from "this endpoint doesn't include them".
+        market_to_response(reloaded, outcomes=list(reloaded.outcomes or [])).model_dump(),
         message=(
             "Market created"
             if market.status == STATUS_ACTIVE
