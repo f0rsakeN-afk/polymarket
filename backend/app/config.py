@@ -150,6 +150,20 @@ class Settings(BaseSettings):
     # the deadline no rotation can move (see app/api/auth.py).
     refresh_chain_max_seconds: int = 2592000  # 30 days from last login
 
+    # How long a *revoked* refresh token is still forgiven when it is presented
+    # again by the same device. See `POST /auth/refresh`.
+    #
+    # This exists because the storefront and the admin panel share one cookie jar
+    # — cookies are keyed by domain and path, not by port — so whichever app
+    # refreshes first rotates the token out from under the other, and the loser
+    # replays a revoked token on an ordinary page load. Without a window that is
+    # indistinguishable from a stolen token and logs the user out of every device.
+    #
+    # Deliberately short. It has to cover the seconds between two apps refreshing
+    # at once, and nothing else; a genuine thief replaying outside it gets the
+    # chain revoked, as they should.
+    refresh_reuse_grace_seconds: int = 30
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

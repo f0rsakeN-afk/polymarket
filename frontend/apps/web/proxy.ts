@@ -66,6 +66,13 @@ async function validateSession(request: NextRequest) {
     apiBase: API_BASE,
     accessToken: getCookie(request, ACCESS_COOKIE),
     refreshToken: getCookie(request, REFRESH_COOKIE),
+    // Forwarded because the backend fingerprints refresh tokens by User-Agent
+    // and revokes on mismatch. This refresh runs in Node, whose `fetch` sends
+    // its own UA — so without this, the first refresh after the access token
+    // expires reads as a different device, the token is revoked, and the session
+    // is destroyed. That is what logged operators out of the admin app every
+    // fifteen minutes.
+    userAgent: request.headers.get("user-agent"),
   });
 }
 
