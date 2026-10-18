@@ -2,13 +2,14 @@
 
 import { useCallback, useState } from "react"
 import Link from "next/link"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { sileo } from "sileo"
 import { Ban, RotateCcw, Search } from "lucide-react"
 
+import { useQuery } from "@tanstack/react-query"
+
 import { adminApi, type AdminUserRow } from "@workspace/api-client/admin"
-import { apiErrorMessage } from "@workspace/api-client/client"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
+import { BanUserDialog, UnbanUserDialog } from "@/components/ban-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
@@ -112,7 +113,6 @@ function UserRow({
 }
 
 export function AdminUsersClient() {
-  const qc = useQueryClient()
   const [search, setSearch] = useState("")
   const [applied, setApplied] = useState("")
   const [page, setPage] = useState(1)
@@ -129,37 +129,12 @@ export function AdminUsersClient() {
     retry: false,
   })
 
-  const invalidate = useCallback(() => {
-    qc.invalidateQueries({ queryKey: queryKeys.adminRoot() })
-    qc.invalidateQueries({ queryKey: ["admin", "user"] })
-  }, [qc])
-
-  const banMutation = useMutation({
-    mutationFn: (userId: string) => adminApi.ban(userId),
-    onSuccess: (res) => {
-      invalidate()
-      const cancelled = res.data?.cancelled_order_ids ?? []
-      sileo.success({
-        title: "User banned",
-        // Named, not summarised. The released funds are the part an operator
-        // needs to be able to reconcile afterwards.
-        description:
-          cancelled.length > 0
-            ? `${cancelled.length} open order(s) cancelled and funds released: ${cancelled.join(", ")}`
-            : "No open orders to cancel.",
-      })
-    },
-    onError: (err) => sileo.error({ title: apiErrorMessage(err, "Could not ban user") }),
-  })
-
-  const unbanMutation = useMutation({
-    mutationFn: (userId: string) => adminApi.unban(userId),
-    onSuccess: () => {
-      invalidate()
-      sileo.success({ title: "User unbanned" })
-    },
-    onError: (err) => sileo.error({ title: apiErrorMessage(err, "Could not unban user") }),
-  })
+  // The ban/unban logic now lives in the dialogs, because both need input first:
+  // a ban cannot be sent without a reason the user will read, and a reversal is a
+  // decision worth recording even when its note is optional. What stays here is
+  // *which* user is being acted on.
+  const [banning, setBanning] = useState<AdminUserRow | null>(null)
+  const [unbanning, setUnbanning] = useState<AdminUserRow | null>(null)
 
   const rows = data ?? []
   const total = data ? (data as unknown as { total?: number }).total : undefined
@@ -176,27 +151,30 @@ export function AdminUsersClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Users</h1>
-          <p className="text-sm text-muted-foreground">
-            {total !== undefined ? `${total} account${total === 1 ? "" : "s"}` : "Loading…"}
-          </p>
-        </div>
-        <form onSubmit={onSearch} className="flex gap-2">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search email or username"
-            aria-label="Search users"
-            className="w-64"
-          />
-          <Button type="submit" variant="outline" size="sm">
-            <Search className="size-3.5" />
-            Search
-          </Button>
-        </form>
-      </div>
+      <PageHeader
+        title="Users"
+        description={
+          total !== undefined ? `${total} account${total === 1 ? "" : "s"}` : "Loading…"
+        }
+        actions={
+          /* `role="search"` rather than a bare form: a screen reader user landing
+             here is looking for a way to find a specific account, and "search" is
+             what tells them one exists. */
+          <form role="search" onSubmit={onSearch} className="flex w-full gap-2 sm:w-auto">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search email or username"
+              aria-label="Search users"
+              className="min-w-0 flex-1 sm:w-64 sm:flex-none"
+            />
+            <Button type="submit" variant="outline" size="sm">
+              <Search className="size-3.5" />
+              Search
+            </Button>
+          </form>
+        }
+      />
 
       <Card className="overflow-hidden pt-0">
         {isLoading ? (
@@ -238,9 +216,9 @@ export function AdminUsersClient() {
                   <UserRow
                     key={user.id}
                     user={user}
-                    isPending={banMutation.isPending || unbanMutation.isPending}
-                    onBan={(u) => banMutation.mutate(u.id)}
-                    onUnban={(u) => unbanMutation.mutate(u.id)}
+                    isPending={false}
+                    onBan={(u) => setBanning(u)}
+                    onUnban={(u) => setUnbanning(u)}
                   />
                 ))}
               </TableBody>
@@ -248,6 +226,21 @@ export function AdminUsersClient() {
           </div>
         )}
       </Card>
+
+      <BanUserDialog
+        key={banning?.id ?? "no-ban-target"}
+        user={banning}
+        onOpenChange={(open) => !open && setBanning(null)}
+      />
+      <UnbanUserDialog
+        key={unbanning?.id ?? "no-unban-target"}
+        user={
+          unbanning
+            ? { id: unbanning.id, email: unbanning.email, banReason: unbanning.ban_reason }
+            : null
+        }
+        onOpenChange={(open) => !open && setUnbanning(null)}
+      />
 
       <div className="flex items-center justify-between">
         <Button
