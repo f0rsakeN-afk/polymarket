@@ -1,5 +1,10 @@
 services:
   web:
+    # Non-root (`USER bun` in the image) can only write to the bind mount if its
+    # uid matches the host user's. `user:` is the standard way to do that; the
+    # default of 1000 is the image's `bun` user, which is also what the official
+    # node/bun images use.
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -37,6 +42,11 @@ services:
   # the link points at the API origin, which is a confusing dead end rather than
   # the storefront the operator came from.
   admin:
+    # Non-root (`USER bun` in the image) can only write to the bind mount if its
+    # uid matches the host user's. `user:` is the standard way to do that; the
+    # default of 1000 is the image's `bun` user, which is also what the official
+    # node/bun images use.
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     build:
       context: .
       dockerfile: Dockerfile.dev
