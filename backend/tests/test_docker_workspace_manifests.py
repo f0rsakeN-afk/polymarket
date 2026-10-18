@@ -60,9 +60,25 @@ def _workspace_manifests() -> set[str]:
 def _copied_manifests(dockerfile: str) -> set[str]:
     """Manifests the Dockerfile copies before its `bun install`."""
     text = (FRONTEND / dockerfile).read_text()
-    install_at = text.index("bun install")
-    prefix = text[:install_at]
-    return set(re.findall(r"^COPY\s+(\S+package\.json)\s", prefix, re.MULTILINE))
+    # Anchored on `RUN bun install`, not on the bare phrase. `Dockerfile.dev`
+    # explains *why* it uses `--chown` in a comment that itself mentions
+    # `bun install`, and a plain `text.index("bun install")` found that comment —
+    # so the "prefix before install" was the comment block, containing no COPY
+    # lines at all, and every manifest read as uncopied.
+    #
+    # A control that fires for the wrong reason is worse than no control, because
+    # the response to a test that is always red is to delete it — and the next
+    # failure really would be a missing manifest, with nobody watching.
+    match = re.search(r"^RUN\s+bun install", text, re.MULTILINE)
+    assert match, f"{dockerfile} has no `RUN bun install` to measure against"
+    prefix = text[: match.start()]
+    # Flags before the source are skipped, for the same reason: `--chown=bun:bun`
+    # is what lets the non-root user own the tree in the dev image.
+    return set(
+        re.findall(
+            r"^COPY\s+(?:--[^\s]+\s+)*(\S+package\.json)\s", prefix, re.MULTILINE
+        )
+    )
 
 
 @pytest.mark.parametrize("dockerfile", DOCKERFILES)

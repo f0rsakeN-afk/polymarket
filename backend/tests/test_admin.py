@@ -97,7 +97,7 @@ async def test_get_user_not_found(client: AsyncClient, admin_user):
 async def test_ban_user_admin(client: AsyncClient, admin_user, test_user):
     """Admin can ban a user."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "banned"
 
@@ -106,7 +106,7 @@ async def test_ban_user_admin(client: AsyncClient, admin_user, test_user):
 async def test_ban_user_not_found(client: AsyncClient, admin_user):
     """Ban on non-existent user returns 404."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{uuid4()}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{uuid4()}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 404
 
 
@@ -122,7 +122,7 @@ async def test_unban_user_not_found(client: AsyncClient, admin_user):
 async def test_ban_admin_forbidden(client: AsyncClient, admin_user):
     """Admin cannot ban another admin."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{admin_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{admin_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 403
 
 
@@ -130,7 +130,7 @@ async def test_ban_admin_forbidden(client: AsyncClient, admin_user):
 async def test_ban_non_admin_forbidden(client: AsyncClient, test_user, admin_user):
     """Non-admin cannot ban users."""
     client.cookies.set("access_token", token_for(test_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 403
 
 

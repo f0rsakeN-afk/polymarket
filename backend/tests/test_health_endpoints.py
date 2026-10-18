@@ -137,9 +137,18 @@ async def test_readiness_reports_each_dependency_separately(client: AsyncClient)
 
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["checks"]) == {"db", "redis"}, (
-        "readiness checks must be reported individually - and must not include "
-        "Celery workers, which are not something serving traffic requires"
+
+    # Required keys are asserted individually rather than as an exact set, because
+    # the original assertion made adding a legitimate dependency check a test
+    # failure - and "the set changed" is not the thing anybody is trying to catch.
+    # The Celery exclusion below is the part with teeth.
+    for required in ("db", "redis", "schema"):
+        assert required in body["checks"], f"readiness must report {required}"
+
+    assert not any("celery" in name or "worker" in name for name in body["checks"]), (
+        "readiness must not include Celery workers - they are not something "
+        "serving traffic requires, and reporting them turns a slow worker into "
+        "an outage"
     )
     for name, check in body["checks"].items():
         assert "status" in check, name
