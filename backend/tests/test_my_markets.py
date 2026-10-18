@@ -408,6 +408,33 @@ async def test_resolution_criteria_survives_creation(
 
 
 @pytest.mark.asyncio
+async def test_the_create_response_carries_the_outcomes(client: AsyncClient, as_author):
+    """Returning `outcomes: null` from a create made a market that has them look
+    like it had none.
+
+    `MarketResponse.outcomes` is nullable because the *list* endpoint omits it, so
+    a caller had no way to tell "this market has no outcomes" from "this endpoint
+    does not include them" — and the first thing anyone does after creating a
+    market is look at it.
+    """
+    slug = f"created-{uuid.uuid4().hex[:8]}"
+
+    resp = await client.post(
+        "/api/v1/markets/",
+        json={
+            "question": "Will the create response include its outcomes?",
+            "slug": slug,
+            "closes_at": (datetime.now(UTC) + timedelta(days=60)).isoformat(),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    outcomes = resp.json()["data"]["outcomes"]
+    assert outcomes, "the created market came back with no outcomes"
+    assert {o["name"].lower() for o in outcomes} == {"yes", "no"}
+
+
+@pytest.mark.asyncio
 async def test_a_non_http_image_url_is_refused(client: AsyncClient, as_author):
     """The value is rendered as an `<img src>`, so `javascript:` and `data:`
     are the thing to refuse. Failing the submission beats rendering nothing."""
