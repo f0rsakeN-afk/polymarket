@@ -3,6 +3,28 @@ import time
 
 logger = logging.getLogger("PredictX")
 
+
+def _redact_email(address: str | None) -> str | None:
+    """Enough of an address to correlate, not enough to use.
+
+    Every send, failure, rate-limit and enqueue was logged at INFO with the
+    recipient's full address. INFO is the level that ends up shipped somewhere
+    long-lived and widely readable, so that is a list of everyone's email
+    address sitting in a log aggregator - and for a prediction market, the
+    address is also the login identifier.
+
+    The domain is kept because it is what actually tells you whether a send is
+    failing for one recipient or for a whole provider, and the local part is
+    reduced to its first character: enough to tell two sends apart, not enough to
+    contact anyone.
+    """
+    if not address or "@" not in address:
+        return address
+    local, _, domain = address.partition("@")
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***@{domain}"
+
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX = 100  # max emails per window per purpose
 
@@ -41,12 +63,12 @@ def _send_email_sync(to_email: str, subject: str, body: str):
                 server.starttls()
                 server.login(settings.smtp_user, settings.smtp_pass)
                 server.send_message(msg)
-            logger.info(f"[EMAIL] sent via SMTP to {to_email}: {subject}")
+            logger.info("[EMAIL] sent via SMTP", extra={"to": _redact_email(to_email), "subject": subject})
             return
 
         import resend
         if not settings.resend_api_key:
-            logger.warning(f"[EMAIL MOCK] to={to_email} subject={subject}")
+            logger.warning("[EMAIL MOCK]", extra={"to": _redact_email(to_email), "subject": subject})
             return
 
         resend.api_key = settings.resend_api_key
@@ -56,9 +78,9 @@ def _send_email_sync(to_email: str, subject: str, body: str):
             "subject": subject,
             "text": body,
         })
-        logger.info(f"[EMAIL] sent to {to_email}: {subject}")
+        logger.info("[EMAIL] sent", extra={"to": _redact_email(to_email), "subject": subject})
     except Exception as exc:
-        logger.error(f"[EMAIL] failed to send to {to_email}: {exc}")
+        logger.error("[EMAIL] failed to send", extra={"to": _redact_email(to_email), "subject": subject, "error": str(exc)})
 
 
 class EmailService:
@@ -108,13 +130,13 @@ class EmailService:
         # C7 fix: removed daemon thread • fire-and-forget thread is lost on gunicorn restart
         # and bursts create unbounded threads. Celery delay is non-blocking (Redis push).
         if not _check_rate_limit(purpose):
-            logger.warning(f"[EMAIL] Rate limit exceeded for purpose={purpose}, queuing for retry")
+            logger.warning("[EMAIL] rate limited, queuing for retry", extra={"purpose": purpose})
             raise RuntimeError("Rate limit exceeded")
         try:
             from app.workers.tasks import send_auth_email as task
 
             task.delay(email=email, purpose=purpose, code=code, magic_url=magic_url)
-            logger.info(f"[EMAIL] enqueued for {email}, purpose={purpose}")
+            logger.info("[EMAIL] enqueued", extra={"to": _redact_email(email), "purpose": purpose})
         except Exception as exc:
             logger.warning(f"[EMAIL] Celery unavailable ({exc}), sending sync")
             _send_email_sync(email, subject, body)

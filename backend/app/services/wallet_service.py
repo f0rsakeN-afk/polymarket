@@ -113,7 +113,10 @@ class WalletService:
             await db.rollback()
             raise IdempotencyError("Withdrawal already processed")
 
-        logger.info(f"Withdrawal: user={user.id} amount={float(amount)}")
+        logger.info(
+            "Withdrawal requested",
+            extra={"user_id": str(user.id), "amount": str(amount)},
+        )
 
         return {
             "withdrawal_id": str(tx.id),
@@ -153,7 +156,10 @@ class WalletService:
             if blockchain_tx_hash:
                 # Keep reference_id (idempotency key) immutable • store on-chain hash in extra_data
                 tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
-            logger.info(f"Withdrawal confirmed: id={withdrawal_id} tx={blockchain_tx_hash}")
+            logger.info(
+                "Withdrawal confirmed",
+                extra={"withdrawal_id": str(withdrawal_id), "tx": blockchain_tx_hash},
+            )
         else:
             # Reject: reverse the balance that was debited at submission
             wallet_result = await db.execute(
@@ -165,7 +171,10 @@ class WalletService:
             tx.status = "failed"
             if blockchain_tx_hash:
                 tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
-            logger.warning(f"Withdrawal rejected: id={withdrawal_id} tx={blockchain_tx_hash}")
+            logger.warning(
+                "Withdrawal rejected",
+                extra={"withdrawal_id": str(withdrawal_id), "tx": blockchain_tx_hash},
+            )
 
         await db.commit()
         return {"withdrawal_id": str(tx.id), "status": tx.status}

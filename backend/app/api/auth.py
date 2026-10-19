@@ -51,7 +51,7 @@ from app.schemas.auth import (
     VerifyMagicUrlRequest,
 )
 from app.services.audit_service import AuthAuditService
-from app.services.email_service import EmailService
+from app.services.email_service import EmailService, _redact_email
 from app.services.otp_service import OTPService
 from app.services.password_strength_service import PasswordStrengthService
 from app.services.rate_limit_service import RateLimitService
@@ -519,7 +519,11 @@ async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSess
 
 
 @router.post("/magic-link", summary="Request magic link code via email")
-async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db)):
+async def magic_link(
+    data: MagicLinkRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
@@ -530,7 +534,16 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
 
     code = await OTPService.send_code(data.email, _OTP_MAGIC)
     EmailService.send_magic_code(data.email, code)
-    logger.info(f"Magic link code requested: {data.email}")
+    # DEBUG, not INFO, and the address is redacted.
+    #
+    # At INFO this put every requested login code's recipient into a log
+    # aggregator, and the email is also the account identifier. Whether someone
+    # asked for a code is an operational question nobody needs answered from a
+    # retained log; the audit table records sign-in events that actually mattered.
+    logger.debug(
+        "Magic link code requested",
+        extra={"email": _redact_email(data.email), "ip": _get_client_ip(request)},
+    )
     return success_response({"message": "Login code sent"}, message="Login code sent")
 
 
