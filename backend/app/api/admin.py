@@ -60,8 +60,16 @@ async def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None, max_length=100),
+    status: str = Query("all", pattern="^(all|active|banned|admins|unverified)$"),
+    sort: str = Query("newest", pattern="^(newest|oldest|email)$"),
 ):
-    """List all users with pagination and optional search (email or username)."""
+    """List users with pagination, optional search, state filter and ordering.
+
+    Search alone was not enough. "Show me the banned accounts" is the first thing
+    an operator reaches for during an incident, and answering it by scrolling
+    every page looking for a status column means the answer exists only on a
+    page they happen to land on.
+    """
     await _get_admin_user(request, db)
 
     query = select(User)
@@ -77,7 +85,32 @@ async def list_users(
             (User.email.ilike(f"%{safe_search}%", escape="\\")) |
             (User.username.ilike(f"%{safe_search}%", escape="\\"))
         )
-    query = query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+
+    # `banned_at` rather than `is_active`: a deactivated account and a banned one
+    # are different states with different reasons, and `is_active` alone cannot
+    # tell an operator which of the two they are looking at.
+    status_filter = {
+        "active": User.is_active.is_(True),
+        "banned": User.banned_at.is_not(None),
+        "admins": User.is_admin.is_(True),
+        "unverified": User.is_email_verified.is_(False),
+    }.get(status)
+
+    if status_filter is not None:
+        query = query.where(status_filter)
+        count_query = count_query.where(status_filter)
+
+    # The id tiebreak is not decoration. Seed data and bulk imports produce rows
+    # sharing a `created_at` to the microsecond, and an unstable sort silently
+    # repeats rows across page boundaries and drops others - a list that appears
+    # to work while quietly losing accounts.
+    ordering = {
+        "newest": (User.created_at.desc(), User.id.desc()),
+        "oldest": (User.created_at.asc(), User.id.asc()),
+        "email": (User.email.asc(), User.id.asc()),
+    }[sort]
+
+    query = query.order_by(*ordering).offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
     users = result.scalars().all()

@@ -12,8 +12,15 @@
 export const queryKeys = {
   me: () => ["auth", "me"] as const,
   adminRoot: () => ["admin"] as const,
-  adminUsers: (page: number, search: string) =>
-    ["admin", "users", page, search] as const,
+  /**
+   * Every parameter that changes the result is in the key. `sort` was missing
+   * once, and the failure was quiet: the trigger updated to the new option, the
+   * component state changed, and React Query handed back the cached page for the
+   * old ordering because the key still matched. The control looked like it
+   * worked and did nothing.
+   */
+  adminUsers: (page: number, search: string, status: string, sort: string) =>
+    ["admin", "users", page, search, status, sort] as const,
   adminUser: (userId: string, include?: string[]) =>
     ["admin", "user", userId, ...(include ?? [])] as const,
   /** The treasury movement history - a distinct key so invalidating the balance
