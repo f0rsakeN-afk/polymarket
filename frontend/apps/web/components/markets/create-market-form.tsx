@@ -48,6 +48,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   Field,
   FieldContent,
@@ -84,6 +85,17 @@ const createMarketSchema = z.object({
   // meant to express, and it keeps zod's input and output types identical —
   // which `z.preprocess` would not, and a mismatch there breaks the generic on
   // `useForm` in a way whose error message points nowhere near the schema.
+  // An outcome list, when the market is not a plain Yes/No.
+  //
+  // `[]` means "give me the default Yes/No pair", which is what a submitter who
+  // never touches this field gets. Any other length is checked against the same
+  // rules the server applies, because the alternative is discovering a duplicate
+  // name or a gap in the indices from a 422 after filling the form in.
+  outcome_mode: z.enum(["yes_no", "custom"]),
+  outcomes: z
+    .array(z.object({ name: z.string().trim().min(1, "Every outcome needs a name").max(100) }))
+    .max(50, "50 outcomes is the ceiling.")
+    .optional(),
   image_url: z
     .union([
       z.literal(""),
@@ -167,10 +179,31 @@ export function CreateMarketForm() {
       resolution_source: "",
       initial_liquidity: 0,
       initial_probability: undefined,
+      outcome_mode: "yes_no",
+      outcomes: [{ name: "Yes" }, { name: "No" }],
     },
   })
 
   const slugValue = form.watch("slug")
+  const outcomeMode = form.watch("outcome_mode")
+  const customOutcomes = form.watch("outcomes") ?? []
+
+  /**
+   * Checked here rather than only on submit, because the server's rules are the
+   * same two: a duplicate name and a blank one both make a market whose outcome
+   * nobody can refer to unambiguously.
+   */
+  const outcomeProblem =
+    outcomeMode === "custom"
+      ? customOutcomes.length < 2
+        ? "A market needs at least 2 outcomes."
+        : customOutcomes.some((o) => !o.name.trim())
+          ? "Every outcome needs a name."
+          : new Set(customOutcomes.map((o) => o.name.trim().toLowerCase())).size !==
+              customOutcomes.length
+            ? "Outcomes cannot share a name."
+            : null
+      : null
 
   /**
    * Registered once, then wrapped.
@@ -216,10 +249,15 @@ export function CreateMarketForm() {
           ...(data.initial_probability === undefined
             ? {}
             : { initial_probability: data.initial_probability }),
-          outcomes_create: [
-            { name: "Yes", outcome_index: 0 },
-            { name: "No", outcome_index: 1 },
-          ],
+          // Indices are positional and rebuilt on submit, so removing an outcome
+          // from the middle of the list cannot leave a gap the server rejects.
+          outcomes_create:
+            data.outcome_mode === "custom"
+              ? (data.outcomes ?? []).map((o, i) => ({ name: o.name.trim(), outcome_index: i }))
+              : [
+                  { name: "Yes", outcome_index: 0 },
+                  { name: "No", outcome_index: 1 },
+                ],
         },
         {
           onSuccess: (res) => {
@@ -438,6 +476,122 @@ export function CreateMarketForm() {
               Generated from your question. It becomes permanent once approved, so
               check it now:{" "}
               <span className="font-mono text-foreground">{previewUrl}</span>
+            </FieldDescription>
+          )}
+        </FieldContent>
+      </Field>
+
+      {/* ── Outcomes ─────────────────────────────────────────────────────── */}
+      <Field>
+        <FieldLabel>Outcomes</FieldLabel>
+        <FieldContent>
+          {/* A choice rather than an "Add outcome" button.
+
+              The button existed and built markets the API rejected, because the
+              request schema capped `outcome_index` at 1 while the rest of the
+              system had always been written for N. That made the control look
+              broken rather than unavailable. Both sides are fixed now, so the
+              choice is stated up front rather than discovered at submit. */}
+          <div
+            role="radiogroup"
+            aria-label="Outcomes"
+            className="flex flex-wrap gap-2"
+          >
+            {[
+              { value: "yes_no", label: "Yes / No" },
+              { value: "custom", label: "Named outcomes" },
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={outcomeMode === option.value}
+                onClick={() =>
+                  form.setValue("outcome_mode", option.value as "yes_no" | "custom", {
+                    shouldDirty: true,
+                  })
+                }
+                className={cn(
+                  "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  outcomeMode === option.value
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-accent"
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          {outcomeMode === "custom" ? (
+            <div className="mt-3 space-y-2">
+              {customOutcomes.map((outcome, index) => {
+                const duplicate = outcome.name.trim()
+                  ? customOutcomes.findIndex(
+                      (o) =>
+                        o.name.trim().toLowerCase() === outcome.name.trim().toLowerCase()
+                    ) === index
+                  : true;
+                return (
+                  <div key={index} className="flex items-center gap-2">
+                    <label htmlFor={`outcome-${index}`} className="sr-only">
+                      Outcome {index + 1}
+                    </label>
+                    <Input
+                      id={`outcome-${index}`}
+                      value={outcome.name}
+                      onChange={(event) =>
+                        form.setValue("outcomes", customOutcomes.map((o, i) =>
+                          i === index ? { name: event.target.value } : o
+                        ))
+                      }
+                      placeholder={`Outcome ${index + 1}`}
+                      aria-invalid={!duplicate}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={customOutcomes.length <= 2}
+                      onClick={() =>
+                        form.setValue(
+                          "outcomes",
+                          customOutcomes.filter((_, i) => i !== index)
+                        )
+                      }
+                      aria-label={`Remove outcome ${index + 1}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                );
+              })}
+              {outcomeProblem ? (
+                <p role="alert" className="text-xs text-destructive">
+                  {outcomeProblem}
+                </p>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={customOutcomes.length >= 50}
+                onClick={() =>
+                  form.setValue("outcomes", [...customOutcomes, { name: "" }])
+                }
+              >
+                Add outcome
+              </Button>
+              <FieldDescription>
+                Each outcome gets its own price and pool. Two outcomes cannot share
+                a name, or &quot;I bet on this&quot; resolves ambiguously.
+              </FieldDescription>
+            </div>
+          ) : (
+            <FieldDescription>
+              A market that closes one way or the other. Most questions are like
+              this.
             </FieldDescription>
           )}
         </FieldContent>
