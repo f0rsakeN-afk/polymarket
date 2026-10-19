@@ -51,8 +51,18 @@ export function Pagination({
   const totalPages = knownTotal ? Math.max(1, Math.ceil(total / pageSize)) : null
   const lastPage = totalPages ?? (hasMore ? page + 1 : page)
 
+  /**
+   * Forward capability comes from `lastPage`, not from `hasMore` directly.
+   *
+   * These two disagreed: a known total computed `lastPage` - and clamped the
+   * Next handler with it - while the disabled check consulted only `hasMore`.
+   * So an endpoint that reports a total but omits or mis-flags `has_more` left
+   * the operator on page 1 of 20 with a disabled Next. Trusting the derived
+   * page count is the same answer when the server is consistent, and the correct
+   * one when it is not.
+   */
   const canGoBack = page > 1 && !isLoading
-  const canGoForward = (hasMore ?? false) && !isLoading
+  const canGoForward = page < lastPage && !isLoading
 
   if (!canGoBack && !canGoForward) return null
 

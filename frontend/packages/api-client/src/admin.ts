@@ -237,12 +237,27 @@ function qs(params: Record<string, string | number | undefined>): string {
 }
 
 export const adminApi = {
-  users: (params: { page?: number; pageSize?: number; search?: string } = {}) =>
+  /**
+   * `status` and `sort` are not conveniences. "Show me the banned accounts" is
+   * the first lookup during an incident, and without a filter it means paging
+   * the whole list hoping the row you need is on the page you land on.
+   */
+  users: (
+    params: {
+      page?: number
+      pageSize?: number
+      search?: string
+      status?: "all" | "active" | "banned" | "admins" | "unverified"
+      sort?: "newest" | "oldest" | "email"
+    } = {}
+  ) =>
     api.get<Page<AdminUserRow>>(
       `/api/v1/admin/users${qs({
         page: params.page ?? 1,
         page_size: params.pageSize ?? 20,
         search: params.search,
+        status: params.status,
+        sort: params.sort,
       })}`
     ),
 

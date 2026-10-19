@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query"
 import { adminApi, type AdminUserRow } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
+import { Pagination } from "@/components/pagination"
 import { BanUserDialog, UnbanUserDialog } from "@/components/ban-dialog"
 import { userSearchSchema } from "@/schemas/privileged"
 import { Button } from "@workspace/ui/components/button"
@@ -24,6 +25,33 @@ import {
   TableHeader,
   TableRow,
 } from "@workspace/ui/components/table"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
+
+/** Mirrors the backend's `status` pattern on `GET /admin/users`. */
+const USER_STATUSES = [
+  { value: "all", label: "All accounts" },
+  { value: "active", label: "Active" },
+  { value: "banned", label: "Banned" },
+  { value: "admins", label: "Admins" },
+  { value: "unverified", label: "Unverified email" },
+] as const
+
+type UserStatus = (typeof USER_STATUSES)[number]["value"]
+
+/** Mirrors the backend's `sort` pattern on `GET /admin/users`. */
+const USER_SORTS = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "email", label: "Email A-Z" },
+] as const
+
+type UserSort = (typeof USER_SORTS)[number]["value"]
 
 /**
  * User administration.
@@ -117,13 +145,23 @@ export function AdminUsersClient() {
   const [search, setSearch] = useState("")
   const [applied, setApplied] = useState("")
   const [page, setPage] = useState(1)
+  const [status, setStatus] = useState<UserStatus>("all")
+  const [sort, setSort] = useState<UserSort>("newest")
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: queryKeys.adminUsers(page, applied),
+    // The envelope, not `r.data`. `total` and `has_more` live on the envelope,
+    // so unwrapping to the row array first and reading them off it yields
+    // `undefined` forever - which is why this header said "Loading…" permanently
+    // and the page counter had nothing to count.
+    queryKey: queryKeys.adminUsers(page, applied, status, sort),
     queryFn: () =>
-      adminApi
-        .users({ page, pageSize: 20, search: applied || undefined })
-        .then((r) => r.data),
+      adminApi.users({
+        page,
+        pageSize: 20,
+        search: applied || undefined,
+        status,
+        sort,
+      }),
     // `is_active` is on the row and `is_deleted` is not exposed here, so an
     // erased account still appears. Worth knowing before an operator bans one by
     // mistake - the detail view is where they find out.
@@ -137,9 +175,9 @@ export function AdminUsersClient() {
   const [banning, setBanning] = useState<AdminUserRow | null>(null)
   const [unbanning, setUnbanning] = useState<AdminUserRow | null>(null)
 
-  const rows = data ?? []
-  const total = data ? (data as unknown as { total?: number }).total : undefined
-  const hasMore = data ? (data as unknown as { has_more?: boolean }).has_more : false
+  const rows = data?.data ?? []
+  const total = data?.total
+  const hasMore = data?.has_more ?? false
 
   /**
    * The search box is bounded for the same reason the query parameter is: it is
@@ -168,12 +206,36 @@ export function AdminUsersClient() {
     [search]
   )
 
+  /**
+   * Both filters reset to page 1, and the reason is not tidiness.
+   *
+   * Changing a filter while sitting on page 7 shows page 7 *of the new result*.
+   * A banned-only filter over 40 accounts leaves page 7 empty, and an empty list
+   * with no rows and no explanation reads as "nobody is banned" - the exact
+   * wrong conclusion during an incident.
+   */
+  const onStatus = useCallback((value: UserStatus | null) => {
+    // Null is the clearable case, not a real filter. Ignoring it leaves the
+    // previous filter in place while the trigger reads as unfiltered.
+    if (!value) return
+    setStatus(value)
+    setPage(1)
+  }, [])
+
+  const onSort = useCallback((value: UserSort | null) => {
+    if (!value) return
+    setSort(value)
+    setPage(1)
+  }, [])
+
+  const filtered = status !== "all" || applied !== ""
+
   return (
     <div className="space-y-4">
       <PageHeader
         title="Users"
         description={
-          total !== undefined ? `${total} account${total === 1 ? "" : "s"}` : "Loading…"
+          total !== undefined ? `${total.toLocaleString()} account${total === 1 ? "" : "s"}` : "Loading…"
         }
         actions={
           /* A wrapper, because the search box and its error are two nodes and
@@ -210,6 +272,55 @@ export function AdminUsersClient() {
         }
       />
 
+      {/* Above the table rather than inside `actions`, so the filters stay put
+          when the header's description changes from "Loading…" to a count. A
+          control that moves as data arrives is a control you cannot click twice. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={status} onValueChange={onStatus}>
+          <SelectTrigger aria-label="Filter accounts by state" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {USER_STATUSES.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={sort} onValueChange={onSort}>
+          <SelectTrigger aria-label="Sort accounts" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {USER_SORTS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Says what is being narrowed, and offers the way back. An operator who
+            arrived with a filter applied by a shared link needs to know it was not
+            their own search returning nothing. */}
+        {filtered ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setStatus("all")
+              setApplied("")
+              setSearch("")
+              setPage(1)
+            }}
+          >
+            Clear filters
+          </Button>
+        ) : null}
+      </div>
+
       <Card className="overflow-hidden pt-0">
         {isLoading ? (
           <CardContent
@@ -224,9 +335,21 @@ export function AdminUsersClient() {
             role="status"
             className="flex h-48 flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
           >
-            <p className="font-medium text-foreground">No users found</p>
+            <p className="font-medium text-foreground">
+              {filtered ? "No accounts match" : "No users found"}
+            </p>
             <p className="text-xs">
-              {applied ? `Nothing matches “${applied}”.` : "There are no accounts yet."}
+              {applied
+                ? `Nothing matches “${applied}”${
+                    status !== "all"
+                      ? ` in ${USER_STATUSES.find((s) => s.value === status)?.label.toLowerCase()}`
+                      : ""
+                  }.`
+                : status !== "all"
+                  ? `No accounts are ${
+                      USER_STATUSES.find((s) => s.value === status)?.label.toLowerCase()
+                    }.`
+                  : "There are no accounts yet."}
             </p>
           </CardContent>
         ) : (
@@ -276,25 +399,19 @@ export function AdminUsersClient() {
         onOpenChange={(open) => !open && setUnbanning(null)}
       />
 
-      <div className="flex items-center justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page <= 1}
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-        >
-          Previous
-        </Button>
-        <span className="text-sm text-muted-foreground">Page {page}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!hasMore}
-          onClick={() => setPage((p) => p + 1)}
-        >
-          Next
-        </Button>
-      </div>
+      {/* The shared control, like every other list in this app. The hand-rolled
+          pair this replaces gave no "1-20 of 1,284" line, so an operator could
+          not tell how much they had not looked at - which is exactly the number
+          that decides whether a filtered result is trustworthy. */}
+      <Pagination
+        page={page}
+        pageSize={20}
+        total={total}
+        hasMore={hasMore}
+        itemLabel="accounts"
+        isLoading={isLoading}
+        onPageChange={setPage}
+      />
     </div>
   )
 }
