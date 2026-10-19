@@ -27,6 +27,7 @@ import { sileo } from "sileo"
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
+import { Pagination } from "@/components/pagination"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -50,7 +51,8 @@ import {
   FieldLabel,
 } from "@workspace/ui/components/field"
 
-import { validateRuling } from "@/schemas/privileged"
+import { rulingNoteSchema, validateRuling } from "@/schemas/privileged"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { StepUpPrompt } from "@/components/step-up-prompt"
 import { useStepUp } from "@/hooks/use-step-up"
@@ -82,23 +84,43 @@ function relative(iso: string) {
 export function AdminDisputesClient() {
   const qc = useQueryClient()
   const [status, setStatus] = useState("open")
+  const [page, setPage] = useState(1)
+  // Changing a filter while on a later page lands you on an empty page of the
+  // new filter, which reads as "there is nothing here" rather than "start again".
+  const resetToFirstPage = () => setPage(1)
   const [pending, setPending] = useState<PendingRuling | null>(null)
   const stepUp = useStepUp()
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.adminDisputes(status, 1),
-    queryFn: () => adminApi.disputes({ status, page: 1 }).then((r) => r.data),
+  // The whole page object, not `.then(r => r.data)`: `total` and `has_more`
+  // live on the envelope, and dropping it is why this view had no way to know
+  // there was a second page of unresolved disputes.
+  const { data: result, isLoading, isError, refetch } = useQuery({
+    queryKey: queryKeys.adminDisputes(status, page),
+    queryFn: () => adminApi.disputes({ status, page }),
     retry: false,
   })
 
-  const rows = data ?? []
+  const rows = result?.data ?? []
 
   // Only meaningful while the confirmation dialog is open, and only for a
   // dismissal. An uphold resolves a market; a dismissal closes someone's dispute
   // with no payout and, without a stated reason, no explanation either.
-  const noteProblem =
-    pending?.ruling === "dismissed" ? validateRuling(pending.ruling, pending.note) : null
-  const total = (data as { total?: number } | undefined)?.total ?? 0
+  // Two rules on the same field, and they answer different questions.
+  //
+  // `validateRuling` is the *substantive* one — a dismissal pays nobody, so it
+  // must say why. `rulingNoteSchema` is the mechanical one: the API caps the note
+  // at 2000 characters, and without this a note that passes every visible check
+  // is refused at submit with a 422 that names a field the operator believed was
+  // fine. It was declared in the schema module and referenced by nothing.
+  const noteProblem = (() => {
+    if (!pending || pending.ruling !== "dismissed") return null;
+    const required = validateRuling(pending.ruling, pending.note);
+    if (required) return required;
+    const parsed = rulingNoteSchema.safeParse(pending.note);
+    return parsed.success ? null : (parsed.error.issues[0]?.message ?? "That note is too long");
+  })();
+  const total = result?.total ?? 0
+  const hasMore = result?.has_more ?? false
 
   /**
    * The privileged call. Throwing on failure is deliberate: `useStepUp` needs the
@@ -166,7 +188,7 @@ export function AdminDisputesClient() {
               size="sm"
               variant={status === f.value ? "secondary" : "ghost"}
               aria-pressed={status === f.value}
-              onClick={() => setStatus(f.value)}
+              onClick={() => { resetToFirstPage(); setStatus(f.value); }}
             >
               {f.label}
             </Button>
@@ -287,11 +309,10 @@ export function AdminDisputesClient() {
         </ul>
       )}
 
-      {total > rows.length ? (
-        <p className="text-xs text-muted-foreground">
-          Showing {rows.length} of {total}.
-        </p>
-      ) : null}
+      {/* Removed: a "Showing 25 of 300" line with no way to reach the other 275.
+          It was an admission that pagination was missing, printed in the place
+          a control should have been. The Pagination component below says the
+          same thing and does something about it. */}
 
       {/* Step 1 of two: what are you about to do, and why. */}
       <AlertDialog
@@ -332,10 +353,26 @@ export function AdminDisputesClient() {
               {noteProblem ? (
                 <FieldError role="alert">{noteProblem}</FieldError>
               ) : (
-                <FieldDescription>
-                  Stored with the ruling. A dismissal with no stated grounds is one
-                  nobody can explain afterwards.
-                </FieldDescription>
+                <>
+                  <FieldDescription>
+                    Stored with the ruling. A dismissal with no stated grounds is
+                    one nobody can explain afterwards.
+                  </FieldDescription>
+                  {/* Only once it is close. A permanent "0/2000" is a number
+                      nobody reads and a habit of ignoring the ones that matter. */}
+                  {pending.note.length > 1800 ? (
+                    <p
+                      className={cn(
+                        "text-xs tabular-nums",
+                        pending.note.length > 2000
+                          ? "font-medium text-destructive"
+                          : "text-muted-foreground"
+                      )}
+                    >
+                      {pending.note.length}/2000
+                    </p>
+                  ) : null}
+                </>
               )}
             </Field>
           ) : (
@@ -361,6 +398,16 @@ export function AdminDisputesClient() {
 
       {/* Step 2 of two: prove you are the operator, right now. */}
       <StepUpPrompt {...stepUp.promptProps} />
+
+      <Pagination
+        page={page}
+        pageSize={25}
+        total={total}
+        hasMore={hasMore}
+        itemLabel="disputes"
+        isLoading={isLoading}
+        onPageChange={setPage}
+      />
     </div>
   )
 }

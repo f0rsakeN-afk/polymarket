@@ -10,6 +10,7 @@ import { adminApi, type AdminUserRow } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
 import { BanUserDialog, UnbanUserDialog } from "@/components/ban-dialog"
+import { userSearchSchema } from "@/schemas/privileged"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
@@ -140,9 +141,27 @@ export function AdminUsersClient() {
   const total = data ? (data as unknown as { total?: number }).total : undefined
   const hasMore = data ? (data as unknown as { has_more?: boolean }).has_more : false
 
+  /**
+   * The search box is bounded for the same reason the query parameter is: it is
+   * pasted straight into a URL, and an unbounded "search" is both a useless
+   * result and a string nobody wants in a log.
+   *
+   * An empty value is allowed and means "everyone" — clearing the box should not
+   * raise a validation error, it should return the list.
+   */
+  const searchProblem = applied ? userSearchSchema.safeParse(applied) : null
+  const searchError =
+    searchProblem && !searchProblem.success
+      ? (searchProblem.error.issues[0]?.message ?? "That search is not valid")
+      : null
+
   const onSearch = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
+      // Not applied when it cannot succeed. Pushing it into the query anyway
+      // leaves the operator looking at an unchanged list with an error beside
+      // the box, having no way to tell the search was refused from it being slow.
+      if (search.trim() && !userSearchSchema.safeParse(search).success) return
       setApplied(search.trim())
       setPage(1)
     },
@@ -157,22 +176,37 @@ export function AdminUsersClient() {
           total !== undefined ? `${total} account${total === 1 ? "" : "s"}` : "Loading…"
         }
         actions={
-          /* `role="search"` rather than a bare form: a screen reader user landing
-             here is looking for a way to find a specific account, and "search" is
-             what tells them one exists. */
-          <form role="search" onSubmit={onSearch} className="flex w-full gap-2 sm:w-auto">
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search email or username"
-              aria-label="Search users"
-              className="min-w-0 flex-1 sm:w-64 sm:flex-none"
-            />
-            <Button type="submit" variant="outline" size="sm">
-              <Search className="size-3.5" />
-              Search
-            </Button>
-          </form>
+          /* A wrapper, because the search box and its error are two nodes and
+             `actions` takes one. `items-end` keeps the error aligned under the
+             input rather than stretching the box it belongs to. */
+          <div className="flex w-full flex-col items-end gap-1.5 sm:w-auto sm:items-stretch">
+            {/* `role="search"` rather than a bare form: a screen reader user
+                landing here is looking for a way to find a specific account, and
+                "search" is what tells them one exists. */}
+            <form role="search" onSubmit={onSearch} className="flex w-full gap-2 sm:w-auto">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search email or username"
+                aria-label="Search users"
+                aria-invalid={searchError ? true : undefined}
+                aria-describedby={searchError ? "user-search-error" : undefined}
+                className="min-w-0 flex-1 sm:w-64 sm:flex-none"
+              />
+              <Button type="submit" variant="outline" size="sm">
+                <Search className="size-3.5" />
+                Search
+              </Button>
+            </form>
+            {/* Next to the box rather than in a toast: the failure is about one
+                input, and an error that appears somewhere else is an error about
+                something else. */}
+            {searchError ? (
+              <p id="user-search-error" role="alert" className="text-xs text-destructive">
+                {searchError}
+              </p>
+            ) : null}
+          </div>
         }
       />
 
