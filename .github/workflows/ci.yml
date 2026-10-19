@@ -292,16 +292,31 @@ jobs:
         id: seeduser
         run: |
           uv run python -m harness.seed_user | tee /tmp/seed.log
-          echo "user=$(grep -oP '(?<=^USER_ID=).*' /tmp/seed.log)" >> "$GITHUB_OUTPUT"
+          # Same reason as the market lookup below: a `grep` that finds nothing
+          # exits non-zero, but inside `echo "$(…)"` that exit code is thrown
+          # away and the run continues with an empty id.
+          user=$(grep -oP '(?<=^USER_ID=).*' /tmp/seed.log)
+          echo "user=$user" >> "$GITHUB_OUTPUT"
 
       # Generated, so it has to be read back rather than hardcoded - a hardcoded
       # id works locally and breaks the first time the database is recreated,
       # which is to say it breaks here, where nobody is watching and the suite
       # skips itself.
+      #
+      # The lookup is a separate step from the `echo`, and that is the whole
+      # point. Written as `echo "market=$(…)" >> $GITHUB_OUTPUT` the substitution's
+      # exit code is discarded by `echo`, so a missing market produced an empty
+      # value, a green step, and six skipped tests three steps later - which is
+      # exactly what happened when a seed market was renamed. Assign first: the
+      # failure now stops the run where it happened.
       - name: Resolve the seeded market
         id: seed
         working-directory: backend
-        run: echo "market=$(uv run python -m harness.market_id bitcoin-100k-2024)" >> "$GITHUB_OUTPUT"
+        env:
+          MARKET_SLUG: bitcoin-150k-2027
+        run: |
+          market=$(uv run python -m harness.market_id "$MARKET_SLUG")
+          echo "market=$market" >> "$GITHUB_OUTPUT"
 
       # Only the browser binaries - `@playwright/test` is already a devDependency,
       # and `bun add` here would edit the lockfile mid-run, so the build could
@@ -314,7 +329,7 @@ jobs:
         working-directory: frontend/apps/web
         env:
           E2E_MARKET_ID: ${{ steps.seed.outputs.market }}
-          E2E_MARKET_SLUG: bitcoin-100k-2024
+          E2E_MARKET_SLUG: bitcoin-150k-2027
           E2E_USER_ID: ${{ steps.seeduser.outputs.user }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/playwright.json
         run: bunx playwright test --reporter=line,json
