@@ -363,6 +363,30 @@ export function configureAuthRouting(policy: Partial<AuthRoutingPolicy>): void {
 const SESSION_PROBE_PATHS = ["/api/v1/auth/me"]
 
 /**
+ * Endpoints whose 401 means "the thing you sent was wrong", not "your session
+ * ended".
+ *
+ * `/auth/login` answers 401 for a wrong password. That is the most correct and
+ * most expected 401 in the system, and it used to be routed through the session
+ * machinery: the client tried to rotate a session that did not exist, failed,
+ * replaced the real message ("Invalid email or password") with "You need to sign
+ * in to view this.", and redirected — to the login page you were already on,
+ * with your password still in the box and no explanation.
+ *
+ * So an operator who typed their password correctly could be told they were not
+ * signed in, with no way to tell that apart from having typed it wrong.
+ *
+ * Each of these returns 401 for its own reasons and must surface the server's
+ * message verbatim.
+ */
+const CREDENTIAL_PATHS = [
+  "/api/v1/auth/login",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/verify-code",
+  "/api/v1/auth/2fa",
+]
+
+/**
  * Should a terminal 401 bounce this pathname to the login page?
  *
  * Exported so it can be asserted directly. The alternative is asserting on
@@ -383,6 +407,18 @@ export function shouldRedirectToLogin(pathname: string): boolean {
 /** Is this a request whose 401 settles the question rather than raising it? */
 function isSessionProbe(pathname: string) {
   return SESSION_PROBE_PATHS.includes(pathname)
+}
+
+/**
+ * Is this a credential exchange, whose 401 belongs to the caller and not to the
+ * session?
+ *
+ * Matched on a prefix so a query string or a trailing path does not fall through
+ * to the session machinery.
+ */
+function isCredentialEndpoint(pathname: string): boolean {
+  const path = pathname.split("?")[0] ?? pathname
+  return CREDENTIAL_PATHS.some((p) => path === p || path.startsWith(`${p}/`))
 }
 
 function redirectToLogin() {
@@ -441,6 +477,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
       // 401 • rotate the access token, then replay the original request once.
       if (res.status === 401 && !headers?.["Authorization"]) {
+        // A credential endpoint answering 401 is telling you the credentials were
+        // wrong. Surfacing that as a session problem replaces the only useful
+        // message with a redirect to the page you are already on.
+        if (isCredentialEndpoint(path)) {
+          const data = await res.json().catch(() => ({}))
+          const { message, error_code } = extractMessage(data)
+          // "An error occurred" is what `extractMessage` returns for a body it
+          // cannot read, which is what a proxy or gateway sends. Shown in a login
+          // box it is precisely the useless output this branch exists to remove.
+          const usable = message && message !== "An error occurred" ? message : null
+          throw new ApiError(
+            usable ?? "Those credentials were not accepted.",
+            401,
+            data,
+            error_code
+          )
+        }
+
         // The probe answered. Record it and stop - no rotation is possible or
         // wanted, because there is no session here to rotate.
         if (isSessionProbe(path)) {
