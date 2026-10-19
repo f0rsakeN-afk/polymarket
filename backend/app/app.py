@@ -61,26 +61,69 @@ _APP_ENV = os.environ.get("APP_ENV", "development")
 
 
 def _configure_logging(app_env: str, log_level: str) -> None:
-    """Configure root logger based on environment and log level."""
+    """Configure root logger based on environment and log level.
+
+    ## Why `extra` is rendered here at all
+
+    A call site that writes `logger.info("Order filled", extra={"order_id": ...})`
+    is only useful if something renders those fields. Both formatters below used to
+    emit `message` and nothing else, so every `extra` in the codebase was silently
+    discarded — which makes converting an f-string into structured fields a change
+    that looks like an improvement and does nothing at all.
+
+    So the renderers come first. Anything attached with `extra=` becomes a top-level
+    field in production JSON and a `key=value` suffix in development, and the two
+    are consistent with each other so a query written against one works on the
+    other.
+    """
     level = getattr(logging, log_level.upper(), logging.INFO)
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+
+    # Attributes that are already rendered elsewhere, or that describe the emitter
+    # rather than the event. Emitting them again would duplicate every line and,
+    # for `msg`/`args`, produce the *unformatted* template alongside the message.
+    reserved = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+        "asctime",
+        "message",
+    }
+
+    def _extras(record: logging.LogRecord) -> dict:
+        return {k: v for k, v in record.__dict__.items() if k not in reserved}
+
     if app_env == "production":
         # Structured JSON in production • parseable by log aggregators (Datadog, Loki, ELK)
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
-                return json.dumps({
-                    "timestamp": record.created,
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "message": record.getMessage(),
-                }, default=str)
+                return json.dumps(
+                    {
+                        "timestamp": record.created,
+                        "level": record.levelname,
+                        "logger": record.name,
+                        "message": record.getMessage(),
+                        **_extras(record),
+                    },
+                    default=str,
+                )
+
         handler.setFormatter(JSONFormatter())
     else:
-        handler.setFormatter(formatter)
+        # `exc_info` is left to the formatter, which appends the traceback itself.
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        _base = handler.formatter
+
+        class DevFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                line = _base.format(record)
+                fields = _extras(record)
+                return f"{line}  {fields}" if fields else line
+
+        handler.setFormatter(DevFormatter())
+
     logging.basicConfig(level=level, handlers=[handler])
 
 

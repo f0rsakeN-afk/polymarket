@@ -84,10 +84,41 @@ async def get_treasury_logs(
     page_size: int = Query(20, ge=1, le=100),
     event: str | None = Query(None, max_length=64),
     db: AsyncSession = Depends(get_db_replica),
+    audit_db: AsyncSession = Depends(get_db),
 ):
-    # Admin-only: this is an audit trail of money movements (amounts and
-    # reference ids). No non-admin surface consumes it.
-    await _get_admin_user(request, db)
+    """The movement history, and who asked for it.
+
+    ## Why this read is audited and the balance read is not
+
+    This one is the audit trail of money movements: who withdrew, how much, and
+    what reference it carried. An admin reading it is precisely the event a
+    reviewer wants in the record — it is how a disputed balance gets explained
+    after the fact.
+
+    `GET /treasury` is deliberately left alone. It returns a single row that
+    every dashboard polls; recording each one would bury the interesting rows
+    under thousands of balance checks, which is the same reasoning that keeps
+    the dispute *list* unaudited while its detail is.
+
+    ## Why a second session
+
+    `db` is the replica, and it exists to be read from. The audit row is a write,
+    so it goes to the primary through `audit_db` - writing through a replica is
+    either refused or silently discarded depending on the deployment, and a
+    silently discarded audit row is worse than none, because it looks recorded.
+    """
+    admin = await _get_admin_user(request, db)
+
+    await AdminAuditService.log_action(
+        audit_db,
+        action=admin_audit.TREASURY_LOG_VIEWED,
+        actor_id=str(admin.id),
+        actor_email=admin.email,
+        request=request,
+        target_type="treasury",
+        summary="Treasury movement history viewed",
+        payload={"page": page, "page_size": page_size, "event": event},
+    )
 
     result = await db.execute(select(Treasury).limit(1))
     treasury = result.scalar_one_or_none()

@@ -146,8 +146,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         duration_ms = (time.perf_counter() - start) * 1000
 
         log_data = {
+            # Removed: `"trace_id"`, which was a byte-for-byte copy of this line's
+            # own `request_id`. No W3C trace context is parsed or propagated
+            # anywhere in this service, so there is no second identifier — and a
+            # field named `trace_id` that duplicates `request_id` is worse than
+            # an absent one: someone searching logs for `trace_id` finds a value
+            # and concludes tracing is wired.
+            #
+            # If real distributed tracing is added later it should arrive as
+            # `traceparent`, honoured on the way in and emitted on the way out,
+            # and be joined to `request_id` rather than renamed as one.
             "request_id": getattr(request.state, "request_id", None),
-            "trace_id": getattr(request.state, "request_id", None),
             "user_id": getattr(request.state, "user_id", None),
             "method": method,
             "path": path,

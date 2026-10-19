@@ -41,6 +41,10 @@ PROTOCOL_FEES_DISTRIBUTED = "protocol_fees_distributed"
 # names rather than one, because "money moved" and "someone typed a number"
 # are different events and an auditor needs to tell them apart.
 TREASURY_DISTRIBUTION = "treasury_distribution"
+# Reading the movement history. Not reading the balance - see the note in
+# `app/api/treasury.py`: a balance view is a dashboard poll, and auditing every
+# one of them floods the table with the least interesting rows in it.
+TREASURY_LOG_VIEWED = "treasury_log_viewed"
 # A privileged action refused because step-up credentials were wrong. Audited
 # because an actor repeatedly guessing at them is itself worth a row.
 STEP_UP_FAILED = "step_up_failed"
