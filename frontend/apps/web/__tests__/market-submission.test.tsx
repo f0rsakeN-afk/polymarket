@@ -174,9 +174,7 @@ describe("proposing a market", () => {
     );
   });
 
-  it("sends exactly two outcomes, because the API accepts no more", async () => {
-    // `outcome_index` is capped at 1. The old form offered "Add Outcome", so a
-    // user could build a five-way market and be rejected at submit.
+  it("defaults to Yes / No", async () => {
     const user = userEvent.setup();
     renderWithQuery(<CreateMarketForm />);
 
@@ -189,7 +187,63 @@ describe("proposing a market", () => {
       { name: "Yes", outcome_index: 0 },
       { name: "No", outcome_index: 1 },
     ]);
-    expect(screen.queryByRole("button", { name: /add outcome/i })).toBeNull();
+  });
+
+  it("can build a market with more than two outcomes", async () => {
+    // It could not before. `outcome_index` was capped at 1 in the request schema
+    // while the rest of the system had been written for N, so "Add outcome"
+    // produced markets the API rejected - a control that looked broken rather
+    // than one that was unavailable.
+    const user = userEvent.setup();
+    renderWithQuery(<CreateMarketForm />);
+
+    await user.type(screen.getByLabelText(/question/i), "Who wins the league?");
+    await user.type(screen.getByLabelText(/closes at/i), "2027-07-01T12:00");
+    await user.click(screen.getByRole("radio", { name: /named outcomes/i }));
+
+    await user.clear(screen.getByLabelText(/^outcome 1$/i));
+    await user.type(screen.getByLabelText(/^outcome 1$/i), "Manchester City");
+    await user.clear(screen.getByLabelText(/^outcome 2$/i));
+    await user.type(screen.getByLabelText(/^outcome 2$/i), "Arsenal");
+    await user.click(screen.getByRole("button", { name: /add outcome/i }));
+    await user.type(screen.getByLabelText(/^outcome 3$/i), "Liverpool");
+
+    await user.click(screen.getByRole("button", { name: /submit for review/i }));
+
+    await waitFor(() => expect(createMarket).toHaveBeenCalled());
+    // Indices are positional and rebuilt on submit, so removing from the middle
+    // cannot leave a gap the server rejects.
+    expect((createMarket.mock.calls[0]?.[0] as Record<string, unknown>).outcomes_create).toEqual([
+      { name: "Manchester City", outcome_index: 0 },
+      { name: "Arsenal", outcome_index: 1 },
+      { name: "Liverpool", outcome_index: 2 },
+    ]);
+  });
+
+  it("refuses two outcomes that share a name", async () => {
+    // Parimutuel pricing would happily divide the pool between two legs that
+    // cannot be told apart, and nobody would notice until settlement.
+    const user = userEvent.setup();
+    renderWithQuery(<CreateMarketForm />);
+
+    await user.type(screen.getByLabelText(/question/i), "Who wins?");
+    await user.click(screen.getByRole("radio", { name: /named outcomes/i }));
+    await user.clear(screen.getByLabelText(/^outcome 1$/i));
+    await user.type(screen.getByLabelText(/^outcome 1$/i), "Arsenal");
+    await user.clear(screen.getByLabelText(/^outcome 2$/i));
+    await user.type(screen.getByLabelText(/^outcome 2$/i), "arsenal");
+
+    expect((await screen.findAllByText(/cannot share a name/i)).length).toBeGreaterThan(0);
+  });
+
+  it("will not remove the last two outcomes", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<CreateMarketForm />);
+
+    await user.click(screen.getByRole("radio", { name: /named outcomes/i }));
+
+    expect(screen.getByRole("button", { name: /remove outcome 1/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /remove outcome 2/i })).toBeDisabled();
   });
 
   it("sends the user to their markets afterwards, not to the catalogue", async () => {
