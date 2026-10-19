@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
-import { Check, X } from "lucide-react"
+import { Check, Search, X } from "lucide-react"
 
 import { adminApi, type AdminMarketRow } from "@workspace/api-client/admin"
 import { apiErrorMessage } from "@workspace/api-client/client"
@@ -14,6 +14,14 @@ import { RejectMarketDialog } from "@/components/reject-market-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
+import { Input } from "@workspace/ui/components/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Spinner } from "@workspace/ui/components/spinner"
 
 /**
@@ -24,24 +32,63 @@ import { Spinner } from "@workspace/ui/components/spinner"
  * catalogue. The other statuses are one click away for the "why did that one get
  * rejected?" question, which is why they are a filter rather than absent.
  */
+/**
+ * Every state a market can be in, plus "everything".
+ *
+ * `""` is All, and it is the default. This screen used to default to
+ * `pending_review` with no way to see anything else at once — so "is anything
+ * broken" could not be answered here, and three of the seven states (`closed`,
+ * `resolving`, `dispute_window`) were not listed at all. A market sitting in
+ * `resolving` with a stuck resolver was invisible to the very screen meant to
+ * catch it.
+ */
 const FILTERS = [
+  { value: "", label: "All" },
   { value: "pending_review", label: "Awaiting review" },
   { value: "rejected", label: "Rejected" },
   { value: "active", label: "Active" },
+  { value: "closed", label: "Trading closed" },
+  { value: "resolving", label: "Resolving" },
+  { value: "dispute_window", label: "In dispute window" },
   { value: "resolved", label: "Resolved" },
 ]
 
+const SORTS = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "closing_soon", label: "Closing soonest" },
+  { value: "volume", label: "Most traded" },
+  { value: "liquidity", label: "Most liquid" },
+] as const
+
+type SortValue = (typeof SORTS)[number]["value"]
+
 export function AdminMarketsClient() {
   const qc = useQueryClient()
-  const [status, setStatus] = useState("pending_review")
+  const [status, setStatus] = useState("")
+  const [search, setSearch] = useState("")
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const [sort, setSort] = useState<SortValue>("newest")
   const [page, setPage] = useState(1)
   // Changing a filter while on a later page lands you on an empty page of the
   // new filter, which reads as "there is nothing here" rather than "start again".
   const resetToFirstPage = () => setPage(1)
 
   const { data: result, isLoading } = useQuery({
-    queryKey: queryKeys.adminMarkets(status, page),
-    queryFn: () => adminApi.markets(status, page, 50),
+    // Every input in the key, not just page and status. Two searches that differ
+    // only in text share a cache entry otherwise, and the second operator to ask
+    // is shown the first one's results.
+    queryKey: [...queryKeys.adminMarkets(status || "all", page), appliedSearch, sort],
+    queryFn: () =>
+      adminApi.markets({
+        status: status || undefined,
+        q: appliedSearch || undefined,
+        sort,
+        page,
+        pageSize: 50,
+      }),
+    // A refetch on every keystroke would hit the admin list endpoint for each
+    // character; the search is submitted, not typed.
     retry: false,
   })
 
@@ -67,21 +114,24 @@ export function AdminMarketsClient() {
   const total = result?.total ?? 0
   const hasMore = result?.has_more ?? false
   const pending = status === "pending_review"
+  const filtering = Boolean(status || appliedSearch)
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Moderation"
+        title="Markets"
         description={
           pending
             ? "Markets waiting on a decision before they become tradable."
-            : "Browse by status."
+            : filtering
+              ? `${total.toLocaleString()} matching • every state, including the ones the public catalogue hides.`
+              : "Every market, in every state — including the ones the public catalogue hides."
         }
         actions={
           <div className="flex gap-1" role="group" aria-label="Filter by status">
             {FILTERS.map((f) => (
               <Button
-                key={f.value}
+                key={f.value || "all"}
                 variant={status === f.value ? "default" : "outline"}
                 size="sm"
                 onClick={() => { resetToFirstPage(); setStatus(f.value); }}
@@ -93,6 +143,78 @@ export function AdminMarketsClient() {
           </div>
         }
       />
+
+      {/* Search and sort live below the status chips rather than inside the
+          header: the chips answer "which state", these two answer "which one",
+          and separating them keeps each control to a single question. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <form
+          role="search"
+          onSubmit={(event) => {
+            event.preventDefault()
+            resetToFirstPage()
+            setAppliedSearch(search.trim())
+          }}
+          className="flex w-full gap-2 sm:max-w-md"
+        >
+          <label htmlFor="market-search" className="sr-only">
+            Search markets by question, slug or submitter
+          </label>
+          <Input
+            id="market-search"
+            /* type=search rather than the default text: it gives the field the
+               searchbox role, which is what tells a screen reader this box
+               searches rather than being an unlabelled text field, and it
+               brings the browser's own clear affordance. */
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search question, slug or submitter…"
+          />
+          <Button type="submit" variant="outline" size="sm">
+            <Search className="size-3.5" aria-hidden />
+            Search
+          </Button>
+          {appliedSearch ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearch("")
+                setAppliedSearch("")
+                resetToFirstPage()
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </form>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="market-sort" className="text-xs text-muted-foreground">
+            Sort
+          </label>
+          <Select
+            value={sort}
+            onValueChange={(value) => {
+              resetToFirstPage()
+              setSort(value as SortValue)
+            }}
+          >
+            <SelectTrigger id="market-sort" className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORTS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
 
       <Card className="overflow-hidden pt-0">
         {isLoading ? (
@@ -107,9 +229,13 @@ export function AdminMarketsClient() {
           >
             <p className="font-medium text-foreground">Nothing here</p>
             <p className="text-xs">
-              {pending
-                ? "No markets are waiting for review."
-                : `No markets with status “${status}”.`}
+              {appliedSearch
+                ? `Nothing matches “${appliedSearch}”.`
+                : pending
+                  ? "No markets are waiting for review."
+                  : status
+                    ? `No markets with status “${status}”.`
+                    : "There are no markets at all."}
             </p>
           </CardContent>
         ) : (
@@ -122,8 +248,51 @@ export function AdminMarketsClient() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{market.question}</p>
                   <p className="text-xs text-muted-foreground">
-                    /{market.slug} ·{" "}
-                    {new Date(market.created_at).toLocaleDateString()}
+                    /{market.slug}
+                    {market.created_by_email ? (
+                      <>
+                        {" · "}
+                        {market.created_by_email}
+                      </>
+                    ) : (
+                      /* A system-created market has no submitter. Saying
+                         "system" is honest; leaving the field blank reads as a
+                         bug in the query. */
+                      <> · system</>
+                    )}
+                  </p>
+                  {/* The facts an operator triages on, on the row itself.
+                      Opening each market to learn whether it has volume is the
+                      difference between triaging a queue and reading it. */}
+                  <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    <span>
+                      <span className="tabular-nums">{market.num_trades.toLocaleString()}</span>{" "}
+                      trades
+                    </span>
+                    <span>
+                      <span className="tabular-nums">
+                        {Number(market.total_volume).toLocaleString(undefined, {
+                          maximumFractionDigits: 0,
+                        })}
+                      </span>{" "}
+                      volume
+                    </span>
+                    <span>
+                      <span className="tabular-nums">
+                        {Number(market.total_liquidity).toLocaleString(undefined, {
+                          maximumFractionDigits: 0,
+                        })}
+                      </span>{" "}
+                      liquidity
+                    </span>
+                    {/* Two legs is binary, more is parimutuel. It changes how
+                        every price on the row reads, so it is stated rather than
+                        left for the operator to infer from the market page. */}
+                    <span>
+                      {market.outcome_count} {market.outcome_count === 1 ? "outcome" : "outcomes"}
+                      {market.outcome_count > 2 ? " · parimutuel" : ""}
+                    </span>
+                    <span>closes {new Date(market.closes_at).toLocaleDateString()}</span>
                   </p>
                   {/* The reason, on the row that needs it.
                       "Why was this declined?" is the first question asked about

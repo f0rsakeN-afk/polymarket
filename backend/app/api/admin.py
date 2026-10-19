@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exceptions import (
@@ -909,23 +909,78 @@ async def list_markets_admin(
     request: Request,
     db: AsyncSession = Depends(get_db),
     status: str | None = Query(None, max_length=32, description="e.g. pending_review, rejected, active"),
+    q: str | None = Query(
+        None,
+        max_length=200,
+        description="Search the question, the slug, or the submitter's email.",
+    ),
+    sort: str = Query(
+        "newest",
+        pattern="^(newest|oldest|volume|liquidity|closing_soon|closing_late)$",
+        description="newest, oldest, volume, liquidity, closing_soon, closing_late.",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    """Every market including ones the public catalogue hides (`status=pending_review`)."""
+    """Every market, including the ones the public catalogue hides.
+
+    Omitting `status` returns all of them, which is what an operator wants far
+    more often than a single slice: "is anything broken" is not a question about
+    one status, and the public catalogue hides three of the seven states from
+    anyone who is not already looking at this screen.
+
+    ## Why search covers the submitter
+
+    A moderator's real questions are "which market is this" and "who sent it".
+    Matching only the question text answers neither when the operator has a
+    username from a support ticket, so the join is included — it is the same join
+    the response already makes for `created_by_email`, so searching costs no
+    extra query.
+    """
     await _get_admin_user(request, db)
 
-    filters = [Market.status == status] if status else []
-    total = (
-        await db.execute(select(func.count(Market.id)).where(*filters))
-    ).scalar() or 0
+    filters = []
+    if status:
+        filters.append(Market.status == status)
+
+    # An outer join so a market with no submitter (a system-created one) still
+    # matches an empty search rather than disappearing from the list.
+    query = select(Market).outerjoin(User, User.id == Market.created_by)
+    count_query = select(func.count(Market.id)).outerjoin(User, User.id == Market.created_by)
+
+    term = (q or "").strip()
+    if term:
+        # `ilike` with the wildcards escaped, so a search for "50%" is a search
+        # for the literal string rather than a pattern matching everything.
+        needle = f"%{term.replace('%', r'\%').replace('_', r'\_')}%"
+        condition = or_(
+            Market.question.ilike(needle, escape="\\"),
+            Market.slug.ilike(needle, escape="\\"),
+            User.email.ilike(needle, escape="\\"),
+            User.username.ilike(needle, escape="\\"),
+        )
+        filters.append(condition)
+
+    if filters:
+        query = query.where(*filters)
+        count_query = count_query.where(*filters)
+
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # Every sort ends with `id` so the order is total. Without a tiebreak, two
+    # markets created in the same transaction can swap places between pages, and
+    # paging forward then back skips one and repeats another.
+    order = {
+        "newest": (Market.created_at.desc(), Market.id.desc()),
+        "oldest": (Market.created_at.asc(), Market.id.asc()),
+        "volume": (Market.total_volume.desc(), Market.id.desc()),
+        "liquidity": (Market.total_liquidity.desc(), Market.id.desc()),
+        "closing_soon": (Market.closes_at.asc(), Market.id.asc()),
+        "closing_late": (Market.closes_at.desc(), Market.id.desc()),
+    }[sort]
 
     result = await db.execute(
-        select(Market)
-        .where(*filters)
-        .order_by(Market.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        query.order_by(*order).offset((page - 1) * page_size).limit(page_size)
     )
     markets = list(result.scalars().all())
 
@@ -935,6 +990,17 @@ async def list_markets_admin(
         creators_result = await db.execute(select(User).where(User.id.in_(creator_ids)))
         creators = {u.id: u for u in creators_result.scalars().all()}
 
+    # Outcome counts for the page, in one query. Per row it would be a query per
+    # market, which on a page of 50 is fifty round trips to render a list.
+    outcome_counts: dict[str, int] = {}
+    if markets:
+        count_rows = await db.execute(
+            select(Outcome.market_id, func.count(Outcome.id))
+            .where(Outcome.market_id.in_([m.id for m in markets]))
+            .group_by(Outcome.market_id)
+        )
+        outcome_counts = {str(mid): n for mid, n in count_rows.all()}
+
     return PaginatedResponse(
         data=[
             {
@@ -942,6 +1008,7 @@ async def list_markets_admin(
                 "slug": m.slug,
                 "question": m.question,
                 "category": m.category,
+                "subcategory": m.subcategory,
                 "status": m.status,
                 "closes_at": m.closes_at,
                 "created_at": m.created_at,
@@ -952,6 +1019,19 @@ async def list_markets_admin(
                 # about every rejected submission in the list.
                 "rejection_reason": m.rejection_reason,
                 "rejected_at": m.rejected_at.isoformat() if m.rejected_at else None,
+                "resolution_criteria": m.resolution_criteria,
+                "description": m.description,
+                # The numbers an operator triages on, and the two this endpoint
+                # sorts by. Sending them means the list can be ordered by volume
+                # or liquidity server-side rather than by sorting 20 rows in the
+                # browser, which is wrong the moment there are more than 20.
+                "total_volume": str(m.total_volume or 0),
+                "total_liquidity": str(m.total_liquidity or 0),
+                "num_trades": m.num_trades or 0,
+                # How many legs this market has. The single most useful structural
+                # fact about it: a two-outcome market is binary and a nine-outcome
+                # one is parimutuel, which changes how every price on it reads.
+                "outcome_count": outcome_counts.get(str(m.id), 0),
             }
             for m in markets
         ],

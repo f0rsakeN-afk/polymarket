@@ -95,7 +95,7 @@ export function AdminDashboardClient() {
   // page an operator opened during an incident.
   const pending = useQuery({
     queryKey: queryKeys.adminMarkets("pending_review", 1),
-    queryFn: () => adminApi.markets("pending_review", 1, 1).then((r) => r.data),
+    queryFn: () => adminApi.markets({ status: "pending_review", page: 1, pageSize: 1 }).then((r) => r.data),
     retry: false,
   });
 
