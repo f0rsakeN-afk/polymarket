@@ -173,6 +173,17 @@ export interface AdjudicateResult {
   market_status: string | null
 }
 
+/** One movement in and out of the treasury. */
+export interface TreasuryLogRow {
+  id: string
+  /** fee_collected | distribution */
+  event: string
+  amount: string
+  reference_type: string | null
+  reference_id: string | null
+  created_at: string
+}
+
 export interface TreasurySummary {
   balance: string
   total_fees_collected: string
@@ -380,6 +391,36 @@ export const adminApi = {
 
   treasury: () =>
     api.get<NormalizedResponse<TreasurySummary>>("/api/v1/treasury"),
+
+  /**
+   * The movement history: every collection and every withdrawal, newest first.
+   *
+   * The page this backs had no way to answer "where did this balance come from",
+   * which is the first question anyone asks about money. The endpoint existed
+   * and was never called.
+   */
+  treasuryLogs: (params: { page?: number; pageSize?: number; event?: string } = {}) =>
+    api.get<Page<TreasuryLogRow>>(
+      `/api/v1/treasury/logs${qs({
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 20,
+        event: params.event,
+      })}`
+    ),
+
+  /**
+   * Withdraw a specific amount to the treasury.
+   *
+   * Distinct from `distributeProtocolFees`, which sweeps whatever the fee
+   * balance happens to be. This one moves a stated number, so it takes an amount
+   * as well as step-up credentials — and it is the operation that should feel
+   * deliberate, because the amount is chosen rather than derived.
+   */
+  treasuryDistribute: (body: { amount: number; password: string; code?: string }) =>
+    api.post<NormalizedResponse<{ status: string; amount: string }>>(
+      "/api/v1/treasury/distribute?amount=" + encodeURIComponent(String(body.amount)),
+      { password: body.password, ...(body.code ? { totp_code: body.code } : {}) }
+    ),
 
   distributeProtocolFees: (body: StepUpBody) =>
     api.post<NormalizedResponse<FeeDistributionResult>>(
