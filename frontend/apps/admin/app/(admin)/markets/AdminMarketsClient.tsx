@@ -9,6 +9,7 @@ import { adminApi, type AdminMarketRow } from "@workspace/api-client/admin"
 import { apiErrorMessage } from "@workspace/api-client/client"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
+import { Pagination } from "@/components/pagination"
 import { RejectMarketDialog } from "@/components/reject-market-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -33,10 +34,14 @@ const FILTERS = [
 export function AdminMarketsClient() {
   const qc = useQueryClient()
   const [status, setStatus] = useState("pending_review")
+  const [page, setPage] = useState(1)
+  // Changing a filter while on a later page lands you on an empty page of the
+  // new filter, which reads as "there is nothing here" rather than "start again".
+  const resetToFirstPage = () => setPage(1)
 
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.adminMarkets(status, 1),
-    queryFn: () => adminApi.markets(status, 1, 50).then((r) => r.data),
+  const { data: result, isLoading } = useQuery({
+    queryKey: queryKeys.adminMarkets(status, page),
+    queryFn: () => adminApi.markets(status, page, 50),
     retry: false,
   })
 
@@ -56,7 +61,11 @@ export function AdminMarketsClient() {
 
   const [rejecting, setRejecting] = useState<AdminMarketRow | null>(null)
 
-  const rows = data ?? []
+  const rows = result?.data ?? []
+  // Envelope, not just the rows: `total` and `has_more` are what tell an operator
+  // the queue continues past what they can see.
+  const total = result?.total ?? 0
+  const hasMore = result?.has_more ?? false
   const pending = status === "pending_review"
 
   return (
@@ -75,7 +84,7 @@ export function AdminMarketsClient() {
                 key={f.value}
                 variant={status === f.value ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatus(f.value)}
+                onClick={() => { resetToFirstPage(); setStatus(f.value); }}
                 aria-pressed={status === f.value}
               >
                 {f.label}
@@ -172,6 +181,16 @@ export function AdminMarketsClient() {
             : null
         }
         onOpenChange={(open) => !open && setRejecting(null)}
+      />
+
+      <Pagination
+        page={page}
+        pageSize={50}
+        total={total}
+        hasMore={hasMore}
+        itemLabel="markets"
+        isLoading={isLoading}
+        onPageChange={setPage}
       />
     </div>
   )

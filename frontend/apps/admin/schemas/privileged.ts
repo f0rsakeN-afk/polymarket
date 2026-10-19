@@ -164,3 +164,22 @@ export const rejectMarketSchema = z.object({
 });
 
 export type RejectMarketInput = z.infer<typeof rejectMarketSchema>;
+
+/**
+ * The user search box.
+ *
+ * Bounded and trimmed, because it goes straight into a query string. Unbounded,
+ * "search for everyone whose email contains whatever was pasted in" is both a
+ * useless result and a URL nobody wants to see in a log — and the backend
+ * already caps it, so the form's silence was the only feedback on offer.
+ */
+export const userSearchSchema = z
+  .string()
+  .trim()
+  .max(200, "That search is too long — search for a name or part of an email instead.")
+  // 2 characters: one character matches a large share of the user table and tells
+  // an operator nothing except that they cannot read.
+  .min(2, "Type at least 2 characters.")
+  .or(z.literal(""))
+  // Empty is allowed so the box can be cleared without an error state; the
+  // caller decides whether an empty search means "everyone".

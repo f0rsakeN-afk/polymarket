@@ -47,6 +47,15 @@ const PROTECTED_PATHS = [
   "/settings",
   "/markets/mine",
   "/markets/new",
+  // Was missing, and the only private page gated client-side only. Its data query
+  // is correctly `enabled: !!user`, so nothing leaked — but the *shell* rendered
+  // for a signed-out visitor, and a page that exists to show someone their
+  // notifications existing while signed out is a page that looks broken.
+  //
+  // Every other private route here is decided in the proxy before render. This one
+  // was the odd case out, which means the next person to add a private route would
+  // have had no local example to copy.
+  "/notifications",
 ];
 const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"];
 

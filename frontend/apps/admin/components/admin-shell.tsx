@@ -45,6 +45,7 @@ import { buttonVariants } from "@workspace/ui/components/button"
 import { Spinner } from "@workspace/ui/components/spinner"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { storefrontUrl } from "@/lib/site-url"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { AdminSidebar, ThemeToggle } from "@/components/admin-sidebar"
 
@@ -183,12 +184,19 @@ function NoAccess({ signedIn }: { signedIn: boolean }) {
           >
             {signedIn ? "Sign in as someone else" : "Sign in"}
           </Link>
-          <a
-            href={process.env.NEXT_PUBLIC_SITE_URL ?? "/"}
-            className={cn(buttonVariants({ variant: "ghost" }), "w-full")}
-          >
-            Go to the site
-          </a>
+          {/* Only when a storefront is actually configured. The old fallback was
+              `?? "/"`, which on this origin is this app's own root — so the link
+              sent operators back through the proxy to the login page, and
+              `siteUrl` in the config package falls back to the *API* origin, so
+              the other spelling sent them to a JSON response. */}
+          {storefrontUrl() ? (
+            <a
+              href={storefrontUrl() as string}
+              className={cn(buttonVariants({ variant: "ghost" }), "w-full")}
+            >
+              Go to the site
+            </a>
+          ) : null}
         </div>
 
         <p className="text-xs text-muted-foreground">
