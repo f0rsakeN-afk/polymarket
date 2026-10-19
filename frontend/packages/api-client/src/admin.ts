@@ -105,10 +105,29 @@ export interface AdminMarketRow {
   question: string
   status: string
   created_at: string
+  closes_at: string
+  category: string | null
+  subcategory: string | null
+  /** Who submitted it. Null for a system-created market. */
+  created_by_email: string | null
+  description: string | null
+  /** How the market resolves, when the submitter supplied it. */
+  resolution_criteria: string | null
   /** Why an admin declined the submission. Null unless it was rejected. */
   rejection_reason: string | null
   /** When it was declined. Null unless it was rejected. */
   rejected_at: string | null
+  total_volume: string
+  total_liquidity: string
+  num_trades: number
+  /**
+   * How many legs this market has.
+   *
+   * Not decoration: two means binary, anything more means parimutuel, and every
+   * price on it is read differently. It is the first thing an operator checks when
+   * a market's numbers look wrong.
+   */
+  outcome_count: number
 }
 
 export interface BanResult {
@@ -239,9 +258,35 @@ export const adminApi = {
       body ? body : undefined
     ),
 
-  markets: (status: string, page = 1, pageSize = 20) =>
+  /**
+   * The whole catalogue, admin's view of it.
+   *
+   * `status` is optional and omitting it is the point: it returns every market
+   * including the three states the public catalogue hides. An operator asking
+   * "is anything broken" is not asking about one status, and the previous
+   * signature made `status` required - so there was no way to see all of them.
+   *
+   * `q` matches the question, the slug, and the submitter's email or username.
+   * The submitter is most often how a moderator is looking for a market, from a
+   * support ticket, and matching only the question text misses that entirely.
+   */
+  markets: (
+    params: {
+      status?: string
+      q?: string
+      sort?: "newest" | "oldest" | "volume" | "liquidity" | "closing_soon" | "closing_late"
+      page?: number
+      pageSize?: number
+    } = {}
+  ) =>
     api.get<Page<AdminMarketRow>>(
-      `/api/v1/admin/markets${qs({ status, page, page_size: pageSize })}`
+      `/api/v1/admin/markets${qs({
+        status: params.status,
+        q: params.q,
+        sort: params.sort,
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 50,
+      })}`
     ),
 
   approveMarket: (marketId: string) =>
