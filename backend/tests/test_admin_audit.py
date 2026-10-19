@@ -34,6 +34,10 @@ PRIVILEGED_ACTIONS = {
     # reconciled differently, because one is routine and the other moves money
     # somebody chose.
     "treasury_distribution",
+    # Reading the movement history. A read, and audited as one, because it is the
+    # record of who withdrew what — the same reasoning that audits a user detail
+    # view and leaves a dispute *list* alone.
+    "treasury_log_viewed",
     "step_up_failed",
     "dispute_adjudicated",
     "user_record_viewed",
