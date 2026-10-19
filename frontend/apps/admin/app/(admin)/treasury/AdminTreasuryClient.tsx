@@ -22,6 +22,7 @@ import { sileo } from "sileo"
 
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { TreasuryHistory } from "@/components/treasury-history"
 import { group, subtract } from "@/lib/decimal"
 import { Button } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
@@ -228,6 +229,8 @@ export function AdminTreasuryClient() {
           </p>
         </>
       )}
+
+      <TreasuryHistory />
 
       <StepUpPrompt {...stepUp.promptProps} />
     </div>

@@ -24,9 +24,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Gavel, Scale, ShieldCheck } from "lucide-react"
 import { sileo } from "sileo"
 
-import { adminApi } from "@workspace/api-client/admin"
+import { adminApi, type AdminDisputeRow } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
+import { DisputeDetailDialog } from "@/components/dispute-detail-dialog"
 import { Pagination } from "@/components/pagination"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
@@ -89,6 +90,9 @@ export function AdminDisputesClient() {
   // new filter, which reads as "there is nothing here" rather than "start again".
   const resetToFirstPage = () => setPage(1)
   const [pending, setPending] = useState<PendingRuling | null>(null)
+  // Reading and ruling are separate states on purpose: opening the evidence
+  // must not leave a half-started ruling behind.
+  const [reading, setReading] = useState<AdminDisputeRow | null>(null)
   const stepUp = useStepUp()
 
   // The whole page object, not `.then(r => r.data)`: `total` and `has_more`
@@ -282,6 +286,20 @@ export function AdminDisputesClient() {
                     </div>
                   </div>
 
+                  {/* The evidence is summarised on the row, but the resolution
+                      criteria — the thing a ruling is actually judged against —
+                      are only in the detail. So the row carries an explicit way
+                      to read the whole thing rather than implying it already
+                      has. */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setReading(row)}
+                  >
+                    Read the dispute
+                  </Button>
+
                   {row.evidence ? (
                     <div className="rounded-md bg-muted/40 px-3 py-2">
                       <p className="text-xs font-medium text-muted-foreground">Evidence given</p>
@@ -395,6 +413,17 @@ export function AdminDisputesClient() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Reading and ruling are separate, so opening the evidence never leaves a
+          half-started ruling on screen. */}
+      <DisputeDetailDialog
+        key={reading?.id ?? "no-dispute"}
+        dispute={reading}
+        onOpenChange={(open) => !open && setReading(null)}
+        onRule={(row) =>
+          setPending({ disputeId: row.id, question: row.market_question, ruling: "upheld", note: "" })
+        }
+      />
 
       {/* Step 2 of two: prove you are the operator, right now. */}
       <StepUpPrompt {...stepUp.promptProps} />

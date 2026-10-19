@@ -16,6 +16,9 @@ export const queryKeys = {
     ["admin", "users", page, search] as const,
   adminUser: (userId: string, include?: string[]) =>
     ["admin", "user", userId, ...(include ?? [])] as const,
+  /** The treasury movement history - a distinct key so invalidating the balance
+   *  does not discard the list that explains it. */
+  treasuryLogs: (page: number) => ["admin", "treasury-logs", page] as const,
   adminMarkets: (status: string, page: number) =>
     ["admin", "markets", status, page] as const,
   adminActions: (page: number, filters: Record<string, string | undefined>) =>
