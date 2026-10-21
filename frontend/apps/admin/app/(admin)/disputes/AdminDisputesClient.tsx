@@ -31,6 +31,7 @@ import { DisputeDetailDialog } from "@/components/dispute-detail-dialog"
 import { Pagination } from "@/components/pagination"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
+import { Input } from "@workspace/ui/components/input"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@workspace/ui/components/empty"
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -89,6 +90,37 @@ export function AdminDisputesClient() {
   // Changing a filter while on a later page lands you on an empty page of the
   // new filter, which reads as "there is nothing here" rather than "start again".
   const resetToFirstPage = () => setPage(1)
+
+  /**
+   * Search across the market's question, its slug, and the dispute's own
+   * evidence.
+   *
+   * A moderator handed "someone disputed the bitcoin question" has no id to
+   * search by, and the market question is the phrase they were given. Typed and
+   * submitted rather than searched per keystroke, like every other box in this
+   * app.
+   */
+  const [search, setSearch] = useState("")
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const [searchError, setSearchError] = useState<string | null>(null)
+
+  const onSearch = (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = search.trim()
+    // Bounded for the same reason the users box is: this string goes straight
+    // into the URL, and an unbounded search is a useless result and a string
+    // nobody wants in a log.
+    if (trimmed.length > 100) {
+      setSearchError("That search is too long — 100 characters at most.")
+      return
+    }
+    // Not applied when it cannot succeed, or the operator is left watching an
+    // unchanged list with an error beside the box.
+    setSearchError(null)
+    setAppliedSearch(trimmed)
+    resetToFirstPage()
+  }
+
   const [pending, setPending] = useState<PendingRuling | null>(null)
   // Reading and ruling are separate states on purpose: opening the evidence
   // must not leave a half-started ruling behind.
@@ -99,8 +131,9 @@ export function AdminDisputesClient() {
   // live on the envelope, and dropping it is why this view had no way to know
   // there was a second page of unresolved disputes.
   const { data: result, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.adminDisputes(status, page),
-    queryFn: () => adminApi.disputes({ status, page }),
+    queryKey: queryKeys.adminDisputes(status, page, appliedSearch),
+    queryFn: () =>
+      adminApi.disputes({ status, page, q: appliedSearch || undefined }),
     retry: false,
   })
 
@@ -201,6 +234,34 @@ export function AdminDisputesClient() {
         }
       />
 
+      {/* Search sits below the status filter, not inside `actions`, so the
+          filter row keeps its shape as the description and counts change. */}
+      <form role="search" onSubmit={onSearch} className="flex w-full gap-2 sm:w-auto">
+        <Input
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value)
+            if (searchError) setSearchError(null)
+          }}
+          placeholder="Search market question, slug or evidence"
+          aria-label="Search disputes"
+          aria-invalid={searchError ? true : undefined}
+          aria-describedby={searchError ? "dispute-search-error" : undefined}
+          className="min-w-0 flex-1 sm:w-80 sm:flex-none"
+        />
+        <Button type="submit" variant="outline" size="sm">
+          Search
+        </Button>
+        {/* Next to the box rather than in a toast: the failure is about one
+            input, and an error appearing elsewhere reads as being about
+            something else. */}
+        {searchError ? (
+          <p id="dispute-search-error" role="alert" className="self-center text-xs text-destructive">
+            {searchError}
+          </p>
+        ) : null}
+      </form>
+
       {isLoading ? (
         <div className="space-y-2" role="status" aria-label="Loading disputes">
           <span className="sr-only">Loading disputes…</span>
@@ -229,12 +290,24 @@ export function AdminDisputesClient() {
           <EmptyHeader>
             <Scale className="size-6 text-muted-foreground" />
             <EmptyTitle>
-              {status === "open" ? "Nothing is waiting" : "No disputes here"}
+              {appliedSearch
+                ? "No disputes match"
+                : status === "open"
+                  ? "Nothing is waiting"
+                  : "No disputes here"}
             </EmptyTitle>
             <EmptyDescription>
-              {status === "open"
-                ? "No open disputes. Anything raised appears here oldest-first."
-                : `No disputes with the status “${status}”.`}
+              {/* "Nothing is waiting" during an investigation is a claim about
+                  the product, not an admission that the search was wrong. An
+                  operator searching a phrase from a ticket must be able to tell
+                  those apart. */}
+              {appliedSearch
+                ? `No disputes match “${appliedSearch}”${
+                    status === "open" ? " among open disputes" : ""
+                  }.`
+                : status === "open"
+                  ? "No open disputes. Anything raised appears here oldest-first."
+                  : `No disputes with the status “${status}”.`}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

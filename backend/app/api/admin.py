@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,18 @@ async def _get_admin_user(request: Request, db: AsyncSession = Depends(get_db)) 
     if not user.is_admin:
         raise ForbiddenError("Admin access required")
     return user
+
+
+def _and(existing, extra):
+    """Narrow a filter, treating "no filter yet" as the identity.
+
+    Written out as a helper because the inline form reads as
+    `a if cond else b` when it is `a & b if cond else b` - and those two swap
+    precedence in ways a reviewer has to stop and check. It is the same
+    "omitted, never passed as None" rule the status filter above depends on.
+    """
+    return extra if existing is None else (existing & extra)
+
 
 
 @router.get("/users", summary="List users (admin)")
@@ -475,6 +487,8 @@ async def list_disputes(
     request: Request,
     db: AsyncSession = Depends(get_db),
     status: str | None = Query("open", max_length=20),
+    market_id: str | None = Query(None, max_length=36),
+    q: str | None = Query(None, max_length=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
@@ -491,6 +505,14 @@ async def list_disputes(
     without the claim being disputed is a coin toss with a payout attached, and
     making the moderator open the market first would mean the decision is taken
     away from the evidence.
+
+    ## Why `market_id` and `q`
+
+    The two ways a dispute is actually looked up. An operator investigating a
+    market needs every dispute filed against it - including the already-ruled
+    ones, since a pattern of successful challenges against one market is the
+    finding. And a moderator handed the phrase from a support ticket has no id at
+    all, only something close to the question.
     """
     admin = await _get_admin_user(request, db)
     _ = admin  # authorisation happens here; the actor is recorded on the ruling
@@ -507,6 +529,31 @@ async def list_disputes(
     # conditional expression that read as if `None` were a no-op - and the test
     # asserting that `?status=all` returns ruled disputes is what caught it.)
     condition = None if status in (None, "", "all") else Dispute.status == status
+
+    # Validated rather than passed through. A malformed id reaching the
+    # PostgreSQL UUID comparison raises a `DataError` at execute time, which
+    # surfaces as a 500 for what is plainly a typo in a query string.
+    if market_id:
+        try:
+            market_uuid = uuid.UUID(str(market_id))
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(
+                status_code=422,
+                detail="market_id must be a UUID",
+            ) from None
+        condition = _and(condition, Dispute.market_id == market_uuid)
+
+    if q:
+        # Wildcards escaped for the same reason the user search does: this string
+        # is pasted straight into a LIKE pattern.
+        safe_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{safe_q}%"
+        condition = _and(
+            condition,
+            Market.question.ilike(like, escape="\\")
+            | Market.slug.ilike(like, escape="\\")
+            | Dispute.evidence.ilike(like, escape="\\"),
+        )
 
     count_stmt = select(func.count()).select_from(Dispute)
     rows_stmt = (
@@ -986,13 +1033,32 @@ async def list_markets_admin(
         # `ilike` with the wildcards escaped, so a search for "50%" is a search
         # for the literal string rather than a pattern matching everything.
         needle = f"%{term.replace('%', r'\%').replace('_', r'\_')}%"
-        condition = or_(
+        alternatives = [
             Market.question.ilike(needle, escape="\\"),
             Market.slug.ilike(needle, escape="\\"),
             User.email.ilike(needle, escape="\\"),
             User.username.ilike(needle, escape="\\"),
-        )
-        filters.append(condition)
+        ]
+
+        # A UUID pasted into the box finds its market.
+        #
+        # Two ways this reaches an operator: they copy an id out of the audit
+        # trail, or they follow the market link on a dispute row - which is a
+        # dead end without this, because `?market=<id>` would otherwise land on
+        # an unfiltered first page and quietly sever the link between the
+        # dispute they were reading and the market it is about.
+        #
+        # Parsed first and compared exactly, rather than casting the id column
+        # to text for a substring match. The cast version matches every row for
+        # a one-character search, which is both slow and useless.
+        try:
+            parsed_id = uuid.UUID(term)
+        except (ValueError, AttributeError, TypeError):
+            parsed_id = None
+        if parsed_id is not None:
+            alternatives.append(Market.id == parsed_id)
+
+        filters.append(or_(*alternatives))
 
     if filters:
         query = query.where(*filters)

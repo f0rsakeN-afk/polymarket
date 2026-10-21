@@ -376,10 +376,28 @@ export const adminApi = {
    * with no other way to answer it, and a queue that only shows pending work
    * cannot answer it.
    */
-  disputes: (params: { status?: string; page?: number; pageSize?: number } = {}) =>
+  /**
+   * `marketId` and `q` are the two ways a dispute actually gets looked up.
+   *
+   * An operator investigating a market needs every dispute filed against it,
+   * ruled ones included - a run of successful challenges against one market is
+   * itself the finding. A moderator holding a phrase from a support ticket has
+   * no id at all, which is what `q` is for.
+   */
+  disputes: (
+    params: {
+      status?: string
+      marketId?: string
+      q?: string
+      page?: number
+      pageSize?: number
+    } = {}
+  ) =>
     api.get<Page<AdminDisputeRow>>(
       `/api/v1/admin/disputes${qs({
         status: params.status ?? "open",
+        market_id: params.marketId,
+        q: params.q,
         page: params.page ?? 1,
         page_size: params.pageSize ?? 25,
       })}`

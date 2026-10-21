@@ -26,9 +26,14 @@ const adminApi = vi.hoisted(() => ({
 
 vi.mock("@workspace/api-client/admin", () => ({ adminApi }));
 
+// Mutable, so a test can set `?market=<id>` and watch what the page does with
+// it. A fixed stub would let the dead-link behaviour stay dead.
+const searchParams = vi.hoisted(() => ({ current: new URLSearchParams() }));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => "/markets",
+  useSearchParams: () => searchParams.current,
 }));
 
 vi.mock("sileo", () => ({ sileo: { success: vi.fn(), error: vi.fn() } }));
@@ -65,6 +70,7 @@ function renderWithQuery(ui: React.ReactElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  searchParams.current = new URLSearchParams();
   adminApi.markets.mockResolvedValue({
     data: [row()],
     total: 1,

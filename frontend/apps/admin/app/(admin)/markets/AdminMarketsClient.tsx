@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
 import { Check, Search, X } from "lucide-react"
@@ -9,11 +10,13 @@ import { adminApi, type AdminMarketRow } from "@workspace/api-client/admin"
 import { apiErrorMessage } from "@workspace/api-client/client"
 import { queryKeys } from "@/lib/queryKeys"
 import { PageHeader } from "@/components/page-header"
+import { BulkApproveBar } from "@/components/bulk-approve-bar"
 import { Pagination } from "@/components/pagination"
 import { RejectMarketDialog } from "@/components/reject-market-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
+import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Input } from "@workspace/ui/components/input"
 import {
   Select,
@@ -65,9 +68,26 @@ type SortValue = (typeof SORTS)[number]["value"]
 
 export function AdminMarketsClient() {
   const qc = useQueryClient()
+  const searchParams = useSearchParams()
+
+  /**
+   * `?market=<id>` is the other half of the dispute queue's market link.
+   *
+   * Every dispute row links its market question to here, and until this read the
+   * parameter the link was decorative: it navigated to an unfiltered first page
+   * and quietly severed the connection between the dispute being read and the
+   * market it is about - which is the one thing an operator following that link
+   * needs to keep.
+   *
+   * Seeded into the same state as a typed search rather than fetched
+   * separately, so the box shows where the list came from and clearing it clears
+   * the filter too.
+   */
+  const marketParam = searchParams.get("market") ?? ""
+
   const [status, setStatus] = useState("")
-  const [search, setSearch] = useState("")
-  const [appliedSearch, setAppliedSearch] = useState("")
+  const [search, setSearch] = useState(marketParam)
+  const [appliedSearch, setAppliedSearch] = useState(marketParam)
   const [sort, setSort] = useState<SortValue>("newest")
   const [page, setPage] = useState(1)
   // Changing a filter while on a later page lands you on an empty page of the
@@ -92,6 +112,13 @@ export function AdminMarketsClient() {
     retry: false,
   })
 
+  const rows = result?.data ?? []
+  // Envelope, not just the rows: `total` and `has_more` are what tell an operator
+  // the queue continues past what they can see.
+  const total = result?.total ?? 0
+  const hasMore = result?.has_more ?? false
+  const filtering = Boolean(status || appliedSearch)
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["admin", "markets"] })
   }
@@ -108,13 +135,94 @@ export function AdminMarketsClient() {
 
   const [rejecting, setRejecting] = useState<AdminMarketRow | null>(null)
 
-  const rows = result?.data ?? []
-  // Envelope, not just the rows: `total` and `has_more` are what tell an operator
-  // the queue continues past what they can see.
-  const total = result?.total ?? 0
-  const hasMore = result?.has_more ?? false
+  /**
+   * Bulk approval.
+   *
+   * Sequential on purpose. Fifty parallel mutations would hit the rate limiter,
+   * and the ones refused for that reason would come back indistinguishable from
+   * real refusals - so the operator would be told some markets failed for
+   * reasons the product invented. One at a time keeps the failure report true.
+   */
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [bulkRunning, setBulkRunning] = useState(false)
+
   const pending = status === "pending_review"
-  const filtering = Boolean(status || appliedSearch)
+
+  /**
+   * Selection cannot outlive the thing it selected.
+   *
+   * A market approved on the previous page is still in the set when the
+   * operator returns, and "Approve 3" would then mean approving three markets
+   * that are no longer waiting. Dropping ids the current page no longer shows is
+   * the cheapest correct rule, and it also stops a stale id being sent to the
+   * API for a market that has already moved on.
+   */
+  const visibleIds = useMemo(() => new Set(rows.map((row) => row.id)), [rows])
+  const liveSelection = useMemo(() => {
+    const kept = new Set([...selected].filter((id) => visibleIds.has(id)))
+    return kept.size === selected.size ? selected : kept
+  }, [selected, visibleIds])
+
+  const toggle = (id: string, checked: boolean) => {
+    setSelected((previous) => {
+      const next = new Set(previous)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  const toggleAll = (checked: boolean) => {
+    setSelected(checked ? new Set(rows.map((row) => row.id)) : new Set())
+  }
+
+  const clearSelection = () => setSelected(new Set())
+
+  const bulkApprove = useCallback(async () => {
+    const targets = rows.filter((row) => liveSelection.has(row.id))
+    if (targets.length === 0) return
+
+    setBulkRunning(true)
+    const failed: string[] = []
+    let approved = 0
+
+    for (const market of targets) {
+      try {
+        await adminApi.approveMarket(market.id)
+        approved += 1
+      } catch {
+        // The market's own question, not the id: an operator chasing a failure
+        // needs to know which submission did not publish, and "3 of them" does
+        // not survive being pasted into a ticket.
+        failed.push(market.question)
+      }
+    }
+
+    setBulkRunning(false)
+    clearSelection()
+    refresh()
+
+    // One toast per outcome shape, and never a success message that covers a
+    // partial failure. Nineteen of twenty is not "approved".
+    if (failed.length === 0) {
+      sileo.success({
+        title: `${approved} market${approved === 1 ? "" : "s"} approved`,
+        description: "They are tradable now.",
+      })
+      return
+    }
+    if (approved === 0) {
+      sileo.error({
+        title: "Nothing was approved",
+        description: `${failed.length} failed. ${failed.slice(0, 2).join(" · ")}`,
+      })
+      return
+    }
+    sileo.error({
+      title: `${approved} approved, ${failed.length} failed`,
+      description: `Not published: ${failed.slice(0, 2).join(" · ")}`,
+    })
+  }, [rows, liveSelection, refresh])
 
   return (
     <div className="space-y-4">
@@ -216,6 +324,20 @@ export function AdminMarketsClient() {
         </div>
       </div>
 
+      {/* Only on the pending filter, because only pending markets can be
+          approved. A selection control on a list of already-approved markets is
+          a control that cannot do the thing it offers. */}
+      {pending ? (
+        <BulkApproveBar
+          selected={rows.filter((row) => liveSelection.has(row.id))}
+          totalOnPage={rows.length}
+          isRunning={bulkRunning}
+          onToggleAll={toggleAll}
+          onClear={clearSelection}
+          onConfirm={bulkApprove}
+        />
+      ) : null}
+
       <Card className="overflow-hidden pt-0">
         {isLoading ? (
           <CardContent role="status" className="flex h-48 items-center justify-center">
@@ -245,6 +367,18 @@ export function AdminMarketsClient() {
                 key={market.id}
                 className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
               >
+                {/* The checkbox leads the row rather than sitting inside the
+                    text block, so it lines up down the column and the hit target
+                    is not the question text. */}
+                {pending ? (
+                  <Checkbox
+                    checked={liveSelection.has(market.id)}
+                    onCheckedChange={(checked: boolean) =>
+                      toggle(market.id, checked)
+                    }
+                    aria-label={`Select ${market.question}`}
+                  />
+                ) : null}
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{market.question}</p>
                   <p className="text-xs text-muted-foreground">
