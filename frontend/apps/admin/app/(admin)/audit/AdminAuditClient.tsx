@@ -5,6 +5,8 @@ import { useQuery } from "@tanstack/react-query"
 
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
+import { Pagination } from "@/components/pagination"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -35,66 +37,77 @@ import {
 export function AdminAuditClient() {
   const [tab, setTab] = useState<"actions" | "auth">("actions")
   const [success, setSuccess] = useState<"success" | "failure" | undefined>()
+  const [page, setPage] = useState(1)
+  // Changing a filter while on a later page lands you on an empty page of the
+  // new filter, which reads as "there is nothing here" rather than "start again".
+  const resetToFirstPage = () => setPage(1)
 
+  // Whole envelopes rather than `.then(r => r.data)`: `total` and `has_more`
+  // live on the wrapper, and without them an audit view of a busy week shows the
+  // most recent 50 events and presents them as the whole history.
   const actions = useQuery({
-    queryKey: queryKeys.adminActions(1, { success }),
-    queryFn: () => adminApi.actions({ page: 1, pageSize: 50, success }).then((r) => r.data),
+    queryKey: queryKeys.adminActions(page, { success }),
+    queryFn: () => adminApi.actions({ page, pageSize: 50, success }),
     enabled: tab === "actions",
     retry: false,
   })
 
   const events = useQuery({
-    queryKey: ["admin", "auth-events", 1],
-    queryFn: () => adminApi.auditEvents({ page: 1, pageSize: 50 }).then((r) => r.data),
+    queryKey: ["admin", "auth-events", page],
+    queryFn: () => adminApi.auditEvents({ page, pageSize: 50 }),
     enabled: tab === "auth",
     retry: false,
   })
 
-  const actionRows = actions.data ?? []
-  const eventRows = events.data ?? []
+  const actionRows = actions.data?.data ?? [];
+  const eventRows = events.data?.data ?? [];
+
+  // Paging follows whichever tab is open, so the counts and the controls describe
+  // the list actually on screen rather than the hidden one.
+  const isLoading = tab === "actions" ? actions.isLoading : events.isLoading;
+  const total = (tab === "actions" ? actions.data?.total : events.data?.total) ?? 0;
+  const hasMore = (tab === "actions" ? actions.data?.has_more : events.data?.has_more) ?? false;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Audit trail</h1>
-          <p className="text-sm text-muted-foreground">
-            Privileged actions and authentication events.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <div className="flex gap-1" role="group" aria-label="Which trail">
-            <Button
-              variant={tab === "actions" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTab("actions")}
-              aria-pressed={tab === "actions"}
-            >
-              Privileged actions
-            </Button>
-            <Button
-              variant={tab === "auth" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTab("auth")}
-              aria-pressed={tab === "auth"}
-            >
-              Auth events
-            </Button>
+      <PageHeader
+        title="Audit trail"
+        description="Privileged actions and authentication events."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <div className="flex gap-1" role="group" aria-label="Which trail">
+              <Button
+                variant={tab === "actions" ? "default" : "outline"}
+                size="sm"
+                onClick={() => { resetToFirstPage(); setTab("actions"); }}
+                aria-pressed={tab === "actions"}
+              >
+                Privileged actions
+              </Button>
+              <Button
+                variant={tab === "auth" ? "default" : "outline"}
+                size="sm"
+                onClick={() => { resetToFirstPage(); setTab("auth"); }}
+                aria-pressed={tab === "auth"}
+              >
+                Auth events
+              </Button>
+            </div>
+            {tab === "actions" ? (
+              <Button
+                variant={success === "failure" ? "default" : "outline"}
+                size="sm"
+                onClick={() =>
+                  setSuccess((s) => (s === "failure" ? undefined : "failure"))
+                }
+                aria-pressed={success === "failure"}
+              >
+                {success === "failure" ? "Showing failures" : "Failures only"}
+              </Button>
+            ) : null}
           </div>
-          {tab === "actions" && (
-            <Button
-              variant={success === "failure" ? "default" : "outline"}
-              size="sm"
-              onClick={() =>
-                setSuccess((s) => (s === "failure" ? undefined : "failure"))
-              }
-              aria-pressed={success === "failure"}
-            >
-              {success === "failure" ? "Showing failures" : "Failures only"}
-            </Button>
-          )}
-        </div>
-      </div>
+        }
+      />
 
       <Card className="overflow-hidden pt-0">
         {tab === "actions" ? (
@@ -201,6 +214,16 @@ export function AdminAuditClient() {
           </div>
         )}
       </Card>
+
+      <Pagination
+        page={page}
+        pageSize={50}
+        total={total}
+        hasMore={hasMore}
+        itemLabel="actions"
+        isLoading={isLoading}
+        onPageChange={setPage}
+      />
     </div>
   )
 }

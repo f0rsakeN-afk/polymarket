@@ -25,6 +25,7 @@ import {
   HomeIcon,
   TrendingUpIcon,
   ActivityIcon,
+  PlusIcon,
   HelpCircleIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
@@ -36,6 +37,7 @@ import Image from "next/image"
 
 const navLinks: { href: string; label: string; icon: React.ReactNode }[] = [
   { href: "/markets", label: "Markets", icon: <TrendingUpIcon className="size-4" aria-hidden="true" /> },
+  { href: "/markets/new", label: "Propose", icon: <PlusIcon className="size-4" aria-hidden="true" /> },
   { href: "/trades", label: "Trades", icon: <ActivityIcon className="size-4" aria-hidden="true" /> },
 ]
 

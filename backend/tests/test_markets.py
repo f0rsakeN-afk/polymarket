@@ -323,7 +323,10 @@ async def test_admin_reject_market(client: AsyncClient, admin_user, test_user):
     market = await _submit(client, test_user, "rejectable-market")
 
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.post(f"/api/v1/admin/markets/{market['id']}/reject")
+    resp = await client.post(
+        f"/api/v1/admin/markets/{market['id']}/reject",
+        json={"reason": "the resolution criteria name no source, so it can never settle"},
+    )
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "rejected"
 
@@ -338,9 +341,19 @@ async def test_admin_reject_market(client: AsyncClient, admin_user, test_user):
     resp = await client.get("/api/v1/markets/rejectable-market")
     assert resp.status_code == 200
 
+    # ...including *why* it was declined. The author keeps read access to their own
+    # submission, so this row is the only channel the reason has — without it a
+    # rejected market is a submission nobody can fix.
+    assert resp.json()["data"]["rejection_reason"] == (
+        "the resolution criteria name no source, so it can never settle"
+    )
+
     # Re-rejecting a decided market is a no-op error, not a second decision.
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.post(f"/api/v1/admin/markets/{market['id']}/reject")
+    resp = await client.post(
+        f"/api/v1/admin/markets/{market['id']}/reject",
+        json={"reason": "changed my mind about this one"},
+    )
     assert resp.status_code == 422
     assert resp.json()["error_code"] == "MARKET_NOT_PENDING"
 

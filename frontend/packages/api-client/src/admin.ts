@@ -27,6 +27,10 @@ export interface AdminUserRow {
   is_email_verified: boolean
   is_2fa_enabled: boolean
   created_at: string
+  /** Why the account was deactivated. Null unless it is banned. */
+  ban_reason: string | null
+  /** When it was deactivated. Null unless it is banned. */
+  banned_at: string | null
 }
 
 /** GET /admin/users/{id} → data. */
@@ -101,6 +105,29 @@ export interface AdminMarketRow {
   question: string
   status: string
   created_at: string
+  closes_at: string
+  category: string | null
+  subcategory: string | null
+  /** Who submitted it. Null for a system-created market. */
+  created_by_email: string | null
+  description: string | null
+  /** How the market resolves, when the submitter supplied it. */
+  resolution_criteria: string | null
+  /** Why an admin declined the submission. Null unless it was rejected. */
+  rejection_reason: string | null
+  /** When it was declined. Null unless it was rejected. */
+  rejected_at: string | null
+  total_volume: string
+  total_liquidity: string
+  num_trades: number
+  /**
+   * How many legs this market has.
+   *
+   * Not decoration: two means binary, anything more means parimutuel, and every
+   * price on it is read differently. It is the first thing an operator checks when
+   * a market's numbers look wrong.
+   */
+  outcome_count: number
 }
 
 export interface BanResult {
@@ -146,6 +173,17 @@ export interface AdjudicateResult {
   market_status: string | null
 }
 
+/** One movement in and out of the treasury. */
+export interface TreasuryLogRow {
+  id: string
+  /** fee_collected | distribution */
+  event: string
+  amount: string
+  reference_type: string | null
+  reference_id: string | null
+  created_at: string
+}
+
 export interface TreasurySummary {
   balance: string
   total_fees_collected: string
@@ -155,6 +193,23 @@ export interface TreasurySummary {
 export interface FeeDistributionResult {
   total_distributed: string
   markets_processed: number
+}
+
+/**
+ * One active session.
+ *
+ * `is_current` rather than a client-side guess from the user agent: the server
+ * knows which `sid` issued the token in hand, and an operator looking at a list of
+ * sessions cannot tell which one they are on by reading a user-agent string.
+ */
+export interface AdminSession {
+  id: string
+  ip_address: string | null
+  user_agent: string | null
+  created_at: string
+  last_active_at: string
+  expires_at: string
+  is_current: boolean
 }
 
 /** Step-up credentials, attached to a privileged write. */
@@ -182,12 +237,27 @@ function qs(params: Record<string, string | number | undefined>): string {
 }
 
 export const adminApi = {
-  users: (params: { page?: number; pageSize?: number; search?: string } = {}) =>
+  /**
+   * `status` and `sort` are not conveniences. "Show me the banned accounts" is
+   * the first lookup during an incident, and without a filter it means paging
+   * the whole list hoping the row you need is on the page you land on.
+   */
+  users: (
+    params: {
+      page?: number
+      pageSize?: number
+      search?: string
+      status?: "all" | "active" | "banned" | "admins" | "unverified"
+      sort?: "newest" | "oldest" | "email"
+    } = {}
+  ) =>
     api.get<Page<AdminUserRow>>(
       `/api/v1/admin/users${qs({
         page: params.page ?? 1,
         page_size: params.pageSize ?? 20,
         search: params.search,
+        status: params.status,
+        sort: params.sort,
       })}`
     ),
 
@@ -196,17 +266,53 @@ export const adminApi = {
       `/api/v1/admin/users/${userId}${qs({ include: include?.join(",") })}`
     ),
 
-  ban: (userId: string) =>
-    api.patch<NormalizedResponse<BanResult>>(`/api/v1/admin/users/${userId}/ban`),
+  /**
+   * Ban a user. `reason` is required and is shown to them at sign-in.
+   *
+   * Not optional in the type, deliberately: a reason is the difference between a
+   * decision a user can appeal and one they can only guess at, and making it
+   * optional in the client is how it quietly becomes optional in practice.
+   */
+  ban: (userId: string, body: { reason: string; note?: string }) =>
+    api.patch<NormalizedResponse<BanResult>>(`/api/v1/admin/users/${userId}/ban`, body),
 
-  unban: (userId: string) =>
+  unban: (userId: string, body?: { note?: string }) =>
     api.patch<NormalizedResponse<{ status: string; user_id: string }>>(
-      `/api/v1/admin/users/${userId}/unban`
+      `/api/v1/admin/users/${userId}/unban`,
+      // A `PATCH` with no body and no content type: sending `{}` would be fine,
+      // but omitting it keeps the request identical to the one a curl would make.
+      body ? body : undefined
     ),
 
-  markets: (status: string, page = 1, pageSize = 20) =>
+  /**
+   * The whole catalogue, admin's view of it.
+   *
+   * `status` is optional and omitting it is the point: it returns every market
+   * including the three states the public catalogue hides. An operator asking
+   * "is anything broken" is not asking about one status, and the previous
+   * signature made `status` required - so there was no way to see all of them.
+   *
+   * `q` matches the question, the slug, and the submitter's email or username.
+   * The submitter is most often how a moderator is looking for a market, from a
+   * support ticket, and matching only the question text misses that entirely.
+   */
+  markets: (
+    params: {
+      status?: string
+      q?: string
+      sort?: "newest" | "oldest" | "volume" | "liquidity" | "closing_soon" | "closing_late"
+      page?: number
+      pageSize?: number
+    } = {}
+  ) =>
     api.get<Page<AdminMarketRow>>(
-      `/api/v1/admin/markets${qs({ status, page, page_size: pageSize })}`
+      `/api/v1/admin/markets${qs({
+        status: params.status,
+        q: params.q,
+        sort: params.sort,
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 50,
+      })}`
     ),
 
   approveMarket: (marketId: string) =>
@@ -214,10 +320,20 @@ export const adminApi = {
       `/api/v1/admin/markets/${marketId}/approve`
     ),
 
-  rejectMarket: (marketId: string, reason?: string) =>
-    api.post<NormalizedResponse<{ status: string }>>(
+  /**
+   * Reject a market submission. `reason` is required and is shown to the author.
+   *
+   * It used to be optional with `reason || "Declined by a moderator"` as the
+   * fallback — so every rejection made through this UI was recorded with that
+   * sentence instead of anything an operator wrote, which is worse than no
+   * reason at all: it looks like a reason and is none. The author of a declined
+   * market needs to know whether the problem was the wording, the category or
+   * the resolution criteria, and "Declined by a moderator" answers none of them.
+   */
+  rejectMarket: (marketId: string, body: { reason: string; note?: string }) =>
+    api.post<NormalizedResponse<{ status: string; rejection_reason: string }>>(
       `/api/v1/admin/markets/${marketId}/reject`,
-      { reason: reason || "Declined by a moderator" }
+      body
     ),
 
   actions: (
@@ -260,10 +376,28 @@ export const adminApi = {
    * with no other way to answer it, and a queue that only shows pending work
    * cannot answer it.
    */
-  disputes: (params: { status?: string; page?: number; pageSize?: number } = {}) =>
+  /**
+   * `marketId` and `q` are the two ways a dispute actually gets looked up.
+   *
+   * An operator investigating a market needs every dispute filed against it,
+   * ruled ones included - a run of successful challenges against one market is
+   * itself the finding. A moderator holding a phrase from a support ticket has
+   * no id at all, which is what `q` is for.
+   */
+  disputes: (
+    params: {
+      status?: string
+      marketId?: string
+      q?: string
+      page?: number
+      pageSize?: number
+    } = {}
+  ) =>
     api.get<Page<AdminDisputeRow>>(
       `/api/v1/admin/disputes${qs({
         status: params.status ?? "open",
+        market_id: params.marketId,
+        q: params.q,
         page: params.page ?? 1,
         page_size: params.pageSize ?? 25,
       })}`
@@ -291,10 +425,56 @@ export const adminApi = {
   treasury: () =>
     api.get<NormalizedResponse<TreasurySummary>>("/api/v1/treasury"),
 
+  /**
+   * The movement history: every collection and every withdrawal, newest first.
+   *
+   * The page this backs had no way to answer "where did this balance come from",
+   * which is the first question anyone asks about money. The endpoint existed
+   * and was never called.
+   */
+  treasuryLogs: (params: { page?: number; pageSize?: number; event?: string } = {}) =>
+    api.get<Page<TreasuryLogRow>>(
+      `/api/v1/treasury/logs${qs({
+        page: params.page ?? 1,
+        page_size: params.pageSize ?? 20,
+        event: params.event,
+      })}`
+    ),
+
+  /**
+   * Withdraw a specific amount to the treasury.
+   *
+   * Distinct from `distributeProtocolFees`, which sweeps whatever the fee
+   * balance happens to be. This one moves a stated number, so it takes an amount
+   * as well as step-up credentials — and it is the operation that should feel
+   * deliberate, because the amount is chosen rather than derived.
+   */
+  treasuryDistribute: (body: { amount: number; password: string; code?: string }) =>
+    api.post<NormalizedResponse<{ status: string; amount: string }>>(
+      "/api/v1/treasury/distribute?amount=" + encodeURIComponent(String(body.amount)),
+      { password: body.password, ...(body.code ? { totp_code: body.code } : {}) }
+    ),
+
   distributeProtocolFees: (body: StepUpBody) =>
     api.post<NormalizedResponse<FeeDistributionResult>>(
       "/api/v1/admin/distribute-protocol-fees",
       body
+    ),
+
+  // ── The operator's own session and factor ────────────────────────────────
+  //
+  // Present in the admin app because "which other sessions does this account
+  // have" is the first question a security-conscious operator asks, and answering
+  // it somewhere else means an extra tab and a context switch to the storefront.
+
+  sessions: () => api.get<NormalizedResponse<AdminSession[]>>("/api/v1/auth/sessions"),
+
+  revokeSession: (sessionId: string) =>
+    api.delete<NormalizedResponse<{ revoked: string }>>(`/api/v1/auth/sessions/${sessionId}`),
+
+  twoFactorStatus: () =>
+    api.get<NormalizedResponse<{ is_2fa_enabled: boolean; is_2fa_pending: boolean }>>(
+      "/api/v1/auth/2fa/status"
     ),
 }
 

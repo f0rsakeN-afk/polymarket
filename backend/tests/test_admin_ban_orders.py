@@ -85,7 +85,7 @@ async def test_banning_cancels_resting_orders(
     order = await _resting_buy(db_session, test_user, test_market)
     await _as_admin(client, admin_user)
 
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     assert resp.status_code == 200, resp.text
     assert str(order.id) in resp.json()["data"]["cancelled_order_ids"]
@@ -116,7 +116,7 @@ async def test_banning_releases_the_locked_funds(
     await db_session.commit()
 
     await _as_admin(client, admin_user)
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 200
 
     await db_session.refresh(wallet)
@@ -137,7 +137,7 @@ async def test_a_partial_order_is_also_cancelled(
     order = await _resting_buy(db_session, test_user, test_market, status="partial", amount="10")
     await _as_admin(client, admin_user)
 
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     await db_session.refresh(order)
     assert order.status == "cancelled"
@@ -154,7 +154,7 @@ async def test_a_filled_order_is_left_alone(
     order = await _resting_buy(db_session, test_user, test_market, status="filled")
     await _as_admin(client, admin_user)
 
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     await db_session.refresh(order)
     assert order.status == "filled"
@@ -182,7 +182,7 @@ async def test_banning_does_not_touch_the_ledger(
     tx_id = tx.id
 
     await _as_admin(client, admin_user)
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     assert await db_session.get(Transaction, tx_id) is not None, (
         "a ban rewrote the ledger - cancelling a resting order releases a lock, "
@@ -199,7 +199,7 @@ async def test_the_audit_names_the_orders_it_cancelled(
     order = await _resting_buy(db_session, test_user, test_market)
     await _as_admin(client, admin_user)
 
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     rows = (
         await db_session.execute(
@@ -221,7 +221,7 @@ async def test_banning_with_no_open_orders_still_works(
     """The common case must not depend on the sweep having found anything."""
     await _as_admin(client, admin_user)
 
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     assert resp.status_code == 200
     assert resp.json()["data"]["cancelled_order_ids"] == []
@@ -241,7 +241,7 @@ async def test_unban_leaves_the_funds_available(
     await db_session.commit()
 
     await _as_admin(client, admin_user)
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     await client.patch(f"/api/v1/admin/users/{test_user.id}/unban")
 
     await db_session.refresh(wallet)

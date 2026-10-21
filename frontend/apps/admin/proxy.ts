@@ -59,16 +59,18 @@ const LOGIN_PATH = "/login"
  * The storefront, not `/login`: they are not going to become an admin by signing
  * in again, and bouncing them between the two would be a loop with extra steps.
  */
-/** Where a signed-in non-admin is sent. Never `undefined`; falls back to root. */
-function siteUrl(): string {
-  return appConfig.siteUrl || "/"
-}
-
 async function checkSession(request: NextRequest) {
   return validateSessionCookies({
     apiBase: appConfig.apiUrl,
     accessToken: request.cookies.get(ACCESS_COOKIE)?.value ?? null,
     refreshToken: request.cookies.get(REFRESH_COOKIE)?.value ?? null,
+    // Forwarded because the backend fingerprints refresh tokens by User-Agent
+    // and revokes on mismatch. This refresh runs in Node, whose `fetch` sends
+    // its own UA — so without it, the first refresh after the access token
+    // expires reads as a different device, the token is revoked and the session
+    // is destroyed. That is what logged an operator out of this app roughly every
+    // fifteen minutes, and took the storefront session with it.
+    userAgent: request.headers.get("user-agent"),
   })
 }
 
@@ -114,14 +116,22 @@ export async function proxy(request: NextRequest) {
     }
 
     if (user) {
-      // Signed in, but not an admin. Redirected to the site rather than left
-      // here: rendering the form would invite a second sign-in that cannot help,
-      // and redirecting to `/` would land them back in this proxy, which sends
-      // them here again.
-      const response = NextResponse.redirect(new URL(siteUrl(), request.url))
-      applySetCookies(response, setCookies)
-      applySecurityHeaders(response.headers)
-      return response
+      // Signed in, but not an admin. The page is *rendered*, with a note, rather
+      // than redirected away.
+      //
+      // This used to bounce them to `siteUrl()`. Cookies are keyed by domain, not
+      // port, so the storefront and this app share one session: every operator
+      // signed into the storefront with an ordinary account arrived here, was
+      // redirected away, and was never shown a way to sign in as an admin at all.
+      // On top of that `siteUrl()` falls back to the *API* origin when
+      // NEXT_PUBLIC_SITE_URL is unset, so the redirect landed on the API's JSON
+      // root — a page with no links at all.
+      //
+      // Redirecting away was the wrong call on its own terms too: signing in with
+      // a different account is exactly the remedy, and the only place to do it is
+      // this form. Redirecting to `/` instead would loop, since this proxy sends
+      // non-admins here.
+      return pass(setCookies)
     }
 
     return pass(setCookies)

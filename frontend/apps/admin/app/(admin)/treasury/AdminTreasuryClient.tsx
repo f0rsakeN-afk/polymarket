@@ -22,6 +22,8 @@ import { sileo } from "sileo"
 
 import { adminApi } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { TreasuryHistory } from "@/components/treasury-history"
+import { TreasuryWithdraw } from "@/components/treasury-withdraw"
 import { group, subtract } from "@/lib/decimal"
 import { Button } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
@@ -228,6 +230,13 @@ export function AdminTreasuryClient() {
           </p>
         </>
       )}
+
+      {/* Only rendered once the balance is known: the form checks it, and a form
+          that checks against a placeholder would either block every withdrawal or
+          none of them until the number arrived. */}
+      {data?.balance ? <TreasuryWithdraw balance={data.balance} /> : null}
+
+      <TreasuryHistory />
 
       <StepUpPrompt {...stepUp.promptProps} />
     </div>

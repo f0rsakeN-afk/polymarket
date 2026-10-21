@@ -31,7 +31,32 @@ import {
 const API_BASE = appConfig.apiUrl;
 
 const PUBLIC_PATHS = ["/", "/markets", "/trades", "/faq", "/docs", "/legal", "/support"];
-const PROTECTED_PATHS = ["/portfolio", "/orders", "/positions", "/transactions", "/wallet", "/settings"];
+
+/**
+ * Checked before the public fast-path, so the ordering is what makes this work:
+ * `/markets` is public, but `/markets/mine` and `/markets/new` are matched here
+ * first and never reach it. Listing only `/markets` in either array would leave
+ * both of them readable while signed out.
+ */
+const PROTECTED_PATHS = [
+  "/portfolio",
+  "/orders",
+  "/positions",
+  "/transactions",
+  "/wallet",
+  "/settings",
+  "/markets/mine",
+  "/markets/new",
+  // Was missing, and the only private page gated client-side only. Its data query
+  // is correctly `enabled: !!user`, so nothing leaked — but the *shell* rendered
+  // for a signed-out visitor, and a page that exists to show someone their
+  // notifications existing while signed out is a page that looks broken.
+  //
+  // Every other private route here is decided in the proxy before render. This one
+  // was the odd case out, which means the next person to add a private route would
+  // have had no local example to copy.
+  "/notifications",
+];
 const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"];
 
 function getCookie(request: NextRequest, name: string): string | null {
@@ -50,6 +75,13 @@ async function validateSession(request: NextRequest) {
     apiBase: API_BASE,
     accessToken: getCookie(request, ACCESS_COOKIE),
     refreshToken: getCookie(request, REFRESH_COOKIE),
+    // Forwarded because the backend fingerprints refresh tokens by User-Agent
+    // and revokes on mismatch. This refresh runs in Node, whose `fetch` sends
+    // its own UA — so without this, the first refresh after the access token
+    // expires reads as a different device, the token is revoked, and the session
+    // is destroyed. That is what logged operators out of the admin app every
+    // fifteen minutes.
+    userAgent: request.headers.get("user-agent"),
   });
 }
 

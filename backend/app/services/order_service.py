@@ -1499,7 +1499,13 @@ class OrderService:
             wallet.locked_balance = max(Decimal(0), wallet.locked_balance - order.remaining_amount)
 
         await db.commit()
-        logger.info(f"Order cancelled: {order_id} by user={user.id}")
+        logger.info(
+            "Order cancelled",
+            # Fields, not a sentence: "what did this user cancel" is a filter,
+            # and it is the question every reconciliation of an open order starts
+            # with. As one message string it can only be answered by grepping prose.
+            extra={"order_id": str(order_id), "user_id": str(user.id)},
+        )
 
         # Cancelling removes a resting order, so the book changed and every other
         # client is now holding a level that no longer exists. This only used to

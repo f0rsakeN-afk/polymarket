@@ -40,6 +40,7 @@ burst of probes, short enough that recovery is visible immediately.
 
 import asyncio
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -80,6 +81,89 @@ async def _check_db() -> dict:
     return {
         "status": "ok",
         "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+    }
+
+
+def _code_revision() -> str | None:
+    """The revision this build's models were written against.
+
+    Read from the migration files rather than hardcoded, because a hardcoded
+    constant is a fourth thing to remember to update and it would be wrong
+    exactly when it matters.
+    """
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+        if not ini.exists():
+            return None
+        return ScriptDirectory.from_config(Config(str(ini))).get_current_head()
+    except Exception:  # pragma: no cover - alembic absent or tree rearranged
+        return None
+
+
+async def _check_schema() -> dict:
+    """Is the database at the revision this build expects?
+
+    ## Why `SELECT 1` is not enough
+
+    `_check_db` answers "is Postgres reachable", which is true against a database
+    at *any* revision. So a process three migrations behind reports ready, passes
+    every health check, and then 500s on the first request that touches a column
+    added since.
+
+    That is not hypothetical. It is what happened: `users.is_deleted` did not
+    exist, `/health` returned 200 throughout, and the first thing anyone saw was a
+    stack trace from `POST /auth/login` - which reads as "login is broken" and
+    sends you looking at the login code.
+    """
+    t0 = time.perf_counter()
+    expected = _code_revision()
+
+    if expected is None:
+        # Alembic is not reachable from here (packaged image without the
+        # migrations). Reporting "ok" would be a guess, but failing readiness on a
+        # packaging detail turns a working deployment into an outage, so this is
+        # explicitly unknown rather than either of the two real answers.
+        return {
+            "status": "ok",
+            "detail": "migration directory unavailable; schema not verified",
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
+    async with _get_engine().begin() as conn:
+        row = await conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+        actual = row.scalar()
+
+    latency = round((time.perf_counter() - t0) * 1000, 2)
+    if actual == expected:
+        return {"status": "ok", "revision": actual, "latency_ms": latency}
+
+    if actual is None:
+        detail = (
+            f"database has no alembic_version row, but this build expects {expected}. "
+            "Run `alembic upgrade head`."
+        )
+    else:
+        detail = (
+            f"database is at {actual}, this build expects {expected}. "
+            f"Run `alembic upgrade head` to move it forward"
+            + (
+                f", or `git checkout {expected}` to build the code that matches it."
+                if expected
+                else ""
+            )
+            + " Until then every request touching a changed column fails."
+        )
+
+    return {
+        "status": "unavailable",
+        "error": "database schema is behind this build",
+        "detail": detail,
+        "expected_revision": expected,
+        "database_revision": actual,
+        "latency_ms": latency,
     }
 
 
@@ -124,6 +208,12 @@ async def _readiness() -> dict:
     # that is most likely to be the thing in trouble.
     checks["db"] = await _bounded("db", _check_db())
     checks["redis"] = await _bounded("redis", _check_redis())
+
+    # Schema only if the connection works at all - asking the wrong database for
+    # its revision tells you nothing, and a failed `db` check already fails
+    # readiness.
+    if checks["db"]["status"] == "ok":
+        checks["schema"] = await _bounded("schema", _check_schema())
 
     # Only the dependencies this process genuinely cannot serve traffic without.
     # Worker liveness is deliberately absent - see the module docstring.

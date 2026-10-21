@@ -64,6 +64,22 @@ class Market(Base, UUIDMixin, TimestampMixin):
     resolution_source = Column(String(1000))  # URL or data feed for resolution
     winning_outcome_id = Column(UUID(as_uuid=True), nullable=True)
 
+    # ── Rejection ────────────────────────────────────────────────────────────
+    #
+    # Why an admin declined the submission, and when.
+    #
+    # A rejected market is invisible to everyone except its author, and the
+    # author keeps read access to it — so this is the *only* place the reason can
+    # reach the person who wrote the market. Rejecting with no stated reason
+    # produces a submission that cannot be fixed, because nobody can tell whether
+    # the problem was the wording, the category, or the resolution criteria.
+    #
+    # Same split as a ban: the reason lives here because it must be displayable,
+    # and in the audit trail because that is where the actor, IP and user agent
+    # are recorded. Null whenever `status` is not `rejected`.
+    rejection_reason = Column(String(1000), nullable=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
+
     # Dispute window
     proposed_outcome_id = Column(UUID(as_uuid=True), nullable=True)
     dispute_deadline = Column(DateTime(timezone=True), nullable=True)

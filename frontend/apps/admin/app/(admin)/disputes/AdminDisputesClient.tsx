@@ -24,10 +24,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Gavel, Scale, ShieldCheck } from "lucide-react"
 import { sileo } from "sileo"
 
-import { adminApi } from "@workspace/api-client/admin"
+import { adminApi, type AdminDisputeRow } from "@workspace/api-client/admin"
 import { queryKeys } from "@/lib/queryKeys"
+import { PageHeader } from "@/components/page-header"
+import { DisputeDetailDialog } from "@/components/dispute-detail-dialog"
+import { Pagination } from "@/components/pagination"
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { Badge } from "@workspace/ui/components/badge"
+import { Input } from "@workspace/ui/components/input"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@workspace/ui/components/empty"
 import { Skeleton } from "@workspace/ui/components/skeleton"
@@ -49,7 +53,8 @@ import {
   FieldLabel,
 } from "@workspace/ui/components/field"
 
-import { validateRuling } from "@/schemas/privileged"
+import { rulingNoteSchema, validateRuling } from "@/schemas/privileged"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { StepUpPrompt } from "@/components/step-up-prompt"
 import { useStepUp } from "@/hooks/use-step-up"
@@ -81,23 +86,78 @@ function relative(iso: string) {
 export function AdminDisputesClient() {
   const qc = useQueryClient()
   const [status, setStatus] = useState("open")
+  const [page, setPage] = useState(1)
+  // Changing a filter while on a later page lands you on an empty page of the
+  // new filter, which reads as "there is nothing here" rather than "start again".
+  const resetToFirstPage = () => setPage(1)
+
+  /**
+   * Search across the market's question, its slug, and the dispute's own
+   * evidence.
+   *
+   * A moderator handed "someone disputed the bitcoin question" has no id to
+   * search by, and the market question is the phrase they were given. Typed and
+   * submitted rather than searched per keystroke, like every other box in this
+   * app.
+   */
+  const [search, setSearch] = useState("")
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const [searchError, setSearchError] = useState<string | null>(null)
+
+  const onSearch = (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = search.trim()
+    // Bounded for the same reason the users box is: this string goes straight
+    // into the URL, and an unbounded search is a useless result and a string
+    // nobody wants in a log.
+    if (trimmed.length > 100) {
+      setSearchError("That search is too long — 100 characters at most.")
+      return
+    }
+    // Not applied when it cannot succeed, or the operator is left watching an
+    // unchanged list with an error beside the box.
+    setSearchError(null)
+    setAppliedSearch(trimmed)
+    resetToFirstPage()
+  }
+
   const [pending, setPending] = useState<PendingRuling | null>(null)
+  // Reading and ruling are separate states on purpose: opening the evidence
+  // must not leave a half-started ruling behind.
+  const [reading, setReading] = useState<AdminDisputeRow | null>(null)
   const stepUp = useStepUp()
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.adminDisputes(status, 1),
-    queryFn: () => adminApi.disputes({ status, page: 1 }).then((r) => r.data),
+  // The whole page object, not `.then(r => r.data)`: `total` and `has_more`
+  // live on the envelope, and dropping it is why this view had no way to know
+  // there was a second page of unresolved disputes.
+  const { data: result, isLoading, isError, refetch } = useQuery({
+    queryKey: queryKeys.adminDisputes(status, page, appliedSearch),
+    queryFn: () =>
+      adminApi.disputes({ status, page, q: appliedSearch || undefined }),
     retry: false,
   })
 
-  const rows = data ?? []
+  const rows = result?.data ?? []
 
   // Only meaningful while the confirmation dialog is open, and only for a
   // dismissal. An uphold resolves a market; a dismissal closes someone's dispute
   // with no payout and, without a stated reason, no explanation either.
-  const noteProblem =
-    pending?.ruling === "dismissed" ? validateRuling(pending.ruling, pending.note) : null
-  const total = (data as { total?: number } | undefined)?.total ?? 0
+  // Two rules on the same field, and they answer different questions.
+  //
+  // `validateRuling` is the *substantive* one — a dismissal pays nobody, so it
+  // must say why. `rulingNoteSchema` is the mechanical one: the API caps the note
+  // at 2000 characters, and without this a note that passes every visible check
+  // is refused at submit with a 422 that names a field the operator believed was
+  // fine. It was declared in the schema module and referenced by nothing.
+  const noteProblem = (() => {
+    if (!pending || pending.ruling !== "dismissed") return null;
+    const required = validateRuling(pending.ruling, pending.note);
+    if (required) return required;
+    const parsed = rulingNoteSchema.safeParse(pending.note);
+    return parsed.success ? null : (parsed.error.issues[0]?.message ?? "That note is too long");
+  })();
+  const total = result?.total ?? 0
+  const hasMore = result?.has_more ?? false
 
   /**
    * The privileged call. Throwing on failure is deliberate: `useStepUp` needs the
@@ -154,27 +214,53 @@ export function AdminDisputesClient() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Disputes</h1>
-          <p className="text-sm text-muted-foreground">
-            Oldest first. An upheld ruling resolves the market and pays out.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter disputes">
+      <PageHeader
+        title="Disputes"
+        description="Oldest first. An upheld ruling resolves the market and pays out."
+        actions={
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter disputes">
           {FILTERS.map((f) => (
             <Button
               key={f.value}
               size="sm"
               variant={status === f.value ? "secondary" : "ghost"}
               aria-pressed={status === f.value}
-              onClick={() => setStatus(f.value)}
+              onClick={() => { resetToFirstPage(); setStatus(f.value); }}
             >
               {f.label}
             </Button>
           ))}
-        </div>
-      </div>
+          </div>
+        }
+      />
+
+      {/* Search sits below the status filter, not inside `actions`, so the
+          filter row keeps its shape as the description and counts change. */}
+      <form role="search" onSubmit={onSearch} className="flex w-full gap-2 sm:w-auto">
+        <Input
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value)
+            if (searchError) setSearchError(null)
+          }}
+          placeholder="Search market question, slug or evidence"
+          aria-label="Search disputes"
+          aria-invalid={searchError ? true : undefined}
+          aria-describedby={searchError ? "dispute-search-error" : undefined}
+          className="min-w-0 flex-1 sm:w-80 sm:flex-none"
+        />
+        <Button type="submit" variant="outline" size="sm">
+          Search
+        </Button>
+        {/* Next to the box rather than in a toast: the failure is about one
+            input, and an error appearing elsewhere reads as being about
+            something else. */}
+        {searchError ? (
+          <p id="dispute-search-error" role="alert" className="self-center text-xs text-destructive">
+            {searchError}
+          </p>
+        ) : null}
+      </form>
 
       {isLoading ? (
         <div className="space-y-2" role="status" aria-label="Loading disputes">
@@ -204,12 +290,24 @@ export function AdminDisputesClient() {
           <EmptyHeader>
             <Scale className="size-6 text-muted-foreground" />
             <EmptyTitle>
-              {status === "open" ? "Nothing is waiting" : "No disputes here"}
+              {appliedSearch
+                ? "No disputes match"
+                : status === "open"
+                  ? "Nothing is waiting"
+                  : "No disputes here"}
             </EmptyTitle>
             <EmptyDescription>
-              {status === "open"
-                ? "No open disputes. Anything raised appears here oldest-first."
-                : `No disputes with the status “${status}”.`}
+              {/* "Nothing is waiting" during an investigation is a claim about
+                  the product, not an admission that the search was wrong. An
+                  operator searching a phrase from a ticket must be able to tell
+                  those apart. */}
+              {appliedSearch
+                ? `No disputes match “${appliedSearch}”${
+                    status === "open" ? " among open disputes" : ""
+                  }.`
+                : status === "open"
+                  ? "No open disputes. Anything raised appears here oldest-first."
+                  : `No disputes with the status “${status}”.`}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -261,6 +359,20 @@ export function AdminDisputesClient() {
                     </div>
                   </div>
 
+                  {/* The evidence is summarised on the row, but the resolution
+                      criteria — the thing a ruling is actually judged against —
+                      are only in the detail. So the row carries an explicit way
+                      to read the whole thing rather than implying it already
+                      has. */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setReading(row)}
+                  >
+                    Read the dispute
+                  </Button>
+
                   {row.evidence ? (
                     <div className="rounded-md bg-muted/40 px-3 py-2">
                       <p className="text-xs font-medium text-muted-foreground">Evidence given</p>
@@ -288,11 +400,10 @@ export function AdminDisputesClient() {
         </ul>
       )}
 
-      {total > rows.length ? (
-        <p className="text-xs text-muted-foreground">
-          Showing {rows.length} of {total}.
-        </p>
-      ) : null}
+      {/* Removed: a "Showing 25 of 300" line with no way to reach the other 275.
+          It was an admission that pagination was missing, printed in the place
+          a control should have been. The Pagination component below says the
+          same thing and does something about it. */}
 
       {/* Step 1 of two: what are you about to do, and why. */}
       <AlertDialog
@@ -333,10 +444,26 @@ export function AdminDisputesClient() {
               {noteProblem ? (
                 <FieldError role="alert">{noteProblem}</FieldError>
               ) : (
-                <FieldDescription>
-                  Stored with the ruling. A dismissal with no stated grounds is one
-                  nobody can explain afterwards.
-                </FieldDescription>
+                <>
+                  <FieldDescription>
+                    Stored with the ruling. A dismissal with no stated grounds is
+                    one nobody can explain afterwards.
+                  </FieldDescription>
+                  {/* Only once it is close. A permanent "0/2000" is a number
+                      nobody reads and a habit of ignoring the ones that matter. */}
+                  {pending.note.length > 1800 ? (
+                    <p
+                      className={cn(
+                        "text-xs tabular-nums",
+                        pending.note.length > 2000
+                          ? "font-medium text-destructive"
+                          : "text-muted-foreground"
+                      )}
+                    >
+                      {pending.note.length}/2000
+                    </p>
+                  ) : null}
+                </>
               )}
             </Field>
           ) : (
@@ -360,8 +487,29 @@ export function AdminDisputesClient() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Reading and ruling are separate, so opening the evidence never leaves a
+          half-started ruling on screen. */}
+      <DisputeDetailDialog
+        key={reading?.id ?? "no-dispute"}
+        dispute={reading}
+        onOpenChange={(open) => !open && setReading(null)}
+        onRule={(row) =>
+          setPending({ disputeId: row.id, question: row.market_question, ruling: "upheld", note: "" })
+        }
+      />
+
       {/* Step 2 of two: prove you are the operator, right now. */}
       <StepUpPrompt {...stepUp.promptProps} />
+
+      <Pagination
+        page={page}
+        pageSize={25}
+        total={total}
+        hasMore={hasMore}
+        itemLabel="disputes"
+        isLoading={isLoading}
+        onPageChange={setPage}
+      />
     </div>
   )
 }

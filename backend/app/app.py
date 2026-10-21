@@ -38,6 +38,7 @@ from app.api.middleware import (
 )
 from app.api.notifications import router as notifications_router
 from app.api.orders import router as orders_router
+from app.api.origin_check import OriginCheckMiddleware
 from app.api.positions import router as positions_router
 from app.api.referrals import router as referrals_router
 from app.api.split_merge import router as split_merge_router
@@ -60,26 +61,69 @@ _APP_ENV = os.environ.get("APP_ENV", "development")
 
 
 def _configure_logging(app_env: str, log_level: str) -> None:
-    """Configure root logger based on environment and log level."""
+    """Configure root logger based on environment and log level.
+
+    ## Why `extra` is rendered here at all
+
+    A call site that writes `logger.info("Order filled", extra={"order_id": ...})`
+    is only useful if something renders those fields. Both formatters below used to
+    emit `message` and nothing else, so every `extra` in the codebase was silently
+    discarded — which makes converting an f-string into structured fields a change
+    that looks like an improvement and does nothing at all.
+
+    So the renderers come first. Anything attached with `extra=` becomes a top-level
+    field in production JSON and a `key=value` suffix in development, and the two
+    are consistent with each other so a query written against one works on the
+    other.
+    """
     level = getattr(logging, log_level.upper(), logging.INFO)
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+
+    # Attributes that are already rendered elsewhere, or that describe the emitter
+    # rather than the event. Emitting them again would duplicate every line and,
+    # for `msg`/`args`, produce the *unformatted* template alongside the message.
+    reserved = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+        "asctime",
+        "message",
+    }
+
+    def _extras(record: logging.LogRecord) -> dict:
+        return {k: v for k, v in record.__dict__.items() if k not in reserved}
+
     if app_env == "production":
         # Structured JSON in production • parseable by log aggregators (Datadog, Loki, ELK)
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
-                return json.dumps({
-                    "timestamp": record.created,
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "message": record.getMessage(),
-                }, default=str)
+                return json.dumps(
+                    {
+                        "timestamp": record.created,
+                        "level": record.levelname,
+                        "logger": record.name,
+                        "message": record.getMessage(),
+                        **_extras(record),
+                    },
+                    default=str,
+                )
+
         handler.setFormatter(JSONFormatter())
     else:
-        handler.setFormatter(formatter)
+        # `exc_info` is left to the formatter, which appends the traceback itself.
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        _base = handler.formatter
+
+        class DevFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                line = _base.format(record)
+                fields = _extras(record)
+                return f"{line}  {fields}" if fields else line
+
+        handler.setFormatter(DevFormatter())
+
     logging.basicConfig(level=level, handlers=[handler])
 
 
@@ -283,6 +327,35 @@ if "*" in origins:
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
         "Set explicit origins in CORS_ORIGINS (e.g. CORS_ORIGINS=http://localhost:3000)"
     )
+# ── Auth cookie policy ──────────────────────────────────────────────────────
+#
+# The one configuration pair that cannot fail visibly. A wrong CORS origin prints
+# to the console; a wrong SameSite prints nothing anywhere - the browser simply
+# withholds the cookie, `/auth/me` 401s, and an operator is signed out of a tool
+# that looks like it is working. So the invalid combinations are refused here,
+# where the process refuses to start and says why.
+_SAMESITE_VALUES = ("lax", "strict", "none")
+
+if settings.cookie_samesite.strip().lower() not in _SAMESITE_VALUES:
+    raise ValueError(
+        f"COOKIE_SAMESITE must be one of {', '.join(_SAMESITE_VALUES)} - got "
+        f"{settings.cookie_samesite!r}"
+    )
+
+if settings.cookie_samesite.strip().lower() == "none":
+    # Browsers discard a SameSite=None cookie that is not Secure. That is
+    # silent: login returns 200, Set-Cookie arrives, and the next request is
+    # anonymous. Refusing to boot is the only place this can still be caught.
+    if settings.app_env != "production":
+        raise ValueError(
+            "COOKIE_SAMESITE=none requires APP_ENV=production. Browsers discard a "
+            "SameSite=None cookie without Secure, which leaves every request "
+            "unauthenticated and produces no error to debug. Use COOKIE_SAMESITE=lax "
+            "for local development - on localhost the front end and the API are the "
+            "same site regardless of port, which is exactly why this is invisible in "
+            "development and fatal in production."
+        )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -296,6 +369,13 @@ app.add_middleware(
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+# Registered here, which places it *inside* CORS: Starlette runs the
+# last-registered middleware outermost, and CORS went on first. That is the right
+# order — an unmatched origin's 403 is not readable by the rejected origin's
+# script, because CORSMiddleware withholds the headers, and that is the outcome we
+# want. Putting it outermost instead would mean it ran before request logging and
+# metrics, so a refused request left no trace.
+app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)

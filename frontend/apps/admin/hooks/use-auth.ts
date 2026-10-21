@@ -6,7 +6,7 @@ import { api, isUnauthorized } from "@workspace/api-client/client"
 import { queryKeys } from "@/lib/queryKeys"
 import type { NormalizedResponse } from "@workspace/api-client/client"
 
-interface MeResponse {
+export interface MeResponse {
   id: string
   email: string
   username: string

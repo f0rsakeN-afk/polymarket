@@ -212,13 +212,17 @@ async def test_otp_plaintext_never_stored_in_redis():
 # ── 4. Origin allowlist runs in every environment ─────────────────────────────
 
 
-def _middleware_scope(origin: str | None) -> dict:
+def _middleware_scope(origin: str | None, method: str = "POST") -> dict:
+    """`method` defaults to POST because the origin check is scoped to unsafe
+    methods. A cross-site GET has nothing to change in this API - there are no GET
+    mutations - so refusing it would break prefetch and link previews for no
+    security gain."""
     headers = [(b"origin", origin.encode())] if origin else []
     return {
         "type": "http",
         "asgi": {"version": "3.0"},
         "http_version": "1.1",
-        "method": "GET",
+        "method": method,
         "scheme": "http",
         "path": "/api/v1/markets",
         "raw_path": b"/api/v1/markets",
@@ -231,12 +235,18 @@ def _middleware_scope(origin: str | None) -> dict:
 
 
 async def test_origin_allowlist_applies_outside_production(monkeypatch):
-    """The Origin check must not be disabled by app_env."""
-    from app.api.middleware import RateLimitMiddleware
+    """The Origin check must not be disabled by app_env.
+
+    It now lives in `OriginCheckMiddleware` rather than inside `RateLimitMiddleware`.
+    That is not a move for tidiness: it was previously below
+    `if not self.enabled: return await call_next(...)`, so `RATE_LIMIT_ENABLED=false`
+    - what this very suite runs with - silently disabled the CSRF defence.
+    """
+    from app.api.origin_check import OriginCheckMiddleware
     from app.config import settings
 
     monkeypatch.setattr(settings, "app_env", "development")
-    middleware = RateLimitMiddleware(lambda scope, receive, send: None, enabled=True)
+    middleware = OriginCheckMiddleware(lambda scope, receive, send: None)
 
     async def call_next(_request):
         return PlainTextResponse("ok")
@@ -256,6 +266,35 @@ async def test_origin_allowlist_applies_outside_production(monkeypatch):
     # send it • those requests must not be collateral damage.
     no_origin = await middleware.dispatch(Request(_middleware_scope(None)), call_next)
     assert no_origin.status_code == 200
+
+
+async def test_the_origin_check_survives_rate_limiting_being_disabled():
+    """The regression this move exists to fix.
+
+    A security control gated behind a feature flag is not a security control.
+    `RATE_LIMIT_ENABLED=false` is what the test suite runs with, so the bug was
+    invisible to every test that exercised the API through the middleware.
+    """
+    from app.api.middleware import RateLimitMiddleware
+    from app.api.origin_check import OriginCheckMiddleware
+
+    rate_limiter = RateLimitMiddleware(
+        lambda scope, receive, send: None, enabled=False
+    )
+    origin_check = OriginCheckMiddleware(lambda scope, receive, send: None)
+
+    async def call_next(_request):
+        return PlainTextResponse("ok")
+
+    # Confirms the premise: with the flag off, the rate limiter is a no-op...
+    assert (await rate_limiter.dispatch(
+        Request(_middleware_scope("https://evil.example")), call_next
+    )).status_code == 200
+
+    # ...and the origin check still refuses, because it is not downstream of it.
+    assert (await origin_check.dispatch(
+        Request(_middleware_scope("https://evil.example")), call_next
+    )).status_code == 403
 
 
 # ── 4b. Token refresh must not share the credential-decision bucket ────────────

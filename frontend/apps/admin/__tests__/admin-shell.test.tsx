@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const currentUser = { id: "u1", is_admin: true, email: "admin@x.com", username: "ops" };
@@ -34,8 +35,10 @@ vi.mock("@workspace/api-client/client", () => ({
 vi.mock("sileo", () => ({ sileo: { success: vi.fn(), error: vi.fn() } }));
 
 // next-themes needs a DOM; the real provider is not what these tests are about.
+// The setter is a spy so the keyboard shortcut can be asserted on directly.
+const setTheme = vi.hoisted(() => vi.fn());
 vi.mock("next-themes", () => ({
-  useTheme: () => ({ resolvedTheme: "dark", setTheme: vi.fn() }),
+  useTheme: () => ({ resolvedTheme: "dark", setTheme }),
 }));
 
 import { AdminShell } from "@/components/admin-shell";
@@ -55,6 +58,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   meResult.data = { ...currentUser };
   delete process.env.NEXT_PUBLIC_SITE_URL;
+  // The rail's preference lives in a real cookie, and jsdom shares one document
+  // across every test in the file. Without this, whichever test collapsed the
+  // rail leaves `sidebar_state=false` behind and every test after it starts
+  // collapsed — order-dependent assertions that pass or fail for no visible
+  // reason.
+  for (const c of document.cookie.split(";")) {
+    const name = c.split("=")[0]?.trim();
+    if (name) document.cookie = `${name}=; path=/; max-age=0`;
+  }
 });
 
 describe("admin shell • gate", () => {
@@ -122,5 +134,98 @@ describe("admin shell • accessibility", () => {
   it("offers a skip link, as the storefront does", () => {
     renderShell();
     expect(screen.getByRole("link", { name: /skip to main content/i })).toBeTruthy();
+  });
+});
+
+describe("admin shell • the rail is toggleable", () => {
+  /** Both triggers, collapsed by label rather than by position. */
+  function triggers() {
+    return screen.getAllByRole("button", { name: /collapse navigation|open navigation|toggle sidebar/i });
+  }
+
+  it("offers a toggle on desktop, not only the 4px edge strip", async () => {
+    renderShell();
+
+    // `SidebarRail` has `tabIndex={-1}`, so before this existed the rail was
+    // collapsible *only* by clicking a 4px strip nobody can see — and a keyboard
+    // user could not collapse it at all. The header trigger is what makes it
+    // reachable.
+    expect(triggers().length).toBeGreaterThan(0);
+  });
+
+  it("collapses the rail when the toggle is pressed, and expands it again", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShell();
+
+    const rail = () => container.querySelector('[data-slot="sidebar"]');
+    expect(rail()?.getAttribute("data-state")).toBe("expanded");
+
+    await user.click(triggers()[0]!);
+    expect(rail()?.getAttribute("data-state")).toBe("collapsed");
+
+    await user.click(screen.getAllByRole("button", { name: /collapse navigation|open navigation|toggle sidebar/i })[0]!);
+    expect(rail()?.getAttribute("data-state")).toBe("expanded");
+  });
+
+  it("remembers the choice, so a reload does not slam the rail open again", async () => {
+    const user = userEvent.setup();
+    const { container, unmount } = renderShell();
+
+    await user.click(triggers()[0]!);
+    expect(container.querySelector('[data-slot="sidebar"]')?.getAttribute("data-state")).toBe(
+      "collapsed"
+    );
+
+    // A full navigation is the case that matters: an operator who collapsed the
+    // rail to read a wide audit row should not have it back on every visit.
+    unmount();
+    renderShell();
+
+    await screen.findByText("panel content");
+    expect(
+      document.cookie.includes("sidebar_state=false")
+    ).toBe(true);
+  });
+
+  it("collapses to icons rather than sliding off-screen at desktop width", async () => {
+    const user = userEvent.setup();
+    renderShell();
+
+    // `collapsible="offcanvas"` at `md` and up makes the rail vanish entirely and
+    // leaves the content full-bleed — a mobile drawer on a desktop. `icon`
+    // narrows the rail to the icon column so the page gets the space back, and
+    // `data-collapsible` is what the width rules key off.
+    const rail = document.querySelector('[data-slot="sidebar"]');
+    expect(rail?.getAttribute("data-collapsible")).toBe("");
+
+    await user.click(triggers()[0]!);
+    expect(rail?.getAttribute("data-collapsible")).toBe("icon");
+  });
+});
+
+describe("admin shell • theme", () => {
+  it("offers the theme toggle where a desktop operator can reach it", () => {
+    renderShell();
+
+    // It used to live only inside a `md:hidden` sticky bar, so on a desktop —
+    // the main way this tool is used — there was no way to switch theme at all.
+    // Asserting on presence alone would have passed then too, because the element
+    // exists; what matters is that it is in the rail, not gated to small screens.
+    const inRail = screen
+      .getAllByRole("button", { name: /switch to (light|dark) theme/i })
+      .some((el) => el.closest('[data-slot="sidebar-footer"]') !== null);
+    expect(inRail).toBe(true);
+  });
+
+  it("switches on the keyboard shortcut, and ignores it without the modifier", () => {
+    renderShell();
+    const fire = (init: KeyboardEventInit) =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { ...init, cancelable: true }));
+
+    fire({ key: "d", shiftKey: true }); // no Ctrl/Cmd — must be ignored
+    expect(setTheme).not.toHaveBeenCalled();
+
+    fire({ key: "d", shiftKey: true, ctrlKey: true });
+    expect(setTheme).toHaveBeenCalledWith("light");
   });
 });

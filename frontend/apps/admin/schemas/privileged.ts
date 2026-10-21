@@ -96,3 +96,90 @@ export function canDistribute(pending: string | undefined): boolean {
   // investigate rather than a sweep to perform.
   return !pending.startsWith("-") && pending !== "0" && Number(pending) !== 0
 }
+/**
+ * A ban says why.
+ *
+ * Mirrors the API's rule rather than restating it: required, bounded, and
+ * non-blank. The whitespace case is the one worth encoding on the client — the
+ * server strips before measuring, so `"   "` is three characters of nothing, and a
+ * client that only checked length would let an operator submit a ban whose stated
+ * reason is invisible.
+ */
+export const banReasonSchema = z
+  .string()
+  .trim()
+  .min(3, "Say why — the user will be told, and they cannot appeal what they are not told.")
+  .max(500, "Keep it under 500 characters. Anything longer belongs in the note.");
+
+export const banNoteSchema = z
+  .string()
+  .trim()
+  .max(2000, "Keep the note under 2000 characters.")
+  .optional();
+
+export const banRequestSchema = z.object({
+  reason: banReasonSchema,
+  note: banNoteSchema,
+});
+
+export type BanRequestInput = z.infer<typeof banRequestSchema>;
+
+/**
+ * Reversing a ban.
+ *
+ * The note is genuinely optional — the common case is an appeal that succeeded,
+ * which the audit shows by the unban itself. So this validates a value rather than
+ * gating a form on it.
+ */
+export const unbanNoteSchema = z
+  .string()
+  .trim()
+  .max(2000, "Keep the note under 2000 characters.")
+  .optional();
+
+/**
+ * Declining a market submission.
+ *
+ * Same rule as a ban, for the same reason, and it matters more here in one
+ * specific way: the author keeps read access to their own submission, so this
+ * string is the *only* thing they ever learn. A submission declined with no
+ * reason cannot be fixed, because nobody can tell whether the problem was the
+ * wording, the category, or the resolution criteria.
+ */
+export const rejectionReasonSchema = z
+  .string()
+  .trim()
+  .min(3, "Say why — the author sees this and cannot resubmit without it.")
+  .max(1000, "Keep it under 1000 characters. Anything longer belongs in the note.");
+
+export const rejectionNoteSchema = z
+  .string()
+  .trim()
+  .max(2000, "Keep the note under 2000 characters.")
+  .optional();
+
+export const rejectMarketSchema = z.object({
+  reason: rejectionReasonSchema,
+  note: rejectionNoteSchema,
+});
+
+export type RejectMarketInput = z.infer<typeof rejectMarketSchema>;
+
+/**
+ * The user search box.
+ *
+ * Bounded and trimmed, because it goes straight into a query string. Unbounded,
+ * "search for everyone whose email contains whatever was pasted in" is both a
+ * useless result and a URL nobody wants to see in a log — and the backend
+ * already caps it, so the form's silence was the only feedback on offer.
+ */
+export const userSearchSchema = z
+  .string()
+  .trim()
+  .max(200, "That search is too long — search for a name or part of an email instead.")
+  // 2 characters: one character matches a large share of the user table and tells
+  // an operator nothing except that they cannot read.
+  .min(2, "Type at least 2 characters.")
+  .or(z.literal(""))
+  // Empty is allowed so the box can be cleared without an error state; the
+  // caller decides whether an empty search means "everyone".

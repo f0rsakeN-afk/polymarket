@@ -29,6 +29,15 @@ PRIVILEGED_ACTIONS = {
     "user_banned",
     "user_unbanned",
     "protocol_fees_distributed",
+    # Withdrawing a specific amount to the treasury, as opposed to sweeping the
+    # accumulated fee balance. Distinct operation, distinct audit row: the two are
+    # reconciled differently, because one is routine and the other moves money
+    # somebody chose.
+    "treasury_distribution",
+    # Reading the movement history. A read, and audited as one, because it is the
+    # record of who withdrew what — the same reasoning that audits a user detail
+    # view and leaves a dispute *list* alone.
+    "treasury_log_viewed",
     "step_up_failed",
     "dispute_adjudicated",
     "user_record_viewed",
@@ -83,7 +92,7 @@ async def test_banning_a_user_records_the_admin_not_just_the_target(
     """
     await _as_admin(client, admin_user)
 
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
 
     assert resp.status_code == 200, resp.text
     rows = await _rows(db_session, AdminAuditEvent.action == "user_banned")
@@ -224,7 +233,7 @@ async def test_the_trail_can_be_filtered_by_actor(
     an append-only file someone hoped nobody would need.
     """
     await _as_admin(client, admin_user)
-    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     await client.patch(f"/api/v1/admin/users/{test_user.id}/unban")
 
     mine = await client.get(f"/api/v1/admin/admin-actions?actor_id={admin_user.id}")

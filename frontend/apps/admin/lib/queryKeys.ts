@@ -12,16 +12,26 @@
 export const queryKeys = {
   me: () => ["auth", "me"] as const,
   adminRoot: () => ["admin"] as const,
-  adminUsers: (page: number, search: string) =>
-    ["admin", "users", page, search] as const,
+  /**
+   * Every parameter that changes the result is in the key. `sort` was missing
+   * once, and the failure was quiet: the trigger updated to the new option, the
+   * component state changed, and React Query handed back the cached page for the
+   * old ordering because the key still matched. The control looked like it
+   * worked and did nothing.
+   */
+  adminUsers: (page: number, search: string, status: string, sort: string) =>
+    ["admin", "users", page, search, status, sort] as const,
   adminUser: (userId: string, include?: string[]) =>
     ["admin", "user", userId, ...(include ?? [])] as const,
+  /** The treasury movement history - a distinct key so invalidating the balance
+   *  does not discard the list that explains it. */
+  treasuryLogs: (page: number) => ["admin", "treasury-logs", page] as const,
   adminMarkets: (status: string, page: number) =>
     ["admin", "markets", status, page] as const,
   adminActions: (page: number, filters: Record<string, string | undefined>) =>
     ["admin", "actions", page, filters] as const,
-  adminDisputes: (status: string, page: number) =>
-    ["admin", "disputes", status, page] as const,
+  adminDisputes: (status: string, page: number, search: string) =>
+    ["admin", "disputes", status, page, search] as const,
   adminDispute: (disputeId: string) => ["admin", "dispute", disputeId] as const,
   /**
    * Not under the `admin` root on purpose. A treasury read is served from
@@ -31,4 +41,7 @@ export const queryKeys = {
    * move a balance invalidate it.
    */
   treasury: () => ["treasury", "summary"] as const,
+  /** The signed-in operator's own state — not a target record, so not `admin`. */
+  sessions: () => ["auth", "sessions"] as const,
+  twoFactor: () => ["auth", "2fa", "status"] as const,
 }

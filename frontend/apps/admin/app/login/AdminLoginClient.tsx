@@ -33,13 +33,12 @@ import { ShieldAlert } from "lucide-react"
 
 import { api, apiErrorCode, apiErrorMessage } from "@workspace/api-client/client"
 import { adminLoginSchema } from "@workspace/schemas/auth"
-import { Button, buttonVariants } from "@workspace/ui/components/button"
+import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent } from "@workspace/ui/components/card"
 import { Input } from "@workspace/ui/components/input"
 import { Field, FieldError, FieldGroup, FieldLabel } from "@workspace/ui/components/field"
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@workspace/ui/components/input-otp"
 import { Spinner } from "@workspace/ui/components/spinner"
-import { cn } from "@workspace/ui/lib/utils"
 
 /**
  * `reason` and `next` arrive as props from the server component rather than from
@@ -139,35 +138,39 @@ export function AdminLoginClient({
         <CardContent className="px-6 py-7">
           {notAdmin ? (
             /* The proxy sends a signed-in non-admin here with `?reason=not-admin`.
-               Showing the sign-in form instead would invite a second attempt that
-               cannot help — they are not going to become an admin by signing in
-               again — and it is the same shape as "you are signed out", which is
-               exactly the confusion worth removing. */
-            <div className="space-y-3 text-center">
-              <ShieldAlert className="mx-auto size-7 text-destructive" />
-              <h1 className="text-lg font-semibold">Admin access required</h1>
-              <p className="text-sm text-muted-foreground">
-                This account is signed in, but it does not have admin access, so there is
-                nothing to sign in to here.
+
+               This used to render a dead end: an explanation, one link back to the
+               storefront, and no form at all. That is exactly backwards for an app
+               whose entire purpose is to let somebody establish an admin session.
+
+               Cookies are keyed by domain, not port, so the storefront and this app
+               share one session. Every operator signed into the storefront with an
+               ordinary account arrives here — and this page, the one place they
+               could fix it, refused to let them try. The link was no better: it
+               pointed at `/`, which the proxy sends straight back here, so it was a
+               loop with no exit.
+
+               So the form stays. What changes is the copy: signing in with a
+               different account is precisely the remedy, and it should say so. */
+            <div className="mb-5 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-left">
+              <p className="flex items-start gap-2 text-sm font-medium">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+                Another account is signed in
               </p>
-              <a
-                href={process.env.NEXT_PUBLIC_SITE_URL ?? "/"}
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-full")}
-              >
-                Go to the site
-              </a>
               <p className="text-xs text-muted-foreground">
-                If that is unexpected, ask an existing admin to check your role.
+                It does not have admin access. Sign in with an admin account below —
+                this will replace the current session on this device.
               </p>
             </div>
-          ) : (
-            <>
-              <h1 className="text-lg font-semibold">Sign in to Admin</h1>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Admin accounts only. Signing in elsewhere does not carry over.
-              </p>
+          ) : null}
 
-              <form
+          <>
+            <h1 className="text-lg font-semibold">Sign in to Admin</h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Admin accounts only.
+            </p>
+
+            <form
                 className="mt-5"
                 onSubmit={(event) => {
                   event.preventDefault()
@@ -251,8 +254,7 @@ export function AdminLoginClient({
               )}
             </Button>
               </form>
-            </>
-          )}
+          </>
         </CardContent>
       </Card>
     </div>

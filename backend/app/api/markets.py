@@ -7,6 +7,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.exceptions import (
     ConflictError,
@@ -14,7 +15,7 @@ from app.api.exceptions import (
     NotFoundError,
     ValidationError,
 )
-from app.api.responses import success_response
+from app.api.responses import PaginatedResponse, success_response
 from app.config import settings
 from app.database import get_db, get_db_replica
 from app.deps import get_current_user, get_optional_user
@@ -70,6 +71,10 @@ def market_to_response(
         question=market.question,
         description=market.description,
         category=market.category,
+        subcategory=market.subcategory,
+        image_url=market.image_url,
+        resolution_criteria=market.resolution_criteria,
+        resolution_source=market.resolution_source,
         status=market.status,
         total_liquidity=float(market.total_liquidity or 0),
         total_volume=float(market.total_volume or 0),
@@ -80,6 +85,15 @@ def market_to_response(
         if market.winning_outcome_id
         else None,
         winning_outcome_name=None,
+        # The reason a submission was declined, and when.
+        #
+        # Populated here rather than left to `from_attributes` because
+        # `market_to_response` builds the model field by field, so anything not
+        # passed explicitly is silently None — which is how this ended up
+        # declared on the schema, documented as the author's only channel, and
+        # never actually reaching them.
+        rejection_reason=market.rejection_reason,
+        rejected_at=market.rejected_at,
     )
     if outcomes:
         # Fall back to the binary pair so every outcome always carries a price:
@@ -298,6 +312,89 @@ async def list_categories(db: AsyncSession = Depends(get_db_replica)):
     return success_response(data)
 
 
+@router.get("/mine")
+async def list_my_markets(
+    request: Request,
+    status: str | None = Query(None, max_length=32),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every market the caller submitted, in every state.
+
+    ## Why this had to exist
+
+    Submitting a market put it into a review queue the submitter could not see.
+    They got no list, no status, and — until the rejection reason was added —
+    no explanation at all. The only way to learn anything was to keep the slug
+    and try the direct link, which 404s for anyone but them and says nothing
+    about *why*.
+
+    That makes a submission a write-only operation from the author's side: the
+    single most common thing a user does after proposing a market is find out
+    what happened to it, and there was no way to do that.
+
+    ## Declared before `/{slug}`
+
+    FastAPI matches in declaration order, so a `/mine` declared after
+    `/{slug}` would be captured by it and every request would 404 looking for a
+    market whose slug is literally "mine".
+
+    ## The replica is deliberately not used
+
+    Everything else in this router reads from `get_db_replica`, but this is a
+    per-user read that immediately follows the user's own write, and a
+    replication lag would show a just-submitted market as absent — which reads
+    as "my submission vanished" rather than "wait a moment". The primary is
+    also the only node guaranteed to have the row.
+    """
+    user = await get_current_user(request, db)
+
+    filters = [Market.created_by == user.id]
+    if status:
+        # An unknown status returns an empty list rather than an error: this is a
+        # filter on the caller's own data, and there is nothing to leak or
+        # protect. "Show me nothing matching nonsense" is a fine answer.
+        filters.append(Market.status == status.strip().lower())
+
+    total = (
+        await db.execute(select(func.count(Market.id)).where(*filters))
+    ).scalar() or 0
+
+    # Newest first, then id as a tiebreak. Without it, markets created in the
+    # same millisecond can swap places between pages, so paging back and forth
+    # shows the same row twice and skips another.
+    rows = (
+        (
+            await db.execute(
+                select(Market)
+                .where(*filters)
+                .options(selectinload(Market.outcomes))
+                .order_by(Market.created_at.desc(), Market.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # `total_liquidity` and `total_volume` are columns on the market, already
+    # maintained by the trading path. Re-deriving them per outcome here would be
+    # both slower and a second source of truth that could disagree with the
+    # figure shown on the market page itself.
+    #
+    # `selectinload` because every one of these rows renders its outcomes, and
+    # the lazy default would issue one query per market — 20 queries for one page.
+    return PaginatedResponse(
+        data=[market_to_response(m, outcomes=list(m.outcomes or [])) for m in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total,
+    )
+
+
 @router.get("/{slug}")
 async def get_market(slug: str, request: Request, db: AsyncSession = Depends(get_db_replica)):
     result = await db.execute(select(Market).where(Market.slug == slug))
@@ -392,6 +489,14 @@ async def create_market(
         question=data.question,
         description=data.description,
         category=data.category,
+        subcategory=data.subcategory,
+        image_url=data.image_url,
+        # Stored when given, and left null when not. `resolution_criteria` is what
+        # a resolver reads months later to decide the winner, and when it is
+        # absent the only options are "guess" or "open a dispute" — both of which
+        # cost every participant far more than asking for it up front.
+        resolution_criteria=data.resolution_criteria,
+        resolution_source=data.resolution_source,
         created_by=user.id,
         status=STATUS_ACTIVE if user.is_admin else STATUS_PENDING_REVIEW,
         closes_at=data.closes_at,
@@ -514,10 +619,31 @@ async def create_market(
             market.total_liquidity = (market.total_liquidity or Decimal(0)) + amount_dec
 
     await db.commit()
-    logger.info(f"Market created: {data.slug} by user={user.id} status={market.status}")
+
+    # Re-read with the outcomes eagerly loaded, rather than touching
+    # `market.outcomes` here.
+    #
+    # `commit()` expires every attribute, and `outcomes` is a lazy relationship —
+    # so reading it in the handler is IO on an expired object, which SQLAlchemy
+    # cannot await and reports as `MissingGreenlet`. The fix is to ask for the
+    # data with a query, not to reach for an attribute that is no longer loaded.
+    reloaded = (
+        await db.execute(
+            select(Market)
+            .where(Market.id == market.id)
+            .options(selectinload(Market.outcomes))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+    logger.info(f"Market created: {data.slug} by user={user.id} status={reloaded.status}")
     await cache_invalidate_market_lists()
     return success_response(
-        market_to_response(market).model_dump(),
+        # With the outcomes, not without. `MarketResponse.outcomes` is nullable
+        # because the *list* endpoint omits it, and returning null here made a
+        # freshly created market look like it had none — the caller has no way to
+        # tell "no outcomes" from "this endpoint doesn't include them".
+        market_to_response(reloaded, outcomes=list(reloaded.outcomes or [])).model_dump(),
         message=(
             "Market created"
             if market.status == STATUS_ACTIVE
