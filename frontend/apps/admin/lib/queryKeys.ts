@@ -30,8 +30,8 @@ export const queryKeys = {
     ["admin", "markets", status, page] as const,
   adminActions: (page: number, filters: Record<string, string | undefined>) =>
     ["admin", "actions", page, filters] as const,
-  adminDisputes: (status: string, page: number) =>
-    ["admin", "disputes", status, page] as const,
+  adminDisputes: (status: string, page: number, search: string) =>
+    ["admin", "disputes", status, page, search] as const,
   adminDispute: (disputeId: string) => ["admin", "dispute", disputeId] as const,
   /**
    * Not under the `admin` root on purpose. A treasury read is served from

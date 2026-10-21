@@ -149,7 +149,7 @@ export function AdminDashboardClient() {
   // people waiting on them, and having one on the landing page and the other
   // two clicks away means the quieter one is the one that waits.
   const openDisputes = useQuery({
-    queryKey: queryKeys.adminDisputes("open", 1),
+    queryKey: queryKeys.adminDisputes("open", 1, ""),
     queryFn: () => adminApi.disputes({ status: "open", page: 1, pageSize: 1 }),
     retry: false,
   });
