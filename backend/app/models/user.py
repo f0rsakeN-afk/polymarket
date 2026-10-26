@@ -33,8 +33,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     # here as well as in the audit trail because it has to be *displayable* —
     # to the user, who is entitled to know, and to an admin opening the record.
     #
-    # The **actor** is deliberately not stored here. Two places holding "who
-    # banned this" is two places to disagree; the audit trail already records it,
+    # The **actor** is deliberately not stored here. Two places holding "who banned this" is two places to disagree; the audit trail already records it,
     # with the IP and user agent. This holds only what the record needs to display.
     #
     # Null whenever `is_active` is True. An unban clears both, so "banned" stays a
@@ -49,8 +48,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     # Almost every table referencing a user cascades on delete, including trades,
     # positions, orders and the transaction ledger. Deleting the row would take
     # the user's trades off the public tape, erase the record of positions they
-    # had already settled, and destroy the financial history that the admin
-    # audit trail exists to reference. It would also cascade away referral rows
+    # had already settled, and destroy the financial history that the audit trail exists to reference. It would also cascade away referral rows
     # that are about *other* people's accounts.
     #
     # So erasure wipes the identity and keeps the ledger: the row survives with
@@ -63,6 +61,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     comments = relationship("Comment", back_populates="user")
+    comment_votes = relationship("CommentVote", back_populates="user")
     referrals_made = relationship("Referral", foreign_keys="Referral.referrer_id", back_populates="referrer")
     referrals_received = relationship("Referral", foreign_keys="Referral.referred_id", back_populates="referred")
 
@@ -89,11 +88,7 @@ class RefreshToken(Base, UUIDMixin):
     # inside it as the duplicate it almost always is.
     revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
-    device_info = Column(Text)
-
-    user = relationship("User")
-    sessions = relationship("Session", cascade="all, delete-orphan")
-    current_session = relationship("Session", back_populates="refresh_token", uselist=False, overlaps="sessions")
+    current_session = relationship("Session", back_populates="refresh_token", overlaps="sessions")
 
 
 class Session(Base, UUIDMixin):
