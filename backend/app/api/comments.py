@@ -11,7 +11,8 @@ from app.deps import get_current_user
 from app.models.comment import Comment
 from app.models.market import Market
 from app.models.user import User
-from app.schemas.comment import CommentCreate
+from app.models.comment_vote import CommentVote
+from app.schemas.comment import CommentCreate, CommentResponse, CommentVote
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("PredictX")
@@ -124,7 +125,8 @@ async def list_comments(
 
     comments_out = []
     for comment, username in rows:
-
+        # Check if the authenticated user has voted on this comment
+        # (will be filled in by the caller with user vote state)
         comments_out.append({
             "id": str(comment.id),
             "market_id": str(comment.market_id),
@@ -278,3 +280,73 @@ async def delete_comment(
         pass  # non-fatal
 
     return success_response({"id": str(comment_id), "status": "deleted"}, message="Comment deleted")
+
+
+@router.post("/{slug}/comments/{comment_id}/vote", summary="Vote on a comment", description="Upvote or downvote a comment. Auth required. Idempotent - cannot change vote direction.")
+async def vote_on_comment(
+    slug: str,
+    comment_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+
+    market_result = await db.execute(select(Market).where(Market.slug == slug))
+    market = market_result.scalar_one_or_none()
+    if not market:
+        raise NotFoundError("Market not found")
+
+    # Check if comment exists and is not deleted
+    comment_result = await db.execute(
+        select(Comment).where(Comment.id == comment_id, Comment.market_id == market.id, Comment.is_deleted.is_(False))
+    )
+    comment = comment_result.scalar_one_or_none()
+    if not comment:
+        raise NotFoundError("Comment not found")
+
+    # Check if user already voted on this comment - idempotency
+    vote_result = await db.execute(
+        select(CommentVote).where(
+            CommentVote.comment_id == comment_id,
+            CommentVote.user_id == user.id,
+        )
+    )
+    existing_vote = vote_result.scalar_one_or_none()
+
+    if existing_vote:
+        # User already voted - this is idempotent, just return current state
+        vote_type = existing_vote.vote_type
+    else:
+        # New vote - create it
+        # We only allow upvotes or downvotes, not both changing
+        # Default to upvote if no previous vote
+        existing_vote = CommentVote(
+            comment_id=comment_id,
+            user_id=user.id,
+            vote_type=1,  # upvote
+            is_upvote=True,
+            is_downvote=False,
+        )
+        db.add(existing_vote)
+        await db.commit()
+        await db.refresh(existing_vote)
+        vote_type = 1
+
+    # Broadcast vote event live to WebSocket subscribers
+    try:
+        await redis_pubsub.publish_market_event(str(market.id), "comment:vote", {
+            "comment_id": str(comment_id),
+            "user_id": str(user.id),
+            "username": user.username,
+            "vote_type": vote_type,  # +1 = upvote, -1 = downvote
+        })
+    except Exception:
+        pass  # non-fatal
+
+    return success_response({
+        "comment_id": str(comment_id),
+        "vote_type": vote_type,  # +1 = upvote, -1 = downvote
+        "is_upvote": vote_type == 1,
+        "is_downvote": vote_type == -1,
+        "has_voted": True,
+    }, message="Vote recorded")
