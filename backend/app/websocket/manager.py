@@ -296,7 +296,7 @@ class ConnectionManager:
     # 250ms is four updates a second: past the rate anyone can read a changing
     # percentage, and coarse enough that a list of trading markets costs a
     # handful of frames a second rather than a few hundred.
-    GRID_FLUSH_INTERVAL_S = 0.25
+    GRID_FLUSH_INTERVAL_S = 0.15
     # Floor for the adaptive cadence. Below this the loop is spinning rather than
     # adapting, and a tight spin starves the very listener that fills the buffer.
     # Hitting this floor means the honest answer is another worker, not a faster

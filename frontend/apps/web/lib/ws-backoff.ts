@@ -23,8 +23,25 @@
 
 export const MAX_BACKOFF_MS = 30_000
 
+/** Jitter factor: adds randomness to prevent thundering herd on reconnect. */
+const JITTER_FACTOR = 0.5
+
 /** Delay before reconnect attempt `attempt` (0-based), in milliseconds. */
 export function reconnectDelayMs(attempt: number): number {
-  const capped = Math.min(1000 * Math.pow(2, attempt), MAX_BACKOFF_MS)
-  return Math.round(capped / 2 + Math.random() * (capped / 2))
+  // Faster initial backoff: 200ms, 350ms, 600ms, 1s, 2s, 4s, 8s, then exponential cap
+  // versus old: 500ms, 1000ms, 2000ms, 4000ms, ...
+  // Use fixed delayed sequence for first 7 attempts, then exponential
+  if (attempt === 0) return Math.round(200 / 2 + Math.random() * (200 / 2) * JITTER_FACTOR)
+  if (attempt === 1) return Math.round(350 / 2 + Math.random() * (350 / 2) * JITTER_FACTOR)
+  if (attempt === 2) return Math.round(600 / 2 + Math.random() * (600 / 2) * JITTER_FACTOR)
+  if (attempt === 3) return Math.round(1000 / 2 + Math.random() * (1000 / 2) * JITTER_FACTOR)
+  if (attempt === 4) return Math.round(2000 / 2 + Math.random() * (2000 / 2) * JITTER_FACTOR)
+  if (attempt === 5) return Math.round(4000 / 2 + Math.random() * (4000 / 2) * JITTER_FACTOR)
+  if (attempt === 6) return Math.round(8000 / 2 + Math.random() * (8000 / 2) * JITTER_FACTOR)
+  // Exponential: 8000, 16000, 32000(capped to 30000), 30000, ...
+  // attempt >= 7, delay is definitely a number
+  const delay = 8000 * (2 ** (attempt - 7))
+  const capped = Math.min(delay, MAX_BACKOFF_MS)
+  // Apply jitter: ±50% of the delay, so two tabs never reconnect at the exact same moment
+  return Math.round(capped / 2 + Math.random() * (capped / 2) * JITTER_FACTOR)
 }

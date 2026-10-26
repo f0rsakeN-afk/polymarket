@@ -674,6 +674,7 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
   // `visibilitychange` are the only signals the browser gives us.
   useEffect(() => {
     const c = conn.current
+    let justReconnected = false
 
     const recover = () => {
       if (!c.subs.size) return
@@ -684,7 +685,10 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
         c.reconnectTimer = null
       }
       const market = c.lastConnectedMarket ?? c.subs.keys().next().value
-      if (market) connect(c, market)
+      if (market) {
+        justReconnected = true
+        connect(c, market)
+      }
     }
 
     // Coming back to a long-hidden tab is its own failure mode. The socket may
@@ -707,10 +711,27 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
       }
     }
 
-    window.addEventListener("online", recover)
+    // Tab flash on reconnect: when the socket comes back after being offline/hidden,
+    // flash the page title to alert the user.
+    const handleReconnect = () => {
+      if (!justReconnected) return
+      justReconnected = false
+      const originalTitle = document.title
+      let flashCount = 0
+      const flashInterval = setInterval(() => {
+        document.title = flashCount % 2 === 0 ? `• ${originalTitle}` : originalTitle
+        flashCount++
+        if (flashCount >= 6) {
+          clearInterval(flashInterval)
+          document.title = originalTitle
+        }
+      }, 200)
+    }
+
+    window.addEventListener("online", () => { handleReconnect(); recover() })
     document.addEventListener("visibilitychange", onVisibility)
     return () => {
-      window.removeEventListener("online", recover)
+      window.removeEventListener("online", () => { handleReconnect(); recover() })
       document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [])
