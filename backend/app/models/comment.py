@@ -1,11 +1,11 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, TimestampMixin
 
 
-class Comment(Base, UUIDMixin, TimestampMixin):
+class Comment(Base, TimestampMixin):
     __tablename__ = "comments"
     __table_args__ = (
         Index("ix_comments_market_id", "market_id"),
@@ -22,17 +22,4 @@ class Comment(Base, UUIDMixin, TimestampMixin):
 
     market = relationship("Market", back_populates="comments")
     user = relationship("User", back_populates="comments")
-
-
-Comment.parent = relationship(
-    Comment,
-    back_populates="replies",
-    remote_side=Comment.__table__.c.id,
-    foreign_keys=Comment.parent_id,
-)
-Comment.replies = relationship(
-    Comment,
-    back_populates="parent",
-    foreign_keys=Comment.parent_id,
-    cascade="all, delete-orphan",
-)
+    votes = relationship("CommentVote", back_populates="comment", cascade="all, delete-orphan")
