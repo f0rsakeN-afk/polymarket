@@ -1,0 +1,77 @@
+// 🎨 CSS Variables — Professional SaaS Palette Refresh
+// Mapped 1:1 to new Design.md-aligned token names
+
+@layer base {
+  :root {
+    /* --- Primary: Indigo palette (deeper, more SaaS-grade than original blue) */
+    --color-primary-50: #faf5ff;
+    --color-primary-100: #f3e8ff;
+    --color-primary-200: #e9d8fd;
+    --color-primary-300: #d8b4fe;
+    --color-primary-400: #c4b5fd;
+    --color-primary-500: #a78bfa;
+    --color-primary-600: #8b5cf6;
+    --color-primary-700: #7c3aed;
+    --color-primary-800: #6d28d9;
+    --color-primary-900: #5b21b6;
+    --color-primary-950: #4c1d95;
+
+    /* --- Secondary: Slate palette (clean gray, modern SaaS look) */
+    --color-secondary-50: #f8fafc;
+    --color-secondary-100: #f1f5f9;
+    --color-secondary-200: #e2e8f0;
+    --color-secondary-300: #cbd5e1;
+    --color-secondary-400: #94a3b8;
+    --color-secondary-500: #64748b;
+    --color-secondary-600: #475569;
+    --color-secondary-700: #334155;
+    --color-secondary-800: #1e293b;
+    --color-secondary-900: #0f172a;
+    --color-secondary-950: #081f41;
+
+    /* --- Accent: Sky/Cyan palette (pop color for interactions) */
+    --color-accent-50: #f0f9ff;
+    --color-accent-100: #e0f9ff;
+    --color-accent-200: #a5f3fc;
+    --color-accent-300: #67e8f5;
+    --color-accent-400: #22d3ee;
+    --color-accent-500: #0891b2;
+    --color-accent-600: #0e4f85;
+    --color-accent-700: #155e7e;
+    --color-accent-800: #164e6a;
+    --color-accent-900: #1a4a5e;
+
+    /* --- Neutral: True grayscale (enhanced contrast) */
+    --color-neutral-50: #f8fafc;
+    --color-neutral-100: #f1f5f9;
+    --color-neutral-200: #e2e8f0;
+    --color-neutral-300: #cbd5e1;
+    --color-neutral-400: #94a3b8;
+    --color-neutral-500: #64748b;
+    --color-neutral-600: #475569;
+    --color-neutral-700: #334155;
+    --color-neutral-800: #1e293b;
+    --color-neutral-900: #0f172a;
+    --color-neutral-950: #0f172a;
+
+    /* --- Semantic Intents */
+    --color-success: #0d9488;     // Deep teal — refined professional success
+    --color-warning: #f59e0b;     // Amber — standard warning
+    --color-error: #7f1d1d;       // Error — standard error
+  }
+}
+
+/* Optional: dark mode overrides */
+[data-theme='dark'] {
+  --color-neutral-50: #18181b;
+  --color-neutral-100: #27272a;
+  --color-neutral-200: #3f3f46;
+  --color-neutral-300: #52525b;
+  --color-neutral-400: #71717a;
+  --color-neutral-500: #a1a1aa;
+  --color-neutral-600: #d4d4d8;
+  --color-neutral-700: #f4f4f5;
+  --color-neutral-800: #fafafa;
+  --color-neutral-900: #fafafa;
+  --color-neutral-950: #fafafa;
+}
