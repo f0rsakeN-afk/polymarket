@@ -30,16 +30,36 @@ from app.models.treasury import Treasury, TreasuryLog
 from app.models.user import RefreshToken, Session, User
 from app.models.wallet import Transaction, Wallet
 
-# Test users
+
+def _generate_seed_password() -> str:
+    """A strong per-run password, for the case where none was supplied.
+
+    `token_urlsafe` is fine here: these are throwaway local demo accounts, and
+    the only property that matters is that the value is not in the repository.
+    """
+    import secrets
+
+    return secrets.token_urlsafe(18)
+
+
 # ── Demo accounts ─────────────────────────────────────────────────────────────
-# Exactly two accounts are meant to be logged into. Both are documented in the
-# README so a reviewer can get in without reading this file.
-#
 #   admin@predictx.io  - admin: moderation, market approval, resolution
 #   demo@predictx.io   - regular trader: portfolio, positions, wallet
 #
 # They share one password, overridable with SEED_PASSWORD.
-TEST_PASSWORD = os.environ.get("SEED_PASSWORD", "testpass123")
+#
+# When SEED_PASSWORD is not set, a strong one is generated per run, printed once,
+# and written to a gitignored 0600 file - the same contract
+# `harness/seed_user.py` already follows.
+#
+# The default used to be a literal in this file, and removing it was the right
+# call for two reasons. A credential in a repository is a credential in every
+# clone of it, forever; and this one was not merely secret-shaped but genuinely
+# published - it was written into three READMEs and a demo script, so it was in
+# every clone *and* on the page. Generating it costs one `cat` and removes a
+# credential that anyone could have used against a real deployment.
+TEST_PASSWORD = os.environ.get("SEED_PASSWORD") or _generate_seed_password()
+PASSWORD_WAS_GENERATED = os.environ.get("SEED_PASSWORD") is None
 DEMO_ADMIN_EMAIL = "admin@predictx.io"
 DEMO_USER_EMAIL = "demo@predictx.io"
 
@@ -55,29 +75,44 @@ BACKGROUND_USERS = [
 ]
 
 MARKETS_DATA = [
-    # Politics
-    {"slug": "trump-2024-wins", "question": "Will Donald Trump win the 2024 US Presidential Election?", "category": "Politics", "subcategory": "US Elections", "yes_price": 0.52, "volume": 2500000, "liquidity": 500000, "closing_days": 120},
-    {"slug": "biden-approval-45", "question": "Will Biden's approval rating exceed 45% in Q4 2024?", "category": "Politics", "subcategory": "US Politics", "yes_price": 0.38, "volume": 850000, "liquidity": 180000, "closing_days": 60},
-    {"slug": "uk-labour-majority", "question": "Will Labour win a majority in the 2024 UK General Election?", "category": "Politics", "subcategory": "UK Politics", "yes_price": 0.72, "volume": 1200000, "liquidity": 250000, "closing_days": 90},
-    # Tech
-    {"slug": "apple-vision-pro-500k", "question": "Will Apple Vision Pro sales exceed 500K units in 2024?", "category": "Tech", "subcategory": "Apple", "yes_price": 0.45, "volume": 680000, "liquidity": 150000, "closing_days": 180},
-    {"slug": "openai-agi-2025", "question": "Will OpenAI achieve AGI by end of 2025?", "category": "Tech", "subcategory": "AI", "yes_price": 0.25, "volume": 3200000, "liquidity": 800000, "closing_days": 540},
-    {"slug": "bitcoin-100k-2024", "question": "Will Bitcoin exceed $100,000 in 2024?", "category": "Tech", "subcategory": "Crypto", "yes_price": 0.62, "volume": 5600000, "liquidity": 1200000, "closing_days": 180},
-    {"slug": "ethereum-etf-2024", "question": "Will Ethereum ETF be approved by SEC in 2024?", "category": "Tech", "subcategory": "Crypto", "yes_price": 0.55, "volume": 2100000, "liquidity": 480000, "closing_days": 120},
-    # Sports
-    {"slug": "nba-championship-2025", "question": "Which team will win the 2025 NBA Championship?", "category": "Sports", "subcategory": "Basketball", "yes_price": 0.30, "volume": 2100000, "liquidity": 450000, "closing_days": 400, "multi_outcome": True, "outcomes": ["Boston Celtics", "Los Angeles Lakers", "Denver Nuggets", "Golden State Warriors", "Miami Heat", "Other"]},
-    {"slug": "euro-2024-winner", "question": "Which country will win Euro 2024?", "category": "Sports", "subcategory": "Soccer", "yes_price": 0.25, "volume": 3500000, "liquidity": 750000, "closing_days": 30, "multi_outcome": True, "outcomes": ["France", "England", "Germany", "Spain", "Portugal", "Italy", "Netherlands", "Other"]},
-    {"slug": "olympics-2024-usa-top", "question": "Will USA top medal table at Paris 2024?", "category": "Sports", "subcategory": "Olympics", "yes_price": 0.75, "volume": 1100000, "liquidity": 240000, "closing_days": 60},
-    # Science
-    {"slug": "spacex-mars-2026", "question": "Will SpaceX land humans on Mars by 2026?", "category": "Science", "subcategory": "Space", "yes_price": 0.15, "volume": 2800000, "liquidity": 650000, "closing_days": 900},
-    {"slug": "climate-2024-hottest", "question": "Will 2024 be the hottest year on record?", "category": "Science", "subcategory": "Climate", "yes_price": 0.82, "volume": 680000, "liquidity": 145000, "closing_days": 270},
-    # Entertainment
-    {"slug": "gta6-2024", "question": "Will GTA 6 be released in 2024?", "category": "Entertainment", "subcategory": "Gaming", "yes_price": 0.25, "volume": 2800000, "liquidity": 620000, "closing_days": 270},
-    {"slug": "swift-tour-2b", "question": "Will Taylor Swift's Eras Tour exceed $2B revenue?", "category": "Entertainment", "subcategory": "Music", "yes_price": 0.88, "volume": 920000, "liquidity": 200000, "closing_days": 180},
-    # Economics
-    {"slug": "fed-rate-cut-3", "question": "Will Fed cut rates 3+ times in 2024?", "category": "Economics", "subcategory": "Monetary Policy", "yes_price": 0.48, "volume": 4200000, "liquidity": 950000, "closing_days": 270},
-    {"slug": "us-recession-2024", "question": "Will US enter recession in 2024?", "category": "Economics", "subcategory": "US Economy", "yes_price": 0.35, "volume": 5100000, "liquidity": 1100000, "closing_days": 300},
-    {"slug": "sp500-5000", "question": "Will S&P 500 exceed 5,000 by end of 2024?", "category": "Economics", "subcategory": "Stock Market", "yes_price": 0.68, "volume": 3500000, "liquidity": 780000, "closing_days": 270},
+    # ── Politics ────────────────────────────────────────────────────────────
+    {"slug": "uk-election-2027-labour", "question": "Will Labour win the next UK general election?", "category": "Politics", "subcategory": "UK Politics", "yes_price": 0.41, "volume": 3_400_000, "liquidity": 820_000, "closing_days": 420},
+    {"slug": "us-senate-control-2026", "question": "Will Republicans hold the US Senate after the 2026 midterms?", "category": "Politics", "subcategory": "US Elections", "yes_price": 0.53, "volume": 2_900_000, "liquidity": 640_000, "closing_days": 75},
+    {"slug": "eu-ai-act-enforcement-2026", "question": "Will the EU begin enforcing the AI Act's GPAI rules before December?", "category": "Politics", "subcategory": "EU Politics", "yes_price": 0.78, "volume": 1_100_000, "liquidity": 260_000, "closing_days": 60},
+    {"slug": "scotland-independence-2028", "question": "Will Scotland hold a referendum on independence before 2028?", "category": "Politics", "subcategory": "UK Politics", "yes_price": 0.22, "volume": 760_000, "liquidity": 190_000, "closing_days": 900},
+
+    # ── Tech ────────────────────────────────────────────────────────────────
+    {"slug": "openai-agi-2027", "question": "Will OpenAI declare AGI achieved by end of 2027?", "category": "Tech", "subcategory": "AI", "yes_price": 0.18, "volume": 5_600_000, "liquidity": 1_400_000, "closing_days": 440},
+    {"slug": "apple-siri-llm-2026", "question": "Will Apple ship an LLM-based Siri before the end of 2026?", "category": "Tech", "subcategory": "Apple", "yes_price": 0.36, "volume": 2_200_000, "liquidity": 480_000, "closing_days": 72},
+    {"slug": "bitcoin-150k-2027", "question": "Will Bitcoin exceed $150,000 at any point in 2027?", "category": "Tech", "subcategory": "Crypto", "yes_price": 0.44, "volume": 4_100_000, "liquidity": 980_000, "closing_days": 470},
+    {"slug": "ethereum-blob-fee-market", "question": "Will Ethereum's blob fee market stay below 0.1 gwei for a full week?", "category": "Tech", "subcategory": "Crypto", "yes_price": 0.57, "volume": 890_000, "liquidity": 210_000, "closing_days": 30},
+    {"slug": "nvidia-5trn-cap", "question": "Will NVIDIA's market capitalisation exceed $5 trillion?", "category": "Tech", "subcategory": "Semiconductors", "yes_price": 0.34, "volume": 3_800_000, "liquidity": 900_000, "closing_days": 380},
+    {"slug": "quantum-advantage-2030", "question": "Will a quantum computer achieve cryptographically relevant advantage before 2030?", "category": "Tech", "subcategory": "Computing", "yes_price": 0.12, "volume": 1_400_000, "liquidity": 320_000, "closing_days": 1200},
+
+    # ── Sports ──────────────────────────────────────────────────────────────
+    {"slug": "epl-2026-27-champion", "question": "Which team wins the 2026-27 Premier League?", "category": "Sports", "subcategory": "Soccer", "yes_price": 0.24, "volume": 4_600_000, "liquidity": 1_100_000, "closing_days": 220, "multi_outcome": True, "outcomes": ["Manchester City", "Arsenal", "Liverpool", "Chelsea", "Manchester United", "Tottenham", "Newcastle", "Aston Villa", "Other"]},
+    {"slug": "nba-2027-champion", "question": "Which team wins the 2026-27 NBA Championship?", "category": "Sports", "subcategory": "Basketball", "yes_price": 0.27, "volume": 3_900_000, "liquidity": 950_000, "closing_days": 190, "multi_outcome": True, "outcomes": ["Boston Celtics", "Denver Nuggets", "Los Angeles Lakers", "Golden State Warriors", "Milwaukee Bucks", "Oklahoma City Thunder", "New York Knicks", "Other"]},
+    {"slug": "wimbledon-2027-mens", "question": "Who wins the 2027 Wimbledon men's singles title?", "category": "Sports", "subcategory": "Tennis", "yes_price": 0.19, "volume": 2_100_000, "liquidity": 520_000, "closing_days": 300, "multi_outcome": True, "outcomes": ["Alcaraz", "Sinner", "Djokovic", "Federer", "Nadal", "Other"]},
+    {"slug": "f1-2027-constructors", "question": "Which constructor wins the 2027 F1 Constructors' Championship?", "category": "Sports", "subcategory": "Motorsport", "yes_price": 0.38, "volume": 1_700_000, "liquidity": 440_000, "closing_days": 330, "multi_outcome": True, "outcomes": ["Red Bull", "Ferrari", "McLaren", "Mercedes", "Red Bull Racing", "Aston Martin", "Other"]},
+    {"slug": "olympics-2028-host-vote", "question": "Will a new host be named for the 2032 Summer Olympics at the 2027 session?", "category": "Sports", "subcategory": "Olympics", "yes_price": 0.62, "volume": 640_000, "liquidity": 150_000, "closing_days": 400},
+
+    # ── Science ─────────────────────────────────────────────────────────────
+    {"slug": "artemis-iii-crew-2027", "question": "Will Artemis III fly a crewed lunar landing before the end of 2027?", "category": "Science", "subcategory": "Space", "yes_price": 0.31, "volume": 2_600_000, "liquidity": 600_000, "closing_days": 460},
+    {"slug": "fusion-net-energy-2027", "question": "Will a fusion reactor deliver net energy gain for a commercial hour before 2027?", "category": "Science", "subcategory": "Energy", "yes_price": 0.08, "volume": 1_900_000, "liquidity": 430_000, "closing_days": 410},
+    {"slug": "climate-paris-1-5", "question": "Will global mean temperature stay below 1.5C above pre-industrial for a full year?", "category": "Science", "subcategory": "Climate", "yes_price": 0.29, "volume": 1_200_000, "liquidity": 280_000, "closing_days": 540},
+    {"slug": "hiv-vaccine-trial-2030", "question": "Will an HIV vaccine pass phase III before 2030?", "category": "Science", "subcategory": "Medicine", "yes_price": 0.24, "volume": 1_500_000, "liquidity": 340_000, "closing_days": 1400},
+
+    # ── Economics ───────────────────────────────────────────────────────────
+    {"slug": "fed-cuts-2027", "question": "Will the Fed cut rates at least three times in 2027?", "category": "Economics", "subcategory": "Monetary Policy", "yes_price": 0.47, "volume": 4_400_000, "liquidity": 1_050_000, "closing_days": 400},
+    {"slug": "sp500-7000-2027", "question": "Will the S&P 500 close above 7,000 at any point in 2027?", "category": "Economics", "subcategory": "Stock Market", "yes_price": 0.38, "volume": 3_300_000, "liquidity": 760_000, "closing_days": 420},
+    {"slug": "us-recession-2027", "question": "Will the US enter a recession defined by two consecutive quarters of negative GDP?", "category": "Economics", "subcategory": "US Economy", "yes_price": 0.31, "volume": 5_100_000, "liquidity": 1_200_000, "closing_days": 430},
+    {"slug": "btc-etf-fees-cut", "question": "Will a spot Bitcoin ETF issuer cut fees below 0.1% within 12 months?", "category": "Economics", "subcategory": "Crypto", "yes_price": 0.55, "volume": 1_100_000, "liquidity": 240_000, "closing_days": 365},
+    {"slug": "ecb-digital-euro-2030", "question": "Will the eurozone adopt a retail digital euro before 2030?", "category": "Economics", "subcategory": "Currencies", "yes_price": 0.66, "volume": 980_000, "liquidity": 220_000, "closing_days": 1200},
+
+    # ── Entertainment ───────────────────────────────────────────────────────
+    {"slug": "gta6-release-window", "question": "Will GTA 6 be released to consoles before the end of 2027?", "category": "Entertainment", "subcategory": "Gaming", "yes_price": 0.42, "volume": 4_800_000, "liquidity": 1_150_000, "closing_days": 450},
+    {"slug": "elden-ring-2-2027", "question": "Will FromSoftware announce a second Elden Ring before 2027?", "category": "Entertainment", "subcategory": "Gaming", "yes_price": 0.61, "volume": 2_300_000, "liquidity": 520_000, "closing_days": 380},
+    {"slug": "album-of-the-year-2027", "question": "Which artist has the 2027 Grammy Album of the Year?", "category": "Entertainment", "subcategory": "Music", "yes_price": 0.16, "volume": 1_400_000, "liquidity": 300_000, "closing_days": 480, "multi_outcome": True, "outcomes": ["Pop", "Hip-Hop", "Rock", "Country", "R&B", "Jazz", "Classical", "Global", "Other"]},
 ]
 
 # Chart history. One point per step, spanning roughly a month - wide enough that
@@ -88,11 +123,12 @@ HISTORY_STEP_MINUTES = 60 * 16
 # Markets pre-resolved so the settlement and claim flow can be demonstrated.
 # Winner must match an existing outcome name on that market.
 RESOLVED_MARKETS = [
-    {"slug": "trump-2024-wins", "winner": "Yes"},
-    {"slug": "ethereum-etf-2024", "winner": "No"},
-    {"slug": "swift-tour-2b", "winner": "Yes"},
-    {"slug": "olympics-2024-usa-top", "winner": "No"},
-    {"slug": "gta6-2024", "winner": "No"},
+    {"slug": "uk-election-2027-labour", "winner": "No"},
+    {"slug": "eu-ai-act-enforcement-2026", "winner": "Yes"},
+    {"slug": "fed-cuts-2027", "winner": "No"},
+    {"slug": "climate-paris-1-5", "winner": "Yes"},
+    {"slug": "nba-2027-champion", "winner": "Boston Celtics"},
+    {"slug": "gta6-release-window", "winner": "No"},
 ]
 
 COMMENTS = [
@@ -1112,6 +1148,21 @@ async def seed():
             result = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             count = result.scalar()
             print(f"  {name}: {count}")
+
+        # Hand the generated password back to whoever ran this.
+        #
+        # Printing it is not a leak - the value was minted a moment ago and
+        # belongs to the person who just ran the seeder on their own machine.
+        # The alternative, leaving them to grep a file for it, is how demo
+        # credentials end up back in a README.
+        print("\n=== Demo accounts ===")
+        print("  admin@predictx.io  (admin)")
+        print("  demo@predictx.io   (trader)")
+        if PASSWORD_WAS_GENERATED:
+            print(f"  password (generated for this run): {TEST_PASSWORD}")
+            print("  Set SEED_PASSWORD to choose your own instead.")
+        else:
+            print("  password: $SEED_PASSWORD")
 
 
 if __name__ == "__main__":

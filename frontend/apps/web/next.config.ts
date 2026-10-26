@@ -1,5 +1,5 @@
 import type { NextConfig } from "next"
-import { config } from "./lib/config"
+import { config } from "@workspace/api-client/config"
 
 /** `https://api.example.com` / `ws://localhost:8000` → `https://api.example.com` */
 function origin(raw: string): string {

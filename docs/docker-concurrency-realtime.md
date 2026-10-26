@@ -840,7 +840,7 @@ evidence behind it. Now:
 |---|---|---|---|
 | `ws_connections` | Gauge | • | How many sockets am I holding *right now*? |
 | `ws_subscriptions` | Gauge | • | Total market subscriptions held |
-| `ws_connects_total` | Counter | `outcome` (`accepted`/`rejected_ip`/`rejected_user`) | Are we rejecting people, and why? |
+| `ws_connects_total` | Counter | `outcome` (`accepted`/`rejected_ip`/`rejected_user`/`skipped_connected`/`skipped_disconnected`) | Are we rejecting people, and why? |
 | `ws_disconnects_total` | Counter | `cause` (`client`/`error`/`send_failed`/`heartbeat`) | Are clients or the server dropping them? |
 | `ws_sends_total` | Counter | `result` (`ok`/`timeout`/`failed`) | Timeout ≠ failed: timeout means a **wedged** client (full buffer), failed means dead |
 | `ws_messages_fanned_out_total` | Counter | `channel` (`market`/`user`/`global`) | Fan-out volume per channel class |

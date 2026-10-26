@@ -4,7 +4,7 @@ import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.rate_limit_service import RateLimitService
-from app.websocket.manager import manager, redis_pubsub, user_manager
+from app.websocket.manager import GLOBAL_TRADES_KEY, manager, redis_pubsub, user_manager
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(tags=["websocket"])
@@ -143,11 +143,38 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                 await websocket.close(code=1009, reason="Payload too large")
                 break
             import json
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                # A malformed frame is the client's problem, not a reason to
+                # tear down a socket that may be perfectly healthy. It used to
+                # raise out of the loop and land in the generic `except`, which
+                # disconnected the client and dropped every market it was
+                # watching because of one bad byte.
+                logger.debug("WS: dropped unparseable frame market=%s", market_id)
+                continue
+            if not isinstance(data, dict):
+                logger.debug("WS: dropped non-object frame market=%s", market_id)
+                continue
+
+            # Any inbound traffic is proof of life. The heartbeat reaps on
+            # silence past `PONG_TIMEOUT_S`, so this - not whether our next
+            # write succeeds - is what keeps a healthy socket's lease renewed.
+            manager.touch(websocket)
+
             msg_type = data.get("type")
 
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
+
+            elif msg_type == "pong":
+                # Answer to a server heartbeat probe. Handled in the read loop
+                # rather than ignored: without it the server has no way to tell a
+                # half-open socket (laptop closed, NAT timeout - writes still
+                # succeed, peer long gone) from a live one, and those sockets
+                # leaked their per-user connection quota until the user was
+                # permanently locked out of realtime.
+                pass
 
             elif msg_type == "subscribe":
                 new_market_id = data.get("market_id")
@@ -169,6 +196,32 @@ async def market_websocket(websocket: WebSocket, market_id: str):
                     await manager.unsubscribe_from_market(
                         websocket, old_market_id, redis_pubsub
                     )
+
+            elif msg_type == "grid":
+                # Replace the set of markets this socket is displaying in a grid.
+                #
+                # A list of thirty markets does not take thirty subscriptions and
+                # thirty frames a tick; it takes ONE declaration and then one
+                # combined frame per flush. Prices arrive aggregated, with `seq`
+                # preserved so the client keeps the same gap detection a detail
+                # page has.
+                market_ids = data.get("market_ids")
+                if not isinstance(market_ids, list):
+                    continue
+                # `set_grid`, not `subscribe_grid`: declaring a grid also has to
+                # acquire the Redis channels for those markets. Indexing a socket
+                # for delivery without subscribing it means every price is
+                # published to a channel this node is not listening to, and the
+                # grid stays static with nothing to show for it.
+                accepted = await manager.set_grid(websocket, market_ids, redis_pubsub)
+                await websocket.send_json({
+                    "type": "grid:ack",
+                    "accepted": len(accepted),
+                    "requested": len(market_ids),
+                })
+
+            elif msg_type == "grid_clear":
+                await manager.release_grid(websocket, redis_pubsub)
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket, redis_pubsub, cause="client")
@@ -193,7 +246,7 @@ async def global_trades_websocket(websocket: WebSocket):
         return
 
     accepted = await manager.connect(
-        websocket, "__global_trades__", client_ip=client_ip, user_id=user_id
+        websocket, GLOBAL_TRADES_KEY, client_ip=client_ip, user_id=user_id
     )
     if not accepted:
         await websocket.close(code=1008, reason="Connection limit exceeded")
@@ -207,15 +260,29 @@ async def global_trades_websocket(websocket: WebSocket):
                 await websocket.close(code=1009, reason="Payload too large")
                 break
             import json
-            data = json.loads(raw)
-            if data.get("type") == "ping":
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.debug("Global trades WS: dropped unparseable frame")
+                continue
+            manager.touch(websocket)
+            if isinstance(data, dict) and data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         await manager.disconnect(websocket, redis_pubsub, cause="client")
+        # The global feed is subscribed by this route rather than by market id,
+        # so `disconnect` skips it (it lives under the `__global_trades__`
+        # sentinel key). Released here, and reference-counted like any other
+        # channel, so the node stops being polled for a feed nobody is watching.
+        await redis_pubsub.unsubscribe_global_trades()
         logger.info("Global trades WS disconnected")
     except Exception:
         logger.exception("Global trades WS error")
         await manager.disconnect(websocket, redis_pubsub, cause="error")
+        try:
+            await redis_pubsub.unsubscribe_global_trades()
+        except Exception:
+            pass
 
 
 @router.websocket("/ws/notifications/{user_id}")
@@ -230,7 +297,28 @@ async def user_notifications_websocket(websocket: WebSocket, user_id: str):
     if not authenticated_user_id or authenticated_user_id != user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return
-    await user_manager.connect(websocket, user_id)
+    # `connect()` returns whether the socket is *really* live, and this route has
+    # to act on it - which the other two have always done and this one did not.
+    #
+    # Discarding it is not a style issue. On rejection the socket was never
+    # accepted, so the route went on to take a Redis subscription for a
+    # connection that does not exist and then entered the read loop, whose first
+    # `receive_text()` raises "WebSocket is not connected. Need to call accept
+    # first." That landed in the `except Exception` below and logged a full
+    # traceback for a rejection that was entirely routine - so the guard's own
+    # failure mode was producing the noise the guard was added to stop.
+    accepted = await user_manager.connect(websocket, user_id)
+    if not accepted:
+        logger.warning(f"User WS connect rejected: user={user_id}")
+        # Close, exactly as the market and trades routes do. Returning without
+        # closing leaves the handshake unfinished: the client is waiting for an
+        # accept that will never come, and `websocket_connect` blocks until it
+        # times out. It also holds a connection slot for that whole time.
+        # Starlette permits `close` from CONNECTING, so this is the correct way
+        # to refuse before accepting.
+        await websocket.close(code=1008, reason="Connection limit exceeded")
+        return
+
     await redis_pubsub.subscribe_user(user_id)
 
     try:
@@ -240,12 +328,28 @@ async def user_notifications_websocket(websocket: WebSocket, user_id: str):
                 await websocket.close(code=1009, reason="Payload too large")
                 break
             import json
-            data = json.loads(raw)
-            if data.get("type") == "ping":
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.debug("User WS: dropped unparseable frame")
+                continue
+            # Same liveness contract as the market socket: this is a long-lived
+            # connection held open by users who left the tab open overnight, so
+            # it is the most likely to be silently half-open.
+            user_manager.touch(websocket)
+            if isinstance(data, dict) and data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         await user_manager.disconnect(websocket, user_id, cause="client")
+        # Release the two private Redis channels. This never happened, so each
+        # login permanently added two channels per worker for the life of the
+        # process, all of them polled by `listen()` on every tick.
+        await redis_pubsub.unsubscribe_user(user_id)
         logger.info(f"User WS disconnected: user={user_id}")
     except Exception:
         logger.exception(f"User WS error: user={user_id}")
         await user_manager.disconnect(websocket, user_id, cause="error")
+        try:
+            await redis_pubsub.unsubscribe_user(user_id)
+        except Exception:
+            pass

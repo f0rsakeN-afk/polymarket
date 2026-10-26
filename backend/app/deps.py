@@ -82,7 +82,15 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     if not hashed:
         return False
-    return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+    try:
+        return bcrypt.checkpw(_bcrypt_input(plain), hashed.encode())
+    except (ValueError, TypeError):
+        # A malformed hash must read as "this does not verify", never as a crash.
+        # bcrypt raises on an unparseable salt, so any row whose password_hash
+        # is not a valid bcrypt string would otherwise turn a login attempt into
+        # a 500 - which is both wrong and, by being distinguishable from a
+        # normal rejection, a small oracle about how that row is stored.
+        return False
 
 
 _DUMMY_PASSWORD_HASH: str | None = None
@@ -262,16 +270,57 @@ async def get_optional_user(
         return None
 
 
+def _cookie_samesite() -> str:
+    """
+    Resolve the configured `SameSite`, and refuse the combination that cannot work.
+
+    `SameSite=None` without `Secure` is rejected by every current browser: the
+    cookie is silently *dropped*, not downgraded. So `none` in a non-production
+    environment produces a deployment where login succeeds, `Set-Cookie` arrives,
+    and the next request is anonymous - the exact failure `lax` causes on a
+    cross-site deployment, just reached the other way round.
+
+    Raising here turns that into a 500 at the moment credentials are issued, with
+    a message naming the two settings involved. It cannot reach production because
+    `app.py` refuses the same pair at boot; this is the belt to that suspenders,
+    for a settings object mutated after startup (tests, or a process that reloads
+    config).
+    """
+    # Strip before testing for emptiness, so `COOKIE_SAMESITE=` and
+    # `COOKIE_SAMESITE="   "` mean the same thing. Deciding one is "unset" and the
+    # other is "invalid" is the kind of distinction nobody wants to discover from
+    # a boot failure.
+    value = (settings.cookie_samesite or "").strip().lower() or "lax"
+    if value not in ("lax", "strict", "none"):
+        raise ValueError(
+            f"COOKIE_SAMESITE must be one of lax, strict, none - got {value!r}"
+        )
+    if value == "none" and settings.app_env != "production":
+        # Not a warning: there is no safe degraded value here, and the degraded
+        # behaviour (cookie silently withheld) is indistinguishable from a bug.
+        raise ValueError(
+            "COOKIE_SAMESITE=none requires HTTPS, so it requires APP_ENV=production. "
+            "Browsers discard a SameSite=None cookie that is not Secure, which "
+            "leaves every request unauthenticated with nothing in the logs. For "
+            "local development use lax - on localhost the front end and API are "
+            "the same site regardless of port."
+        )
+    return value
+
+
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str | None = None):
     """
-    Set HttpOnly, Secure (prod-only), SameSite=Lax cookies for auth tokens.
-    - secure: True when DEBUG=false (HTTPS required in prod)
+    Set HttpOnly, Secure (prod-only), SameSite cookies for auth tokens.
+    - secure: True in production (HTTPS required)
     - httponly: True (never accessible to JavaScript)
-    - samesite=lax: sent on same-origin requests and safe top-level navigations
+    - samesite: `COOKIE_SAMESITE`. `lax` covers same-site deployments and local
+      dev; `none` is required when the front end lives on a different site from
+      this API, and cannot be used without `Secure`.
     """
     # Secure cookie only when actually in production (HTTPS). Localhost and dev
     # environments must use non-secure cookies even when DEBUG=false.
     is_prod = settings.app_env == "production"
+    samesite = _cookie_samesite()
 
     # Deliberately NO `Domain` attribute • these are host-only cookies.
     #
@@ -289,7 +338,7 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
         value=access_token,
         httponly=True,
         secure=is_prod,
-        samesite="lax",
+        samesite=samesite,
         max_age=settings.jwt_access_expire,
         path="/",
     )
@@ -299,7 +348,7 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
             value=refresh_token,
             httponly=True,
             secure=is_prod,
-            samesite="lax",
+            samesite=samesite,
             max_age=settings.jwt_refresh_expire,
             path="/",
         )
@@ -307,7 +356,10 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str |
 
 def clear_auth_cookies(response: Response):
     is_prod = settings.app_env == "production"
+    samesite = _cookie_samesite()
     # Must mirror set_auth_cookies exactly • a delete_cookie with a different
-    # Domain/Path than the one it set does not remove the stored cookie.
-    response.delete_cookie("access_token", path="/", secure=is_prod)
-    response.delete_cookie("refresh_token", path="/", secure=is_prod)
+    # Domain/Path than the one it set does not remove the stored cookie, and a
+    # browser that stored a SameSite=None cookie will not match a deletion that
+    # omits it.
+    response.delete_cookie("access_token", path="/", secure=is_prod, samesite=samesite)
+    response.delete_cookie("refresh_token", path="/", secure=is_prod, samesite=samesite)

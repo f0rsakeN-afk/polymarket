@@ -88,3 +88,15 @@ class TwoFactorEnableRequest(BaseModel):
 class TwoFactorDisableRequest(BaseModel):
     code: str = Field(..., min_length=6, max_length=6)
     password: str = Field(..., min_length=1, max_length=128)
+
+
+class StepUpRequest(BaseModel):
+    """Step-up credentials for a privileged action.
+
+    `code` is required only when the account has 2FA enabled, so the server
+    decides rather than the client - a client that simply omits the field would
+    otherwise be able to downgrade a protected action to password-only.
+    """
+
+    password: str = Field(..., min_length=1, max_length=128)
+    code: str | None = Field(None, min_length=6, max_length=6)

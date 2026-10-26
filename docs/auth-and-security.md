@@ -37,9 +37,30 @@ Without `sid` a JWT would stay valid for its full 15 minutes no matter what you 
 ```
 httponly = True          # JS can never read the tokens → XSS can't exfiltrate them
 secure   = (app_env == "production")   # HTTPS only in prod; localhost must work in dev
-samesite = "lax"         # sent on same-origin + safe top-level navigations only
+samesite = COOKIE_SAMESITE             # "lax" by default; see below
 path     = "/", no Domain attribute (host-only, in every environment)
 ```
+
+> **`SameSite` is deployment topology, so it is configuration.** `COOKIE_SAMESITE`
+> defaults to `lax`, which is correct when the API and both front ends share a site
+> — and silently wrong everywhere else. `lax` means the browser withholds the
+> cookie from `fetch()` on another site, so an admin app at `admin.example.com`
+> against an API at `api.example.com` gets no session on *any* request: login
+> returns 200, `Set-Cookie` arrives, `/auth/me` 401s forever, and there is nothing
+> in any log. That deployment needs `none`.
+>
+> `none` cannot be used carelessly: browsers **discard** a `SameSite=None` cookie
+> that is not `Secure`, producing the same permanently-signed-out state by the
+> opposite route. So the API refuses to boot on `none` without
+> `APP_ENV=production`, rather than warning — a warning is not actionable against a
+> symptom that looks like an unrelated bug. `deps._cookie_samesite()` raises the
+> same pair again at cookie-issue time, for a settings object mutated after
+> startup.
+>
+> This never reproduces locally: **SameSite ignores ports**, so `localhost:3000`,
+> `:3001` and `:8000` are one site and `lax` is correct. The bug exists only once
+> the hostnames differ, which is why `test_auth_cookie_samesite.py` asserts the
+> cross-site configuration directly rather than waiting for a deploy to find it.
 
 > **No `Domain` attribute, deliberately.** Dev used to emit `Domain=localhost` so the cookie would
 > "work across frontend (:3000) and backend (:8000)". It never needed to: cookie scope is
@@ -308,12 +329,35 @@ and explicitly scrubs raw headers so `Cookie`/`Authorization` never reach the lo
 There is **no explicit anti-CSRF token** (grep for `csrf|xsrf` → zero matches). The defence is
 **defence in depth across four independent mechanisms**:
 
-1. **`SameSite=Lax` on both auth cookies.**
-   Lax means the browser **does not attach cookies to cross-site `POST`/`PUT`/`DELETE`
-   (non-top-level) requests**. Since *every* state-changing endpoint here is `POST`/`PATCH`/`DELETE`
-   (there are no GET mutations • `logout`, `refresh`, `change-password` are all POST), a
-   cross-origin `<form method=post>` or `fetch()` from `evil.com` arrives **cookie-less** ⇒ 401.
+1. **An `Origin` allowlist enforced in the app** (`app/api/origin_check.py`), on every unsafe
+   method, in **every** environment. Any `POST`/`PUT`/`PATCH`/`DELETE` bearing an `Origin` outside
+   `ALLOWED_ORIGINS ∪ CORS_ORIGINS` is rejected **403 `ORIGIN_NOT_ALLOWED`** before it reaches a
+   handler. `Origin: null` — what a sandboxed iframe or a `data:` document sends, and the one origin
+   an attacker can synthesise — is refused too.
+
+   This used to live inside `RateLimitMiddleware`, **below** `if not self.enabled`, which meant
+   `RATE_LIMIT_ENABLED=false` silently switched the CSRF defence off. The test suite runs with
+   rate limiting disabled, so every test through the API was exercising it with the check absent.
+   It is its own middleware now, and `test_the_origin_check_survives_rate_limiting_being_disabled`
+   pins that.
+
+   Two other things were corrected while it moved: `ALLOWED_ORIGINS="*"` was honoured as "allow every
+   origin" (a second, much easier way to disable CSRF protection than the wildcard `app.py` refuses
+   in `CORS_ORIGINS`), and a `http://localhost` bypass applied in production. The allowlist is now
+   also in `settings` and in `.env.example` instead of being read from `os.environ` where nobody
+   knew it existed.
+
+1b. **`SameSite=Lax` on both auth cookies** — a second layer, and the one that stops the attack
+   before it starts. Lax means the browser **does not attach cookies to cross-site
+   `POST`/`PUT`/`DELETE` (non-top-level) requests**, so a cross-origin `<form method=post>` or
+   `fetch()` from `evil.com` arrives cookie-less ⇒ 401, and never reaches the origin check.
    `Lax` (vs `Strict`) is chosen so that clicking a link to `/markets` from an email still works.
+
+   **It is not always available.** A cross-site admin deployment (`admin.example.com` against
+   `api.example.com`) must set `COOKIE_SAMESITE=none` — with `lax` the browser never sends the
+   cookie at all and nobody can ever sign in. `none` removes this layer, which is exactly why
+   mechanism 1 exists above it. The two are not redundant: 1 works whatever the cookie says, and 1b
+   works without a round trip to the server.
 
 2. **Content-Type is `application/json` + no CORS preflight bypass.**
    The client always sends `Content-Type: application/json` (`client.ts:300`). A simple
@@ -333,14 +377,11 @@ There is **no explicit anti-CSRF token** (grep for `csrf|xsrf` → zero matches)
    endpoints using the victim's cookies. So `evil.com` never passes the preflight ⇒ the browser
    never sends the actual request.
 
-4. **Origin allowlist enforcement inside the app** (`middleware.py:133`) • a second, independent
-   check beyond the CORS middleware: **in every environment** (not just production), any request
-   bearing an `Origin` not in `ALLOWED_ORIGINS ∪ CORS_ORIGINS` (localhost/127.0.0.1 always allowed)
-   is rejected **403 `ORIGIN_NOT_ALLOWED`** before it reaches a handler. So a misconfigured reverse
-   proxy, a staging box, or a non-browser client replaying a forged Origin doesn't get through •
-   and because the set is the union of the two origin settings, editing one can't silently break
-   requests from our own front end. Clients that send no `Origin` (curl, webhooks, same-origin GET)
-   are untouched: they are covered by the SameSite and content-type rules instead.
+4. **Clients that send no `Origin`** — curl, webhooks, the WebSocket `?token=` fallback,
+   server-to-server calls — are passed through untouched. That is deliberate rather than a hole:
+   every current browser sends `Origin` on a non-GET request, including cross-site form posts, so
+   the absence of one means a non-browser client that mechanism 1 was never defending against.
+   Blocking it would break those callers for no security gain.
 
 Plus: `form-action 'self'` in CSP stops a hijacked form from posting anywhere, and the
 `Permissions-Policy` header disables `payment=`/`usb=` etc.

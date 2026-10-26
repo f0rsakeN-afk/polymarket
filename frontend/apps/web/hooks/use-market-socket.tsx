@@ -2,10 +2,39 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { config } from "@/lib/config"
+import { reconnectDelayMs } from "@/lib/ws-backoff"
 
 export type WSStatus = "connecting" | "connected" | "disconnected" | "error"
 
 type MessageHandler = (data: unknown) => void
+
+/** Synthetic frame: frames were demonstrably lost for this market. */
+export const WS_GAP = "__ws_gap__"
+/** Synthetic frame: state may be stale, refetch from REST. */
+export const WS_RESYNC = "__ws_resync__"
+/** Synthetic frame: connection status transition (never sent by the server). */
+export const WS_STATUS = "__ws_status__"
+
+/**
+ * How long a tab may stay hidden before we assume it missed something.
+ *
+ * A background tab keeps its socket, so nothing looks broken - but the browser
+ * may freeze timers, the OS may suspend the machine, or the network may have
+ * quietly swapped underneath it. Come back after an hour and the UI is
+ * confidently rendering whatever the last frame said. One cheap invalidation on
+ * return is the difference between "live" and "live, as of this morning".
+ */
+const RESYNC_AFTER_HIDDEN_MS = 60_000
+
+/**
+ * Market id used only to open the socket for a grid-only page.
+ *
+ * `/ws/markets/{id}` takes any id and that id is never subscribed to, so this is
+ * a carrier for the grid declaration rather than a subscription. It must not
+ * collide with a real market id, which is why it is not `"default"` - a real
+ * market would then receive frames for a page that never asked for it.
+ */
+const GRID_ANCHOR_MARKET = "__grid__"
 
 // ─── Per-market subscription state ─────────────────────────────────────────────
 
@@ -34,25 +63,27 @@ interface SharedConnection {
   serverSubs: Set<string>
   /** Set of status-change handlers */
   statusHandlers: Set<MessageHandler>
+  /** Grid batch handlers • see `MarketSocketCtx.subscribeGrid`. */
+  gridHandlers: Set<MessageHandler>
   /** Market used in WS URL • the most recently active market for reconnect path */
   lastConnectedMarket: string | null
-  /** Reconnect loop parked after too many consecutive failures */
-  gaveUp: boolean
   /** The socket being closed on purpose • its `onclose` must not queue a reconnect */
   intentionalCloseSocket: WebSocket | null
   /** Deferred "registry is empty, close the socket" timer (see the unsubscribe path) */
   closeTimer: ReturnType<typeof setTimeout> | null
+  /** Highest server `seq` seen per market • the proof that nothing went missing.
+   *  `undefined` means "nothing received yet", which is not the same as zero:
+   *  the first frame establishes a baseline and is never treated as a gap. */
+  lastSeq: Map<string, number>
+  /** Has this connection ever reached `open`? Separates a first connect (React
+   *  Query has just fetched, nothing owed) from a reconnect (frames were missed
+   *  for certain and a resync is owed even if the market never trades again). */
+  everConnected: boolean
+  /** When the tab last went to background • drives the return-from-hidden resync */
+  hiddenSince: number | null
+  /** Last declared grid set, replayed on reconnect like any other subscription */
+  declaredGrid: string[]
 }
-
-/**
- * Consecutive reconnect attempts before the loop parks itself.
- *
- * Backoff already stretches to 30s, so this is ~2 minutes of trying. Without a
- * ceiling an endpoint that is down (or refusing us) is retried for the lifetime
- * of the tab, which is what filled the API log with identical handshake
- * rejections. The park clears on `online` / tab focus.
- */
-const MAX_RECONNECT_ATTEMPTS = 8
 
 // Module-level singleton • one WebSocket per browser tab
 let _conn: SharedConnection | null = null
@@ -68,10 +99,14 @@ function getConnection(): SharedConnection {
       reconnectTimer: null,
       serverSubs: new Set(),
       statusHandlers: new Set(),
+      gridHandlers: new Set(),
       lastConnectedMarket: null,
-      gaveUp: false,
       intentionalCloseSocket: null,
       closeTimer: null,
+      lastSeq: new Map(),
+      everConnected: false,
+      hiddenSince: null,
+      declaredGrid: [],
     }
   }
   return _conn
@@ -82,8 +117,139 @@ function getConnection(): SharedConnection {
 function setStatus(conn: SharedConnection, status: WSStatus) {
   conn.status = status
   for (const h of conn.statusHandlers) {
-    try { h({ type: "__ws_status__", status }) } catch { /* ignore */ }
+    try { h({ type: WS_STATUS, status }) } catch { /* ignore */ }
   }
+}
+
+/** Fan a frame out to every handler registered for one market.
+ *
+ * Each handler is isolated: one throwing must not stop the others, and must
+ * never take the socket down with it.
+ */
+function deliverToMarket(conn: SharedConnection, marketId: string, data: unknown) {
+  const sub = conn.subs.get(marketId)
+  if (!sub) return
+  sub.seq++
+  const currentSeq = sub.seq
+  for (const h of sub.handlers) {
+    try {
+      h(data)
+    } catch {
+      /* user handler threw • socket survives */
+    }
+    // If seq changed while iterating, a re-subscribe happened • stop delivering
+    // stale messages from before the re-subscribe
+    if (sub.seq !== currentSeq) break
+  }
+}
+
+/** Tell every handler on a market that its cached state may be behind. */
+function emitResync(conn: SharedConnection, marketId: string, reason: string) {
+  deliverToMarket(conn, marketId, {
+    type: WS_RESYNC,
+    market_id: marketId,
+    reason,
+  })
+}
+
+/**
+ * Detect frames the client provably never received and ask for a repair.
+ *
+ * The server stamps every market frame with a per-market monotonic `seq`. A
+ * jump larger than one means frames went missing somewhere between Redis and
+ * this tab - a reconnect window, a Redis blip, a send that timed out. That used
+ * to be invisible: nothing carried a sequence number, the local `sub.seq` was a
+ * receive counter rather than a server one, and the gap check that existed could
+ * never fire. So a client could sit on a stale orderbook indefinitely, looking
+ * perfectly healthy, on a market that had simply gone quiet since.
+ *
+ * Detection is the point; the repair is a plain REST refetch, because the
+ * database is the source of truth and replaying the socket would only reproduce
+ * the same gap.
+ */
+/**
+ * Compare the server's advertised position against ours, and repair anything
+ * behind.
+ *
+ * `checkForGap` can only ever see a hole when a later frame shows up to reveal
+ * it. On a market that trades once and then goes quiet - resolved, closed, or
+ * simply calm - no later frame arrives, so a genuine loss stays invisible and
+ * the page renders pre-loss state indefinitely while reporting itself
+ * connected. This is the server telling us directly rather than the client
+ * inferring, so it is exact rather than a "it's been quiet a while, refetch
+ * just in case" heuristic that would fire on healthy quiet markets too.
+ *
+ * Anything at or ahead of us is left alone. The server's mark is per-node, so a
+ * socket that just landed on this node can legitimately be behind without
+ * having lost anything - it was never on the previous node.
+ */
+function reconcileAgainstBeacon(conn: SharedConnection, serverSeq: Record<string, number>) {
+  for (const [marketId, serverAt] of Object.entries(serverSeq)) {
+    const ours = conn.lastSeq.get(marketId)
+    // No baseline for this market means we have not received anything for it
+    // yet. That is "arrived late", not "lost", and re-fetching would be theatre.
+    if (ours === undefined) continue
+    // Never move backwards: the beacon may come from a node that joined the
+    // channel earlier than ours.
+    if (serverAt > ours) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          `[ws] missed ${serverAt - ours} frame(s) on market ${marketId} (we are at ${ours}, server at ${serverAt}) • resyncing`
+        )
+      }
+      // Advance the baseline to the server's position. The frames in between are
+      // gone; pretending otherwise would make every subsequent frame look
+      // contiguous again.
+      conn.lastSeq.set(marketId, serverAt)
+      emitResync(conn, marketId, "beacon")
+    }
+  }
+}
+
+/**
+ * Detect frames the client provably never received and ask for a repair.
+ *
+ * The server stamps every market frame with a per-market monotonic `seq`. A
+ * jump larger than one means frames went missing somewhere between Redis and
+ * this tab - a reconnect window, a Redis blip, a send that timed out. That used
+ * to be invisible: nothing carried a sequence number, the local `sub.seq` was a
+ * receive counter rather than a server one, and the gap check that existed could
+ * never fire. So a client could sit on a stale orderbook indefinitely, looking
+ * perfectly healthy, on a market that had simply gone quiet since.
+ *
+ * This covers loss that is *followed* by more traffic. Loss on a market that
+ * then goes quiet needs the server's own account of where the stream reached,
+ * which is what `reconcileAgainstBeacon` is for - the two are complementary and
+ * neither subsumes the other.
+ *
+ * Detection is the point; the repair is a plain REST refetch, because the
+ * database is the source of truth and replaying the socket would only reproduce
+ * the same gap.
+ */
+function checkForGap(conn: SharedConnection, marketId: string, seq: number) {
+  const prev = conn.lastSeq.get(marketId)
+  if (prev === undefined) {
+    // First frame on this subscription: establish a baseline, never a gap.
+    conn.lastSeq.set(marketId, seq)
+    return
+  }
+  if (seq <= prev) {
+    // Duplicate or reordered delivery. Harmless, and must not move the
+    // baseline backwards.
+    return
+  }
+  if (seq > prev + 1) {
+    const missing = seq - prev - 1
+    conn.lastSeq.set(marketId, seq)
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[ws] ${missing} frame(s) lost for market ${marketId} (seq ${prev} -> ${seq}) • resyncing`
+      )
+    }
+    emitResync(conn, marketId, "gap")
+    return
+  }
+  conn.lastSeq.set(marketId, seq)
 }
 
 function sendWs(conn: SharedConnection, data: unknown) {
@@ -152,7 +318,6 @@ function wsUnsubscribe(conn: SharedConnection, marketId: string) {
 
 function connect(conn: SharedConnection, firstMarketId: string) {
   if (conn.ws) return  // already open or pending
-  if (conn.gaveUp) return  // reconnect loop parked • cleared by network recovery
 
   // No auth gate here, deliberately. Market data is public over REST
   // (`/markets/{slug}/orderbook`, `/markets/{slug}/trades`) and this socket pushes
@@ -188,14 +353,43 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     for (const m of conn.serverSubs) {
       ws.send(JSON.stringify({ type: "subscribe", market_id: m }))
     }
+    // Replay everything this tab was subscribed to on the previous socket. The
+    // new socket is a new server-side subscriber, so without this every
+    // subscription - including the grid set - silently stops updating after a
+    // reconnect.
+    //
+    // One pass, not one frame per mechanism: the grid is declared alongside the
+    // markets rather than separately, so a grid plus a detail page is two frames
+    // on open instead of three.
+    const sentMarkets = new Set<string>()
+    for (const m of conn.serverSubs) {
+      ws.send(JSON.stringify({ type: "subscribe", market_id: m }))
+      sentMarkets.add(m)
+    }
+    if (conn.declaredGrid.length > 0) {
+      ws.send(JSON.stringify({ type: "grid", market_ids: conn.declaredGrid }))
+    }
     // Also send any pending subscriptions that weren't yet ACKed
     for (const [marketId, sub] of conn.subs) {
-      if (!sub.wsSubscribed) {
+      if (!sub.wsSubscribed && !sentMarkets.has(marketId)) {
         ws.send(JSON.stringify({ type: "subscribe", market_id: marketId }))
         sub.wsSubscribed = true
         conn.serverSubs.add(marketId)
       }
     }
+
+    // A reconnect means frames were missed for certain. Announce it even when
+    // the market never trades again - which is the case gap detection cannot
+    // cover, because a gap is only *observable* once a later frame arrives, and
+    // on a quiet market no later frame ever does. Without this the tab
+    // reconnects successfully and then renders whatever it had before the drop,
+    // indefinitely, with a green "live" indicator.
+    if (conn.everConnected) {
+      for (const marketId of conn.subs.keys()) {
+        emitResync(conn, marketId, "reconnect")
+      }
+    }
+    conn.everConnected = true
   }
 
   ws.onmessage = (event) => {
@@ -206,28 +400,65 @@ function connect(conn: SharedConnection, firstMarketId: string) {
       return  // ignore unparseable
     }
 
-    const d = data as { market_id?: string; type?: string }
+    const d = data as {
+      market_id?: string
+      type?: string
+      seq?: number
+      ts?: number
+      // Heartbeat beacons carry the server's per-market high-water mark.
+      serverSeq?: Record<string, number>
+    }
+
+    // Server heartbeat probe. Handled *before* the `market_id` check below,
+    // because a ping carries no market id and that guard used to drop it
+    // silently - which meant the client never once answered, so the server had
+    // no way to tell a live socket from a half-open one and eventually reaped
+    // healthy connections. Refusing to answer is a self-inflicted disconnect.
+    if (d.type === "ping") {
+      // The probe also says where the server's stream has reached. Comparing it
+      // against our own position is what closes the one hole client-side gap
+      // detection cannot: a loss is only observable when a *later* frame arrives,
+      // so on a market that trades once and then goes quiet, frames lost in
+      // between are invisible forever - stale UI, indicator reading "connected",
+      // nothing ever correcting it. Here the server tells us directly.
+      if (d.serverSeq) reconcileAgainstBeacon(conn, d.serverSeq)
+      try {
+        ws.send(JSON.stringify({ type: "pong", ts: d.ts }))
+      } catch { /* socket closing; onclose handles it */ }
+      return
+    }
+
+    // Aggregated grid prices, handled here rather than in the per-market path
+    // below. A batch carries many markets in one frame and has no top-level
+    // `market_id`, so the `!d.market_id` guard below would drop every one of
+    // them - the same shape of bug as the heartbeat ping being dropped for
+    // having no market id.
+    if (d.type === "market:prices_batch") {
+      const prices = (d as unknown as GridBatchFrame).prices
+      if (!prices) return
+      for (const h of conn.gridHandlers) {
+        try { h({ type: "market:prices_batch", prices }) } catch { /* handler threw */ }
+      }
+      return
+    }
+
     if (!d.market_id) return
 
-    const sub = conn.subs.get(d.market_id)
-    if (!sub) return  // no handler registered for this market • discard
+    // `__ws_status__`, `__ws_resync__` and `__ws_gap__` are synthetic frames
+    // this module produces itself and pushes straight to handlers, so they can
+    // never arrive here. Guarding on them keeps that invariant from rotting into
+    // a real dispatch if the registries are ever unified.
+    if (d.type === WS_STATUS || d.type === WS_RESYNC || d.type === WS_GAP) return
 
-    // Increment seq so any in-flight messages from before an unsubscribe are dropped
-    sub.seq++
+    if (!conn.subs.has(d.market_id)) return  // no handler registered • discard
 
-    // Deliver to all handlers for this market • each in try/catch so one bad
-    // handler doesn't break the socket for other handlers or corrupt state
-    const currentSeq = sub.seq
-    for (const h of sub.handlers) {
-      try {
-        h(data)
-      } catch {
-        /* user handler threw • socket survives */
-      }
-      // If seq changed while iterating, a re-subscribe happened • stop delivering
-      // stale messages from before the re-subscribe
-      if (sub.seq !== currentSeq) break
+    // Proven-loss check, before delivery: the repair frame is dispatched from
+    // inside here, so it must not be entangled with this frame's own delivery.
+    if (typeof d.seq === "number") {
+      checkForGap(conn, d.market_id, d.seq)
     }
+
+    deliverToMarket(conn, d.market_id, data)
   }
 
   ws.onclose = () => {
@@ -244,16 +475,18 @@ function connect(conn: SharedConnection, firstMarketId: string) {
     // parked until something actually asks for a socket.
     if (conn.intentionalCloseSocket === ws) {
       conn.intentionalCloseSocket = null
+      conn.everConnected = false
       return
     }
 
-    if (conn.retries >= MAX_RECONNECT_ATTEMPTS) {
-      conn.gaveUp = true
-      setStatus(conn, "error")
-      return
-    }
-
-    const delay = Math.min(1000 * Math.pow(2, conn.retries), 30_000)
+    // Never give up. The old loop parked itself after 8 attempts and only
+    // recovered on `online` / tab focus - two signals the browser may never
+    // send. A laptop that sleeps with the network down, or a deploy that
+    // bounces the backend, left the tab permanently dead with a plausible-looking
+    // UI and no way back. The delay is capped, so this is at most one attempt
+    // every 30s, and `everConnected` stays true so the next successful connect
+    // triggers a resync for everything missed while we were away.
+    const delay = reconnectDelayMs(conn.retries)
     conn.retries++
     // Reconnect to the market the user is currently viewing • not the first subscribed
     const market = conn.lastConnectedMarket
@@ -274,6 +507,17 @@ function connect(conn: SharedConnection, firstMarketId: string) {
 
 interface MarketSocketCtx {
   subscribe: (marketId: string, handler: MessageHandler) => () => void
+  /**
+   * Register a handler for aggregated grid batches.
+   *
+   * Deliberately a separate channel from `subscribe`. `market:prices_batch`
+   * carries no `market_id` at the top level, so routing it through the
+   * per-market registry would drop every batch - the same shape of bug as the
+   * heartbeat ping being dropped for having no market id.
+   */
+  subscribeGrid: (handler: MessageHandler) => () => void
+  /** Declare which markets the caller is displaying. One frame, not N. */
+  sendGrid: (marketIds: string[]) => void
   getStatus: () => WSStatus
   /**
    * Subscribe to *connection status* changes.
@@ -293,6 +537,8 @@ const NOOP_SUBSCRIBE_STATUS = () => () => {}
 
 const MarketSocketContext = createContext<MarketSocketCtx>({
   subscribe: NOOP_SUBSCRIBE,
+  subscribeGrid: NOOP_SUBSCRIBE,
+  sendGrid: () => {},
   getStatus: NOOP_GET_STATUS,
   subscribeStatus: NOOP_SUBSCRIBE_STATUS,
 })
@@ -331,6 +577,11 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
       if (currentSub.handlers.size === 0) {
         c.subs.delete(marketId)
         c.subLocks.delete(marketId)  // ponytail: prevent subLocks Map leak
+        // Forget the sequence baseline with the subscription. Keeping it would
+        // make the next visit to this market look like a huge gap on its very
+        // first frame - technically true, but it would fire a pointless resync
+        // for a market the client has not seen a single frame of yet.
+        c.lastSeq.delete(marketId)
         wsUnsubscribe(c, marketId)
 
         // If all markets desubscribed, close the WS • but not synchronously.
@@ -365,15 +616,51 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
     c.statusHandlers.add(handler)
     // Seed with the current value: a late subscriber must not sit at the
     // initialiser's stale reading until the next transition happens.
-    handler({ type: "__ws_status__", status: c.status })
+    handler({ type: WS_STATUS, status: c.status })
     return () => {
       c.statusHandlers.delete(handler)
     }
   }, [])
 
+  const subscribeGrid = useCallback((handler: MessageHandler) => {
+    const c = conn.current
+    c.gridHandlers.add(handler)
+    return () => {
+      c.gridHandlers.delete(handler)
+    }
+  }, [])
+
+  /**
+   * Declare the visible set to the server.
+   *
+   * One frame regardless of how many markets are on screen - that is the point
+   * of the batched protocol. Sent even while the socket is still CONNECTING:
+   * `sendWs` no-ops, but the declaration is recorded and replayed on `open`
+   * alongside the rest, because the server otherwise starts buffering for a
+   * grid that never told it what to buffer.
+   */
+  const sendGrid = useCallback((marketIds: string[]) => {
+    const c = conn.current
+    // Bring the connection up if nothing has yet.
+    //
+    // The tab-wide socket is created on demand by the first per-market
+    // subscription. A user who lands straight on /markets has asked for no
+    // market - only a grid - so without this the grid would have no socket at
+    // all and the page would be quietly, permanently static: no error, no failed
+    // request, prices that simply never move.
+    //
+    // The URL names a market id, and any id opens the endpoint; this one is never
+    // subscribed to, so it exists only to carry the grid declaration.
+    if (!c.ws) {
+      connect(c, GRID_ANCHOR_MARKET)
+    }
+    sendWs(c, { type: "grid", market_ids: marketIds })
+    c.declaredGrid = marketIds
+  }, [])
+
   const ctxValue = useMemo(
-    () => ({ subscribe, getStatus, subscribeStatus }),
-    [subscribe, getStatus, subscribeStatus]
+    () => ({ subscribe, subscribeGrid, sendGrid, getStatus, subscribeStatus }),
+    [subscribe, subscribeGrid, sendGrid, getStatus, subscribeStatus]
   )
 
   // NOTE: there is deliberately no "re-render the provider on status change"
@@ -382,35 +669,70 @@ export function MarketSocketProvider({ children }: { children: React.ReactNode }
   // call `subscribeStatus` and hold their own state, so re-rendering the whole
   // subtree twice per connect cycle (connecting → connected) was pure cost.
 
-  // Recover a parked or sleeping socket when the network comes back. A laptop
-  // resuming from sleep drops the socket silently • `online` and
-  // `visibilitychange` are the only signals the browser gives us, and without
-  // them a parked socket stays parked for the rest of the session.
+  // Recover a sleeping or wedged socket when the browser says the world changed.
+/// A laptop resuming from sleep drops the socket silently - `online` and
+  // `visibilitychange` are the only signals the browser gives us.
   useEffect(() => {
     const c = conn.current
+    let justReconnected = false
 
     const recover = () => {
       if (!c.subs.size) return
-      if (c.ws && !c.gaveUp) return  // still healthy
-      c.gaveUp = false
+      if (c.ws && c.ws.readyState <= WebSocket.OPEN) return  // still healthy
       c.retries = 0
       if (c.reconnectTimer) {
         clearTimeout(c.reconnectTimer)
         c.reconnectTimer = null
       }
       const market = c.lastConnectedMarket ?? c.subs.keys().next().value
-      if (market) connect(c, market)
+      if (market) {
+        justReconnected = true
+        connect(c, market)
+      }
     }
 
-    const onVisible = () => {
-      if (document.visibilityState === "visible") recover()
+    // Coming back to a long-hidden tab is its own failure mode. The socket may
+    // still read OPEN - the browser keeps it in the background - so `recover`
+    // does nothing, yet the page may have missed anything that happened while
+    // it was frozen or suspended. Measure the hidden period and, if it was long
+    // enough to have missed a frame, invalidate what we are showing.
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        c.hiddenSince = Date.now()
+        return
+      }
+      const hiddenFor = c.hiddenSince ? Date.now() - c.hiddenSince : 0
+      c.hiddenSince = null
+      recover()
+      if (hiddenFor >= RESYNC_AFTER_HIDDEN_MS) {
+        for (const marketId of c.subs.keys()) {
+          emitResync(c, marketId, "visible")
+        }
+      }
     }
 
-    window.addEventListener("online", recover)
-    document.addEventListener("visibilitychange", onVisible)
+    // Tab flash on reconnect: when the socket comes back after being offline/hidden,
+    // flash the page title to alert the user.
+    const handleReconnect = () => {
+      if (!justReconnected) return
+      justReconnected = false
+      const originalTitle = document.title
+      let flashCount = 0
+      const flashInterval = setInterval(() => {
+        document.title = flashCount % 2 === 0 ? `• ${originalTitle}` : originalTitle
+        flashCount++
+        if (flashCount >= 6) {
+          clearInterval(flashInterval)
+          document.title = originalTitle
+        }
+      }, 200)
+    }
+
+    window.addEventListener("online", () => { handleReconnect(); recover() })
+    document.addEventListener("visibilitychange", onVisibility)
     return () => {
-      window.removeEventListener("online", recover)
-      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("online", () => { handleReconnect(); recover() })
+      document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [])
 
@@ -445,7 +767,7 @@ export function useMarketSocket({
 
     const statusHandler: MessageHandler = (data) => {
       const d = data as { type?: string; status?: WSStatus }
-      if (d.type === "__ws_status__" && d.status) setStatus(d.status)
+      if (d.type === WS_STATUS && d.status) setStatus(d.status)
     }
 
     const unsubMsg = ctx.subscribe(marketId, (data) => onMessageRef.current(data))
@@ -464,6 +786,108 @@ export function useMarketSocket({
   }, [enabled, marketId, ctx])
 
   return { status }
+}
+
+// ─── Many markets at once ─────────────────────────────────────────────────────
+
+/** One aggregated price frame, as the grid flush delivers it. */
+interface GridBatchFrame {
+  type: "market:prices_batch"
+  prices: Record<string, Record<string, unknown>>
+}
+
+/**
+ * Live prices for a whole grid, over one server-side batched subscription.
+ *
+ * The obvious implementation - subscribe to each market individually - is what
+ * this replaces, and it is the thing production systems avoid. It costs one
+ * subscription slot per visible market against a hard per-connection cap, and it
+ * puts one frame per market per tick on the wire, so thirty live cards mean
+ * thirty frames and thirty re-renders a second. That is how a realtime page ends
+ * up feeling slower than a static one, and no amount of client-side coalescing
+ * fixes it: the frames have already arrived.
+ *
+ * So the server aggregates instead. One `grid` frame declares which markets are
+ * on screen, and the reply is a single `market:prices_batch` per flush carrying
+ * every changed market. Cost is O(1) in frames and O(1) in subscriptions however
+ * many cards are rendered.
+ *
+ * Deliberately not a global "all market prices" firehose - that is one
+ * subscription, but it delivers the whole catalogue to a client showing thirty.
+ * Real market-data systems filter per subscriber; so does this.
+ *
+ * Sequence numbers survive the batching, so a grid still detects a missed frame
+ * and repairs itself the same way a detail page does.
+ */
+/**
+ * Connection state of the tab's shared socket.
+ *
+ * Exposed because "is this grid actually live?" is a question the grid has to
+ * answer for the *user*, not just for itself. Keying the live indicator off
+ * "has this card received a price yet" makes it invisible on exactly the quiet
+ * markets where saying "live, just not moving" is most useful - silence and
+ * death look identical from the outside.
+ */
+export function useSocketLive(): boolean {
+  const ctx = useContext(MarketSocketContext)
+  const getStatus = ctx?.getStatus
+  const subscribeStatus = ctx?.subscribeStatus
+  const [live, setLive] = useState(() => getStatus?.() === "connected")
+
+  useEffect(() => {
+    if (!subscribeStatus) return
+    return subscribeStatus((s) => {
+      setLive((s as { status?: WSStatus } | null)?.status === "connected")
+    })
+  }, [subscribeStatus])
+
+  // The socket may already be up by the time this mounts - a page that opened a
+  // grid second after a detail page should not report "not live" until the next
+  // status change, which may never come.
+  useEffect(() => {
+    setLive(getStatus?.() === "connected")
+  }, [getStatus])
+
+  return live
+}
+
+export function useMarketGrid(
+  marketIds: string[],
+  onPrices: (prices: Record<string, Record<string, unknown>>) => void,
+  enabled = true
+) {
+  const ctx = useContext(MarketSocketContext)
+  const onPricesRef = useRef(onPrices)
+  useEffect(() => { onPricesRef.current = onPrices }, [onPrices])
+
+  // Stable key: the declaration is re-sent only when the *set* of visible
+  // markets changes, not because the caller rebuilt an equivalent array.
+  const key = enabled
+    ? Array.from(new Set(marketIds.filter(Boolean))).sort().join("|")
+    : ""
+
+  useEffect(() => {
+    // Registered once per connection rather than per `key`: a reply to a
+    // re-declaration can still be in flight after the visible set has moved on,
+    // and a handler bound to the old set would either drop it or apply it to
+    // markets that are no longer on screen.
+    const handler: MessageHandler = (data) => {
+      const frame = data as GridBatchFrame
+      if (frame?.type !== "market:prices_batch" || !frame.prices) return
+      onPricesRef.current(frame.prices)
+    }
+    return ctx.subscribeGrid(handler)
+  }, [ctx])
+
+  // Declare the visible set - including when it empties, so the server stops
+  // buffering for a grid that has scrolled away or navigated off.
+  useEffect(() => {
+    ctx.sendGrid(key ? key.split("|") : [])
+    // `ctx` is in the dependency list because `sendGrid` reads the live
+    // connection from the singleton. Excluded deliberately instead: including it
+    // re-sends the whole declaration whenever the provider re-renders, and each
+    // one is a round-trip that replaces the server's entire set.
+  }, [key, ctx])
 }
 
 // ─── Teardown: HMR + page unload ───────────────────────────────────────────────
@@ -503,8 +927,11 @@ function teardownSocket(reason: "hmr" | "unload"): void {
   c.ws = null
   c.serverSubs.clear()
   c.subs.clear()
+  c.lastSeq.clear()
   c.lastConnectedMarket = null
-  c.gaveUp = false
+  c.everConnected = false
+  c.hiddenSince = null
+  c.declaredGrid = []
   c.retries = 0
 
   if (!ws) return

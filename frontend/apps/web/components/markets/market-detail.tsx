@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import { useQueryClient } from "@tanstack/react-query"
 import { sileo } from "sileo"
@@ -10,7 +10,8 @@ import { Button } from "@workspace/ui/components/button"
 import { useMarket, useMarketActivity, useFAQs, useRelatedMarkets, usePriceHistory, useResolveMarket, useOrderBook } from "@/hooks/api/use-markets"
 import { useSimpleMarketTrades } from "@/hooks/api/use-trades"
 import { useCurrentUser } from "@/hooks/use-auth"
-import { useMarketSocket } from "@/hooks/use-market-socket"
+import { useMarketSocket, WS_GAP, WS_RESYNC } from "@/hooks/use-market-socket"
+import { usePriceAnnouncer } from "@/lib/price-announcer"
 import { claimWinnings } from "@/lib/api/markets"
 import { TradeFeed } from "@/components/trades/trade-feed"
 import { TradeForm } from "./trade-form"
@@ -82,6 +83,21 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   // useOrderBook already uses queryKeys.orderBook(slug) = ["orderbook", slug]
   // which is the same key the WS 'orderbook:update' message writes to • no extra fetch on WS events
   const { data: orderbookData } = useOrderBook(slug)
+
+  /**
+   * Bumped every time this market's book changes.
+   *
+   * The order form's quote is keyed on inputs the *user* owns - market, outcome,
+   * side, amount - so when someone else trades, none of them change and the quote
+   * is never refreshed. The displayed price moves live from the socket while the
+   * quote the user actually submits against sits stale, and `place_order`
+   * validates it against current AMM state, so it fails with "Quote expired".
+   *
+   * Counting book frames rather than passing the book down keeps the dependency a
+   * primitive, and ties the invalidation to exactly the event that invalidates a
+   * quote: somebody else's order entering or leaving the book.
+   */
+  const [bookVersion, setBookVersion] = useState(0)
   // Derive first outcome's bids/asks for the header display (same select as before)
   const headerOutcome = useMemo(() => {
     if (!orderbookData?.data?.outcomes) return null
@@ -120,13 +136,61 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
   // WS-only points • chart renders history + seeds + these, capped at 200
   const [wsPoints, setWsPoints] = useState<LiveLinePoint[]>([])
   const [realtimeTrades, setRealtimeTrades] = useState<Trade[]>([])
+  // Held in a ref so the WS handler can stamp a fallback market_id without taking
+  // `market` as a dependency - which would re-subscribe the socket on every load.
+  const marketIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    marketIdRef.current = market?.id
+  }, [market?.id])
+
+  // Announcements. `lastAnnouncedRef` is what makes the spoken "from" match what
+  // the user was last told rather than the previous tick - see lib/price-announcer,
+  // where ten 0.3-point ticks are meant to read as one 3-point move.
+  const { announce: announcePrice, enabled: announcePricesEnabled } = usePriceAnnouncer()
+  // The outcome's display name, for the binary branch where the frame carries no
+  // outcome_prices to name it with. Read through a ref so the WS handler does not
+  // take `market` as a dependency and re-subscribe the socket on every load.
+  const yesOutcomeNameRef = useRef<string>("Yes")
+  useEffect(() => {
+    // `outcomes` is always populated on the detail endpoint (unlike the list
+    // response), and the first one is the market's primary outcome.
+    yesOutcomeNameRef.current = market?.outcomes?.[0]?.name ?? "Yes"
+  }, [market?.outcomes])
 
   const handleWSMessage = useCallback((data: unknown) => {
-    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; winning_outcome_name?: string; outcome?: string; side?: string; price?: number; amount?: number; username?: string }
-    if (msg.type === "trade:new" && msg.outcome && msg.side && msg.price && msg.amount && msg.username) {
+    const msg = data as { type?: string; yes_price?: number; no_price?: number; outcome_prices?: Record<string, number>; volume?: number; winning_outcome_name?: string; id?: string; market_id?: string; market_slug?: string; market_question?: string; outcome?: string; side?: string; price?: string | number; amount?: string | number; executed_at?: string | null; username?: string }
+
+    if (msg.type === "trade:new") {
+      // The backend now sends one frame per persisted Trade row with the same
+      // fields as the REST feed, so use them verbatim.
+      //
+      // Two bugs are fixed here. The old handler required `msg.price && msg.amount
+      // && msg.username` to be truthy, so a legitimate fill at price 0 or a trade
+      // with no username attached was silently dropped; and it minted a synthetic
+      // `ws-${Date.now()}` id, which collided with itself for two trades inside
+      // the same millisecond and matched no database row - so the live row could
+      // never be deduped against the one the next REST refetch returned.
+      const price = Number(msg.price)
+      const amount = Number(msg.amount)
+      if (!msg.outcome || !msg.side || !msg.id) return
+      if (!Number.isFinite(price) || !Number.isFinite(amount)) return
+
+      const trade: Trade = {
+        id: msg.id,
+        market_id: msg.market_id ?? marketIdRef.current ?? "",
+        market_slug: msg.market_slug ?? slug,
+        market_question: msg.market_question ?? "",
+        outcome: msg.outcome,
+        side: msg.side,
+        price: String(msg.price),
+        amount: String(msg.amount),
+        executed_at: msg.executed_at ?? null,
+        username: msg.username ?? "Unknown",
+      }
+
       setRealtimeTrades((prev) => {
-        const next = [{ id: `ws-${Date.now()}`, market_id: "", market_slug: slug, market_question: "", outcome: msg.outcome!, side: msg.side! as "buy" | "sell", price: String(msg.price!), amount: String(msg.amount!), executed_at: new Date().toISOString(), username: msg.username! }, ...prev]
-        return next.slice(0, 200)
+        if (prev.some((t) => t.id === trade.id)) return prev
+        return [trade, ...prev].slice(0, 200)
       })
       return
     }
@@ -162,6 +226,43 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             msg
           ) as typeof prev
       )
+
+      // Speak it, for users who asked to hear it.
+      //
+      // Off by default and opt-in, because a live market produces frames many
+      // times a second and speech cannot keep up - see lib/price-announcer for
+      // the coalescing. Staged here, where the frame is already being interpreted,
+      // rather than inside a price component: one place per socket means one
+      // market cannot be announced twice by two components showing the same
+      // number, which would double every announcement.
+      if (announcePricesEnabled) {
+        const now = Date.now()
+        for (const [name, price] of Object.entries(msg.outcome_prices ?? {})) {
+          if (typeof price !== "number" || !Number.isFinite(price)) continue
+          announcePrice({
+            marketId: `${slug}:${name}`,
+            outcome: name,
+            // `from` is deliberately the new price. The announcer keeps its own
+            // baseline of what it last *spoke* and ignores this. Handing it a
+            // second, per-frame baseline from here is precisely what would let
+            // the spoken "from" drift away from what the user actually heard.
+            from: price,
+            to: price,
+            at: now,
+          })
+        }
+        // Binary frames carry yes_price/no_price and no outcome_prices at all, so
+        // an outcome-prices-only reader would be silent on most markets.
+        if (!msg.outcome_prices && typeof msg.yes_price === "number" && Number.isFinite(msg.yes_price)) {
+          announcePrice({
+            marketId: slug,
+            outcome: yesOutcomeNameRef.current,
+            from: msg.yes_price,
+            to: msg.yes_price,
+            at: now,
+          })
+        }
+      }
     }
     if (msg.type === "market:resolved") {
       sileo.info({
@@ -186,6 +287,10 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
       // so this write and `getOrderBook` produce the identical value.
       const outcomes = (msg as { outcomes: OrderBookData }).outcomes
       queryClient.setQueryData(queryKeys.orderBook(slug), { success: true, data: { outcomes } })
+      // Invalidate the order form's quote. This frame is the server telling us
+      // somebody else's order entered or left the book, which is precisely what
+      // makes the price a user is quoting at wrong.
+      setBookVersion((v) => v + 1)
     }
     if (msg.type === "comment:new" || msg.type === "comment:updated") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
@@ -193,7 +298,64 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     if (msg.type === "comment:deleted") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
     }
-  }, [slug, queryClient])
+    if (msg.type === "comment:vote") {
+      // Handle realtime vote update from another tab/user
+      const { comment_id, user_id, username, vote_type } = msg as {
+        comment_id: string
+        user_id: string
+        username: string
+        vote_type: number
+      }
+      // Update local cache with the voted user's state
+      queryClient.setQueryData(
+        ["comments", slug],
+        (prev: any) => {
+          if (!prev?.comments) return prev
+          return prev.comments.map((c: any) => {
+            if (c.id === comment_id) {
+              // If this comment is by the current user, always show their own vote
+              if (c.user_id === user_id) {
+                // Current user's own comment - show neutral (no up/down vote from self)
+                return {
+                  ...c,
+                  user_vote_type: 0,
+                  user_has_voted: false,
+                }
+              }
+              // Another user's vote - update the cached state
+              return {
+                ...c,
+                user_vote_type: vote_type,
+                user_has_voted: true,
+              }
+            }
+            return c
+          })
+        }
+      )
+    }
+
+    // The socket proved it dropped frames (a jump in the server's per-market
+    // sequence number), or it just reconnected after a gap it could not measure.
+    // Either way the incremental frames above are no longer a complete picture,
+    // so the cached market, book and trades are rebuilt from REST - the database
+    // is the source of truth and replaying the socket would only reproduce the
+    // same gap.
+    //
+    // Without this the page silently rendered a book and price history that were
+    // missing trades, and on a market that had gone quiet since the drop nothing
+    // would ever correct it.
+    if (msg.type === WS_RESYNC || msg.type === WS_GAP) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.market(slug) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(slug) })
+      queryClient.invalidateQueries({ queryKey: ["market-trades", slug] })
+    }
+    // `announcePrice` and `announcePricesEnabled` are real dependencies, not noise:
+    // they change when the user turns announcements on or off, and leaving them
+    // out would mean the handler stays stale until the socket is torn down and
+    // rebuilt - so the preference would appear to do nothing until they navigated
+    // away and back. Re-subscribing on a preference change is cheap and correct.
+  }, [slug, queryClient, announcePrice, announcePricesEnabled])
 
   const { status: wsStatus } = useMarketSocket({
     marketId: market?.id ?? "",
@@ -400,7 +562,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                 {market.category}
               </span>
             )}
-            <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span>
+            {/* <span className="text-xs font-semibold tracking-widest text-muted-foreground">PREDICTX</span> */}
           </div>
           {/*
             Fluid type rather than one fixed size. A prediction-market question
@@ -441,9 +603,14 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
                   </>
                 )
                 : outcomeList.slice(0, 4).map((outcome, i) => (
-                    <div key={outcome.id} className="flex items-center gap-2">
-                      <div className="text-xs uppercase tracking-wider text-muted-foreground">{outcome.name}</div>
-                      <div className="text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
+                    <div key={outcome.id} className="flex min-w-0 items-center gap-2">
+                      {/* Wraps rather than truncates: this strip is how a user
+                          matches a line on the chart to its name, so a clipped
+                          name breaks the pairing. */}
+                      <div className="min-w-0 break-words text-xs uppercase tracking-wider text-muted-foreground">
+                        {outcome.name}
+                      </div>
+                      <div className="shrink-0 text-lg font-bold tabular-nums" style={{ color: outcomeColor(i) }}>
                         {Math.round(priceFor(outcome.name, 0) * 100)}¢
                       </div>
                     </div>
@@ -645,6 +812,7 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
             outcomePrices={outcomePrices}
             outcomes={outcomes}
             marketStatus={market.status}
+            marketVersion={bookVersion}
             onSubmit={handleTrade}
           />
           <AlertDialog

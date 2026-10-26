@@ -4,6 +4,9 @@ import { memo, useMemo } from "react"
 import Link from "next/link"
 import type { MarketResponse } from "@/hooks/api/types/market"
 import { outcomeColor } from "@/lib/outcome-colors"
+import { applyLivePrices } from "@/lib/live-price"
+import { tickColor, usePriceTick } from "@/lib/use-price-tick"
+import { useRealtimePrefs } from "@/lib/realtime-prefs"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -16,10 +19,44 @@ function formatVolume(v: string | number) {
 
 interface MarketCardProps {
   market: MarketResponse
+  /**
+   * Latest prices from the shared socket, when the card sits inside a grid that
+   * subscribes. Omit on surfaces with no live feed and the card renders from
+   * `market` exactly as before.
+   */
+  /**
+   * Whether the grid's feed is connected.
+   *
+   * Separate from `live`, which carries *data*. A connected feed on a market
+   * that has not traded still means the page is live and simply quiet - and
+   * conflating the two makes every quiet market look like a dead one.
+   */
+  liveFeed?: boolean
+  live?: {
+    yes_price?: number
+    no_price?: number
+    outcome_prices?: Record<string, number>
+  }
 }
 
 // ─── Binary layout: name + % + YES/NO pills in one row ────────────────────────
 
+/**
+ * A one-tap shortcut to buy this outcome.
+ *
+ * Quiet by default, filled on hover or focus.
+ *
+ * These were solid green and red blocks on every row of every card, so a
+ * three-column grid carried a hundred and twenty saturated shapes competing with
+ * the numbers. The eye went to the blocks rather than the price - backwards for
+ * a prediction market, where the probability is the thing people came to read.
+ *
+ * The affordance is worth keeping: it is the fastest path from "I have a view"
+ * to "I have a position". So it keeps its hit area and its keyboard focus, and
+ * gives up its weight until someone actually reaches for it. Revealing on
+ * `:focus-visible` as well as `:hover` matters - a keyboard user must be able to
+ * see what they have focused, which is the whole point of focus-visible.
+ */
 function TradePill({
   href,
   label,
@@ -30,16 +67,15 @@ function TradePill({
   variant: "yes" | "no"
 }) {
   const isYes = variant === "yes"
+  const tone = isYes
+    ? "border-[var(--chart-1)]/45 text-[var(--chart-1)] hover:bg-[var(--chart-1)] hover:text-[var(--primary-foreground)]"
+    : "border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground"
 
   return (
     <Link
       href={href}
-      className="flex h-9 min-h-9 w-12 min-w-12 items-center justify-center rounded-md text-xs font-semibold transition-colors duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={
-        isYes
-          ? { backgroundColor: "var(--chart-1)", color: "var(--primary-foreground)" }
-          : { backgroundColor: "var(--destructive)", color: "var(--destructive-foreground)" }
-      }
+      aria-label={`Trade ${label}`}
+      className={`flex h-8 min-h-8 w-11 min-w-11 items-center justify-center rounded-md border bg-transparent text-xs font-semibold uppercase transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tone}`}
     >
       {label}
     </Link>
@@ -111,25 +147,51 @@ function MultiOutcomeCell({
 }) {
   const pct = Math.round(Number(outcome.price) * 100)
 
+  // Direction of this outcome's last real move. Hook order is unconditional -
+  // an early return above it would change the hook count between renders.
+  const numeric = Number(outcome.price)
+  const tick = usePriceTick(Number.isFinite(numeric) ? numeric : null)
+
   return (
     <Link
       href={`/markets/${marketSlug}?outcomeIndex=${outcome.outcome_index}`}
-      className="group flex flex-col gap-1 rounded-md border border-border/60 bg-card/50 p-2 transition-all hover:border-primary/40 hover:bg-accent"
+      className="group flex flex-col gap-1 rounded-md border border-border/60 bg-card/50 p-2 transition-colors hover:border-primary/40 hover:bg-accent"
     >
       <div className="flex items-center justify-between">
         <span className="max-w-20 truncate text-xs font-medium text-foreground group-hover:underline">
           {outcome.name}
         </span>
+        {/*
+          The number flashes on a real move.
+
+          `key={tick.at}` remounts the span so the CSS animation restarts, which
+          is how the highlight plays once and reverts with no JS timer to keep in
+          sync. Colour alone is not enough - it is also bolded, because colour is
+          the channel users with colour-vision deficiency lose, and it is the
+          first thing to drop when a grid is dense.
+
+          `motion-reduce` removes it entirely for users who have asked the OS for
+          less motion: a grid re-animating several times a second is exactly the
+          repeated peripheral animation that setting exists for.
+        */}
         <span
-          className="shrink-0 text-xs font-semibold tabular-nums text-foreground"
+          key={tick.at}
+          className={cn(
+            "shrink-0 text-xs font-semibold tabular-nums text-foreground",
+            tick.direction !== 0 &&
+              "animate-[tick-flash_900ms_ease-out] motion-reduce:animate-none",
+            tickColor(tick.direction),
+          )}
         >
           {pct}%
         </span>
       </div>
-      {/* Mini bar */}
+      {/* Mini bar. `transition-all` replaced with `transition-[width]` so a price
+          tick animates the one thing that changed, rather than every colour and
+          shadow on the element at the same time. */}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full transition-all duration-300"
+          className="h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none"
           style={{ width: `${pct}%`, backgroundColor: color }}
         />
       </div>
@@ -144,7 +206,28 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
   outcomes: { id: string; name: string; price: string; outcome_index: number }[]
   marketSlug: string
 }) {
-  const visible = outcomes.slice(0, 6)
+  // A card is a teaser, not a table, and it shows the same shape whatever the
+  // market type - so a grid of them reads as one surface rather than a mix of
+  // sizes.
+  //
+  // Binary rows and multi-outcome cells are already the same component - name,
+  // percentage, bar - so a binary market and a parimutuel market with up to four
+  // outcomes are identical: two rows either way. Only *more* than four diverged,
+  // because the cap was six and the badge took a full extra row (`col-span-2`),
+  // making those cards visibly taller than the rest of their row.
+  //
+  // Fixing the grid at 2x2 and letting the badge occupy the slot a fourth
+  // outcome would have used means every card is exactly two outcome rows tall -
+  // two outcomes or fifty - which is what lets the grid be laid out at a known
+  // height with no measuring, no ragged rows, and no clipped content.
+  const MAX_SLOTS = 4
+  // Derived from what is actually hidden, not from the slot count. The badge
+  // takes one of the four slots, so the number of outcomes on screen is
+  // `MAX_SLOTS - 1` whenever there is an overflow - computing it from
+  // `MAX_SLOTS` instead undercounts by exactly one and tells the user there are
+  // fewer options left than there really are.
+  const visible =
+    outcomes.length > MAX_SLOTS ? outcomes.slice(0, MAX_SLOTS - 1) : outcomes.slice(0, MAX_SLOTS)
   const overflow = outcomes.length - visible.length
 
   return (
@@ -160,7 +243,7 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
       {overflow > 0 && (
         <Link
           href={`/markets/${marketSlug}`}
-          className="col-span-2 flex items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground transition-all hover:border-primary/40 hover:text-foreground"
+          className="flex items-center justify-center rounded-md border border-dashed border-border text-xs font-medium text-muted-foreground transition-all hover:border-primary/40 hover:text-foreground"
         >
           +{overflow} more
         </Link>
@@ -171,24 +254,94 @@ const MultiOutcomeGrid = memo(function MultiOutcomeGrid({
 
 // ─── Market Card ───────────────────────────────────────────────────────────────
 
-const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
+const MarketCard = memo(function MarketCard({ market, live, liveFeed }: MarketCardProps) {
+  // Live prices overlay the REST snapshot when a socket frame has arrived, so a
+  // card in a grid moves on the same frame the market page does. Without it both
+  // grids - the home page and /markets - froze at whatever the list query
+  // returned, sitting right beside a live trending carousel.
+  //
+  // Overlaid here rather than written to the query cache because the card renders
+  // from props and the same market appears in several differently-filtered lists.
+  // `applyLivePrices` owns the multi-outcome rules.
+  const priced = useMemo(() => applyLivePrices(market, live), [market, live])
+
   // Name-based, matching the backend: a market is parimutuel when it has no
   // YES/NO pair. Counting outcomes would classify a two-way NAMED market
   // ("Trump vs Biden") as binary and render it as Yes/No, which is not what it is.
   const hasNamedPair = useMemo(() => {
-    const names = (market.outcomes ?? []).map((o) => o.name.toLowerCase())
+    const names = (priced.outcomes ?? []).map((o) => o.name.toLowerCase())
     return names.includes("yes") && names.includes("no")
-  }, [market.outcomes])
+  }, [priced.outcomes])
 
-  const isMulti = (market.outcomes?.length ?? 0) > 0 && !hasNamedPair
+  const isMulti = (priced.outcomes?.length ?? 0) > 0 && !hasNamedPair
+
+  // How many outcomes this market actually has. Two is the ordinary yes/no case
+  // and needs no label; more is a materially different kind of market, so the
+  // card says so.
+  const outcomeCount = isMulti
+    ? (priced.outcomes?.length ?? 0)
+    : 2
+
+  // Movement is tracked on the headline price - the YES price for a binary
+  // market, and the leading outcome for a parimutuel one, because every market
+  // has one and it is the number the grid is scanned for. Tracking each outcome
+  // separately would light up a card for a change the user is not looking at.
+  const headline = isMulti
+    ? Number(priced.outcomes?.[0]?.price ?? Number.NaN)
+    : Number(priced.yes_price ?? Number.NaN)
+  const tick = usePriceTick(Number.isFinite(headline) ? headline : null)
+  const { prefs } = useRealtimePrefs()
+
+  // A price from the socket is a fact about *now*; one from the REST snapshot is
+  // a fact about when the page loaded. Without saying which, a card that never
+  // updates looks exactly like a card that is merely quiet.
+  // A socket price is a fact about *now*; one from the REST snapshot is a fact
+  // about when the page loaded. Without saying which, a card that never updates
+  // looks exactly like a card that is merely quiet.
+  const isLive = prefs.showLiveBadge && (liveFeed ?? live !== undefined)
+
+  // Is this market settled?
+  //
+  // A resolved market used to render exactly like a live one - a RESOLVED badge
+  // next to Yes 25% / No 75% with tradeable-looking pills underneath. Nothing on
+  // the card said "this is over", because the only signal was a small badge that
+  // competes with the prices for attention. The strongest possible message -
+  // a payout already determined - was the least visible thing in the card.
+  const isResolved = market.status === "resolved"
+  const winnerName = market.winning_outcome_name ?? null
+
+  // The settled price of the outcome that actually won.
+  //
+  // Shown as a percentage of *one* outcome, which is the only reading that makes
+  // sense once the market is over: a parimutuel winner settles at 1 (100%) and
+  // the rest at 0, so anything else would be showing a mid-trade number as though
+  // it were final.
+  // Only shown when the winning outcome is actually known.
+  //
+  // Falling back to the Yes price when no winner is recorded made a resolved
+  // NO market display "Final result 25%" - which reads as "Yes won, at 25%",
+  // exactly the backwards interpretation the redesign exists to prevent. A
+  // settled market with no recorded winner says so rather than inventing one.
+  const resolvedPct = useMemo(() => {
+    if (!isResolved || !winnerName) return null
+    if (!isMulti) {
+      const price = winnerName.toLowerCase() === "no" ? priced.no_price : priced.yes_price
+      return Number.isFinite(Number(price)) ? Math.round(Number(price) * 100) : null
+    }
+    const winner = (priced.outcomes ?? []).find(
+      (o) => o.name === winnerName || o.id === market.winning_outcome_id,
+    )
+    if (!winner || !Number.isFinite(Number(winner.price))) return null
+    return Math.round(Number(winner.price) * 100)
+  }, [isResolved, isMulti, winnerName, priced, market.winning_outcome_id])
 
   const displayOutcomes = useMemo(() => {
     if (isMulti) {
       // Real per-outcome prices from the API. The old fallback of `1 / n` for
       // every outcome made all N read identical no matter what the market
       // actually looked like.
-      const even = String(1 / (market.outcomes?.length ?? 1))
-      return market.outcomes!.map((o) => ({
+      const even = String(1 / (priced.outcomes?.length ?? 1))
+      return priced.outcomes!.map((o) => ({
         id: o.id,
         name: o.name,
         price:
@@ -202,15 +355,39 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
     // individually, but on a YES/NO market that is the same two numbers, and
     // `yes_price`/`no_price` is the pair the card has always displayed.
     return [
-      { id: "yes", name: "Yes", price: market.yes_price, outcome_index: 0 },
-      { id: "no", name: "No", price: market.no_price, outcome_index: 1 },
+      { id: "yes", name: "Yes", price: priced.yes_price, outcome_index: 0 },
+      { id: "no", name: "No", price: priced.no_price, outcome_index: 1 },
     ]
-  }, [isMulti, market.outcomes, market.yes_price, market.no_price])
+  }, [isMulti, priced.outcomes, priced.yes_price, priced.no_price])
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md">
+    <article
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card transition-all duration-200 hover:shadow-md",
+        // The "just moved" treatment is deliberately quiet: a border tint, not a
+        // fill. A grid where whole cards flash is unreadable, and the thing worth
+        // noticing is *which* card moved, so the emphasis has to stay on the
+        // number and let the card edge just say "something happened here".
+        tick.active && prefs.showActiveTint
+          ? "border-primary/40 ring-1 ring-primary/20"
+          : "border-border hover:border-primary/30",
+      )}
+      data-active={tick.active || undefined}
+      data-live={isLive || undefined}
+    >
       {/* Header */}
       <div className="flex items-start gap-2 px-4 pt-4 pb-3">
+        {/* The card states its shape. A resolved market already carries a badge;
+            what it lacked was any signal that it is *not tradeable*, which the
+            outcome rows below now carry too. */}
+        {!isResolved && outcomeCount > 2 && (
+          <span
+            className="shrink-0 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground"
+            title={`${outcomeCount} outcomes`}
+          >
+            {outcomeCount} options
+          </span>
+        )}
         {market.status === "resolved" && (
           <span className="shrink-0 rounded-full bg-yellow-500/10 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-yellow-700 uppercase">
             Resolved
@@ -230,7 +407,49 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
       <div className="mx-4 border-t border-border/50" />
 
       {/* Outcomes */}
-      <div className="flex-1 px-4 py-3">
+      {/* `min-h-0` stops a tall market pushing the footer out of the cell;
+          `overflow-hidden` clips anything that still exceeds it here rather than
+          letting it escape the card's rounded corner. */}
+      {/*
+        A settled market must not look like one you can trade.
+
+        This was the most misleading thing on the card: a RESOLVED badge beside
+        Yes 25% / No 75% and a row of trade shortcuts. The badge is small, the
+        prices are large, and the prices are final - so the card read as an open
+        market with a stale label. On a real market that is not a cosmetic
+        problem; it invites someone to place an order that cannot fill.
+
+        So a resolved card shows the outcome that won and its final price, and
+        drops the trade shortcuts entirely.
+      */}
+      {isResolved ? (
+        <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
+          <div className="flex h-full flex-col justify-center gap-2">
+            {resolvedPct !== null ? (
+              <>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {winnerName} won
+                </span>
+                <span className="text-2xl font-semibold tabular-nums text-foreground">
+                  {resolvedPct}
+                  <span className="text-base">%</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Final result
+                </span>
+                <span className="text-sm text-muted-foreground">
+                  Outcome not recorded for this market
+                </span>
+              </>
+            )}
+            <span className="text-xs text-muted-foreground">Settled • no longer tradeable</span>
+          </div>
+        </div>
+      ) : (
+      <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
         {isMulti ? (
           <MultiOutcomeGrid
             outcomes={displayOutcomes}
@@ -247,11 +466,23 @@ const MarketCard = memo(function MarketCard({ market }: MarketCardProps) {
           ))
         )}
       </div>
+      )}
 
       {/* Footer */}
-      <div className="mt-auto flex items-center justify-between border-t border-border/50 px-4 py-2.5">
-        <span className="text-xs font-semibold text-muted-foreground uppercase">
-          {formatVolume(market.total_volume)} Vol
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/50 px-4 py-2.5">
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {isLive && (
+            <span
+              className="relative flex size-1.5 shrink-0"
+              title="Live — streaming prices"
+            >
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:hidden" />
+              <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+            </span>
+          )}
+          <span className="font-semibold uppercase">
+            {formatVolume(market.total_volume)} Vol
+          </span>
         </span>
         <span className="text-xs text-muted-foreground">
           {new Date(market.closes_at).toLocaleDateString("en-US", {

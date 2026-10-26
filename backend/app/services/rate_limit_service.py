@@ -3,6 +3,7 @@ Redis-backed sliding window rate limiter with progressive friction.
 Atomic operations via Lua scripts to avoid race conditions.
 """
 import logging
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -19,6 +20,21 @@ class LimitType(Enum):
     AUTH_FAST = "auth_fast"     # per email+IP • 3/min (resend/forgot)
     AUTH_REFRESH = "auth_refresh"  # per IP • 30/min (silent token rotation)
     STRICT = "strict"           # per IP • 10/min (mutations)
+    # Per *account*, with no address in the key.
+    #
+    # Every other limit here is scoped to an IP, which is a problem specifically
+    # for credential checks: an attacker who knows the target's email does not
+    # have to guess the email, only the password, and rotating source addresses
+    # is free - a handful of cloud egress ranges is enough to stay under any
+    # per-IP bucket indefinitely. An email+IP key therefore bounds nothing that
+    # matters against a determined guesser, which makes the password oracle
+    # unbounded in practice.
+    #
+    # Deliberately generous per hour, because this must not inconvenience a
+    # person: mistyping, a stale password in a password manager, and a second
+    # device all produce genuine failures. 20 an hour throttles automation hard
+    # while leaving a human effectively unlimited.
+    ACCOUNT_AUTH = "account_auth"  # per email • 20/hour
 
 
 @dataclass
@@ -102,6 +118,7 @@ return {attempts, delay, is_locked}
 
 RESET_FRICTION_SCRIPT = """
 redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
 return 1
 """
 
@@ -121,6 +138,7 @@ class RateLimitService:
         LimitType.AUTH_FAST:    (3,  60),   # 3/min per email+IP
         LimitType.AUTH_REFRESH: (30, 60),   # 30/min per IP
         LimitType.STRICT:       (10, 60),   # 10/min per IP
+        LimitType.ACCOUNT_AUTH: (20, 3600), # 20/hour per account, no IP
     }
 
     @staticmethod
@@ -232,28 +250,65 @@ class RateLimitService:
             return RateLimitResult(allowed=True, limit=5, remaining=5, retry_after=None, is_slowdown=False), False
 
         if is_locked:
+            # Round *up* and floor at 1 second.
+            #
+            # Callers gate on `if is_slowed and rl_result.retry_after`, so a
+            # sub-second remaining delay truncated to 0 made that condition false
+            # and let a locked account fall straight back through to credential
+            # verification - the lockout was bypassed as soon as less than a
+            # second was left on it, which is most of the time. A locked caller
+            # must be told to wait, and the honest wait is "at least a second".
             return RateLimitResult(
                 allowed=True,
                 limit=max_attempts,
                 remaining=0,
-                retry_after=int(delay),
+                retry_after=max(1, math.ceil(delay)),
                 is_slowdown=True,
             ), True
 
-        # Check sliding window too
+        # Sliding window too, at the caller's chosen scope.
         rl_result = await RateLimitService.check(limit_type, identifier, normalized_ip)
+        if not rl_result.allowed:
+            return rl_result, False
+
+        # …and the account-scoped window, which no address can escape.
+        #
+        # Applied here rather than at each call site on purpose: every credential
+        # check in this codebase already routes through `check_with_friction`, so
+        # putting it here means a new password-checking endpoint inherits the
+        # protection by construction. Enforcing it per-call-site is how the next
+        # one ships without it.
+        account_result = await RateLimitService.check(
+            LimitType.ACCOUNT_AUTH, identifier, ip=None
+        )
+        if not account_result.allowed:
+            return account_result, False
+
         return rl_result, False
 
     @staticmethod
     async def reset_friction(identifier: str, ip: str):
-        """Clear friction counter on successful auth."""
+        """Clear the friction counter, and the account window, on successful auth.
+
+        The account window is cleared here too, and that is deliberate rather than
+        a convenience. Without it, twenty failures scattered across a week would
+        block a user who has not failed since - the counter has to be evidence of
+        *current* attack, not a running tally of all time.
+
+        Safe against an attacker: clearing on success only helps someone who
+        already knows the password, and someone who knows the password has no
+        reason to guess it again.
+        """
         if not settings.rate_limit_enabled:
             return
         normalized_ip = RateLimitService._normalize_ip(ip)
         friction_key = RateLimitService._friction_key(f"{identifier}@{normalized_ip}")
+        account_key = RateLimitService._key(LimitType.ACCOUNT_AUTH, identifier)
         r = await get_redis()
         try:
-            await redis_cb.call(lambda: r.eval(RESET_FRICTION_SCRIPT, 1, friction_key))
+            await redis_cb.call(
+                lambda: r.eval(RESET_FRICTION_SCRIPT, 2, friction_key, account_key)
+            )
         except Exception as e:
             logger.warning(f"Rate limit reset error: {e}")
 

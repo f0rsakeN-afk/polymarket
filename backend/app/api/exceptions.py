@@ -26,8 +26,22 @@ class ConflictError(AppException):
 
 
 class UnauthorizedError(AppException):
-    def __init__(self, message: str = "Not authenticated", details: dict | None = None):
-        super().__init__(401, message, "UNAUTHORIZED", details)
+    """401.
+
+    `error_code` is optional and defaults to the previous behaviour, so existing
+    callers are untouched. It exists because "unauthorized" is genuinely
+    ambiguous on a step-up: the client has to be able to tell "wrong password"
+    from "wrong one-time code" to prompt for the right factor, and a single
+    generic 401 leaves it showing the wrong prompt.
+    """
+
+    def __init__(
+        self,
+        message: str = "Not authenticated",
+        details: dict | None = None,
+        error_code: str | None = None,
+    ):
+        super().__init__(401, message, error_code or "UNAUTHORIZED", details)
 
 
 class ForbiddenError(AppException):

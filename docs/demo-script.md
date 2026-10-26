@@ -97,8 +97,9 @@ uv run python -m scripts.seed
 
 It creates users, wallets, markets, outcomes, pools, LP shares, pending orders, positions, trades,
 comments, disputes, alerts, notifications, referrals, transactions, flags, treasury, and price
-history, then prints a row count per table. Seed password is `SEED_PASSWORD` (default
-`testpass123`).
+history, then prints a row count per table and the demo accounts' password. Set
+`SEED_PASSWORD` beforehand to choose it yourself; otherwise the seeder generates
+one per run and prints it at the end.
 
 This matters because it means the trade tape, charts, comments and holders list all have content •
 which is what phase 1 and 3 depend on.

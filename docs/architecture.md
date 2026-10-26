@@ -23,7 +23,10 @@ backend/
 │   ├── deps.py                # auth dependency, session validation, cookie flags, role checks
 │   ├── redis.py               # async + sync clients, Sentinel, RedisCircuitBreaker
 │   ├── api/                   # REST routers  (all mounted under /api/v1 • see §API Endpoints)
-│   │   ├── app-agnostic: exceptions.py, handlers.py, responses.py, middleware.py
+│   │   ├── app-agnostic: exceptions.py, handlers.py, responses.py, middleware.py,
+│   │   │                  origin_check.py  (CSRF origin allowlist • its own middleware,
+│   │   │                  because it used to sit inside RateLimitMiddleware below the
+│   │   │                  `enabled` flag — see auth-and-security.md §9)
 │   │   ├── trading:  markets.py, orders.py, liquidity.py, split_merge.py, positions.py,
 │   │   │             trades.py, market_activity.py
 │   │   ├── identity: auth.py

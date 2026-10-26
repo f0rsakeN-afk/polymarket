@@ -46,6 +46,14 @@ if "CELERY_BROKER_URL" not in os.environ:
 # Rate limiting is an infrastructure concern, not under test here • and the
 # shared Redis DB would leak counters between tests. No test asserts on 429.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# CORS origins are configuration, not a default (see `config.py`), so the suite
+# declares the ones it needs rather than inheriting whatever is in the developer's
+# `.env`. That inheritance is the trap: a test that passes locally because of your
+# local `.env` and fails in CI - where there is no `.env` - is a green check that
+# means nothing.
+#
+# Both front ends, so a test exercising the allowlist sees the real shape.
+os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:3001"
 # The `?token=` WebSocket fallback is OFF by default (it puts a JWT in URLs).
 # The websocket suite authenticates with it on purpose, so turn it on here and
 # let test_ws_query_token_is_off_by_default flip it back for the negative case.
@@ -55,6 +63,7 @@ os.environ["WS_ALLOW_QUERY_TOKEN"] = "true"
 if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_pytest_local_secret"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -155,6 +164,27 @@ async def _fresh_db():
     async with test_engine.begin() as conn:
         await conn.run_sync(lambda sa_conn: sa_conn.execute(text("TRUNCATE TABLE users, wallets, transactions, markets, outcomes, liquidity_pools, lp_shares, positions, trades, orders, referrals, sessions, refresh_tokens, comments, price_history, notifications, alerts, auth_audit_events CASCADE")))
     yield
+    # Drop the *application's* pooled engine between tests.
+    #
+    # `test_engine` uses NullPool, but `app.database._get_engine` is `@lru_cache`d
+    # around a real `AsyncAdaptedQueuePool`, and the conftest only clears that
+    # cache once at import. So the first test to touch it builds a pool whose
+    # connections belong to that test's event loop — and `pytest-asyncio` gives
+    # every test a fresh one. The next test to borrow a pooled connection gets
+    # `Task ... attached to a different loop`.
+    #
+    # It surfaced as a readiness test failing with `db: error` several files after
+    # a passing one, which reads like a bug in the health check rather than in the
+    # harness. It would equally break any future test that reaches the real engine.
+    for getter in (db_module._get_engine, db_module._get_replica_engine):
+        # `currsize` rather than calling the getter: asking for the engine just to
+        # dispose it would build one nothing ever used.
+        if getter.cache_info().currsize == 0:
+            continue
+        try:
+            await getter().dispose()
+        finally:
+            getter.cache_clear()
 
 
 # ── Reset Redis global state between tests ────────────────────────────────────
@@ -477,3 +507,54 @@ async def resolved_market(db_session: AsyncSession, admin_user):
     await db_session.refresh(market)
     await db_session.refresh(market, ["outcomes"])
     return market
+
+
+async def drain_publishes(bus) -> None:
+    """Run a `RedisPubSub`'s publish queue to empty.
+
+    `publish_*` now enqueues rather than writing to Redis directly - that is the
+    whole point, since writing inline is what made `MaxConnectionsError` a silent
+    drop. So a test that asserts on what reached Redis has to let the writers
+    actually run, exactly as the app does.
+
+    Kept here rather than copied per file so every realtime test observes the
+    same contract, and so a future change to the queue only has to be reflected
+    in one place.
+    """
+    await bus._dispatcher.start()
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.perf_counter() + 5.0
+    while _time.perf_counter() < deadline:
+        if not any(bus._dispatcher.depth.values()):
+            # Give an in-flight write a moment to land after the queue empties.
+            await _asyncio.sleep(0)
+            if not any(bus._dispatcher.depth.values()):
+                break
+        await _asyncio.sleep(0.005)
+    await bus._dispatcher.stop()
+
+
+@pytest.fixture(autouse=True)
+def _clear_health_cache():
+    """Drop the readiness memo between tests.
+
+    `app.api.health._cached` is a process-level global holding a payload built on
+    whichever event loop ran first. `pytest.ini` gives every test its own loop, so
+    a cached payload is unusable by the next test: `_check_db` raises
+    `Event loop is closed`, `_bounded` turns that into "db unavailable", and the
+    schema check is then skipped - because it is deliberately only asked once
+    reachability is known.
+
+    The visible symptom is a `KeyError: 'schema'` several tests after a passing
+    one, which reads as a bug in the check rather than in the harness. It only
+    appeared once a second module started exercising readiness, so putting the
+    fixture here rather than in that module is the point: any future test that
+    touches `/health/ready` gets it for free.
+    """
+    from app.api import health as health_module
+
+    health_module._cached = None
+    yield
+    health_module._cached = None

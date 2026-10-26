@@ -35,7 +35,7 @@ from app.models.liquidity import EscrowShortfallError
 from app.services.liquidity_service import LiquidityService
 from app.services.market_service import MarketService
 from app.services.matching_engine import MatchingEngine
-from app.services.order_service import OrderService
+from app.services.order_service import OrderService, _push_orderbook
 from app.websocket.manager import redis_pubsub
 
 logger = logging.getLogger("PredictX")
@@ -140,6 +140,7 @@ def expire_stale_orders(self):
     try:
         async def _run():
             from app.services.cache_service import cache_invalidate_orderbook
+            from app.services.notification_service import NotificationService
 
             async with get_session() as db:
                 # Batched: one giant FOR UPDATE sweep would lock every expirable
@@ -191,8 +192,95 @@ def expire_stale_orders(self):
                     ],
                     return_exceptions=True,
                 )
+
+                # Push the rebuilt book, once per affected market.
+                #
+                # The `order:expired` frames above say "this order is gone" to
+                # anyone listening per-market, but a socket that only sees them
+                # has to reconstruct the book itself - and an *orderbook:update*
+                # is what actually repaints it. Without this the REST cache was
+                # invalidated but nothing was pushed, so every open page kept
+                # rendering the expired level as live, tradeable liquidity until
+                # someone reloaded. That is the worst kind of wrong: entirely
+                # plausible-looking, and unfalsifiable without reloading.
+                #
+                # Once per market rather than per order - a market with twenty
+                # expiring orders produces one rebuild and one frame.
+                for market_id in expired_by_market:
+                    try:
+                        await _push_orderbook(market_id)
+                    except Exception:
+                        logger.exception(
+                            "orderbook push failed after expiry on market=%s", market_id
+                        )
                 for market_id in expired_by_market:
                     await cache_invalidate_orderbook(market_id)
+
+                # Tell the owner, not just the market.
+                #
+                # Expiry is not a market event - it is a change to *this user's*
+                # order and, for a buy, to their available balance: the locked
+                # remainder was just released. Publishing only to the market
+                # channel meant the market page refreshed for everybody while the
+                # owner's orders page kept showing a pending order that no longer
+                # existed, holding funds they could no longer see released.
+                #
+                # This is the same omission as the fill and cancel paths had, and
+                # it is the reason an expired order reads as "my order vanished"
+                # rather than "my order expired".
+                #
+                # Aggregated per user: one user can have several orders expire in
+                # the same batch, and they deserve one message saying so rather
+                # than one per order.
+                expired_by_user: dict[str, list] = {}
+                for batch in expired_by_market.values():
+                    for order in batch:
+                        expired_by_user.setdefault(str(order.user_id), []).append(order)
+
+                for user_id, orders in expired_by_user.items():
+                    try:
+                        await redis_pubsub.publish_order_fill(user_id, {
+                            "order_id": str(orders[0].id),
+                            "order_ids": [str(o.id) for o in orders],
+                            "market_id": str(orders[0].market_id),
+                            "status": "expired",
+                            "side": orders[0].side,
+                            "shares": 0.0,
+                            "price": float(orders[0].price or 0),
+                            "role": "taker",
+                        })
+                        await redis_pubsub.publish_user_event(user_id, {
+                            # Explicit type: expiry releases locked funds, so
+                            # the balance and the order list both changed. Left to
+                            # the default it would be stamped `notification` and
+                            # neither would be invalidated.
+                            "type": "position:update",
+                            "market_id": str(orders[0].market_id),
+                            "status": "expired",
+                            "role": "taker",
+                        })
+                        noun = "order" if len(orders) == 1 else "orders"
+                        await NotificationService.dispatch(
+                            db,
+                            user_id,
+                            "order_cancelled",
+                            f"{len(orders)} resting {noun} expired",
+                            f"Your resting {noun} on this market reached the expiry "
+                            "time and the reserved funds have been released.",
+                            {
+                                "order_ids": [str(o.id) for o in orders],
+                                "market_id": str(orders[0].market_id),
+                                "reason": "expired",
+                            },
+                        )
+                    except Exception:
+                        # The expiry already committed; failing to tell the user
+                        # must not fail the sweep. Logged, never swallowed.
+                        logger.exception(
+                            "expiry notification failed user=%s • their order "
+                            "page will be stale until they refetch",
+                            user_id,
+                        )
 
                 return f"Expired {expired_count} orders"
 
@@ -519,6 +607,16 @@ def check_limit_order_execution(self):
                         if re_locked_order.status in ("filled", "partial"):
                             await db.commit()
 
+                            # Fill, partial fill, expiry and cancellation all
+                            # change the resting book - a maker level was consumed
+                            # or removed - so push it on every one of them.
+                            # Previously only the sweep's own cache invalidate ran,
+                            # which fixed the next REST read and left every
+                            # already-open orderbook stale. `expire` in particular
+                            # silently dropped the order from the book with no
+                            # push at all.
+                            await _push_orderbook(str(market.id))
+
                             if re_locked_order.status == "filled":
                                 if parimutuel:
                                     # A binary yes/no pair says nothing about any
@@ -571,13 +669,19 @@ def check_limit_order_execution(self):
                                         f"Your {re_locked_order.status} order on {market.slug} has been filled.",
                                         {"order_id": str(re_locked_order.id), "market_id": str(market.id), "side": order_side}
                                     )
-                                    # Publish position:update for real-time UI refresh
-                                    await redis_pubsub.publish_notification(str(re_locked_order.user_id), {
-                                        "type": "position:update",
+                                    # Publish position:update for real-time UI refresh.
+                                    # `publish_user_event`, not `publish_notification`:
+                                    # the latter stamps `type: "notification"` over
+                                    # whatever the caller asked for, so the
+                                    # `position:update` type never left the process
+                                    # and every client handler for it was dead code.
+                                    await redis_pubsub.publish_user_event(str(re_locked_order.user_id), {
                                         "market_id": str(market.id),
+                                        "market_slug": market.slug,
                                         "outcome": outcome.name if outcome else None,
                                         "shares": float(order_amount) - float(remaining),
                                         "side": order_side,
+                                        "role": "taker",
                                     })
                                 except Exception:
                                     pass
@@ -592,20 +696,13 @@ def check_limit_order_execution(self):
                         continue
 
                     if market_fills:
-                        # Rebuild + push the book once per market with fills,
-                        # same contract as the placement path (cache + event).
-                        try:
-                            from app.services.cache_service import (
-                                build_orderbook,
-                                cache_set_orderbook,
-                            )
-                            book = await build_orderbook(db, market_id)
-                            await cache_set_orderbook(market_id, book, ttl=60)
-                            await redis_pubsub.publish_market_event(
-                                market_id, "orderbook:update", book
-                            )
-                        except Exception:
-                            pass
+                        # Per-fill pushes above already went out inside the loop,
+                        # once per order actually filled. This final pass is the
+                        # catch-all for book changes the loop did not itself make
+                        # - notably the partial-fill remainder, where the order
+                        # stays pending with a smaller size and no single fill
+                        # loop iteration covers it.
+                        await _push_orderbook(market_id)
 
                         # These fills moved the price again, so an order the
                         # current sweep already passed over may now be
@@ -1215,6 +1312,35 @@ async def settle_market(market_id: str, winning_outcome_id: str, task_id: str = 
         # transaction is durable: a redelivered/duplicate task
         # short-circuits above instead of re-walking the ledger.
         await r.set(f"resolve_done:{market_id}", "1", ex=60 * 60 * 24 * 30)
+
+        # Now that payouts are durable, announce the terminal state.
+        #
+        # The admin's resolve endpoint announces `resolving`; this is the frame
+        # saying the money actually moved and the prices are final. Clients need
+        # the second one to stop rendering a settled market as tradeable - and
+        # until it is published, nothing told them.
+        try:
+            # The name is not in scope here - `settle_market` works from the
+            # outcome *id* - and the client's `market:resolved` handler reads
+            # `winning_outcome_name` to tell the user who won. One cheap lookup
+            # beats publishing an announcement with a null name in it.
+            outcome_row = await db.get(Outcome, market.winning_outcome_id)
+            await redis_pubsub.publish_market_event(
+                str(market.id),
+                "market:resolved",
+                {
+                    "winning_outcome_id": str(winning_outcome_id),
+                    "winning_outcome_name": getattr(outcome_row, "name", None),
+                    "status": market.status,
+                    "settled": True,
+                },
+            )
+        except Exception:
+            # The settlement is committed and durable; announcing it is
+            # best-effort. Logged, because silence here is exactly how clients
+            # ended up showing a resolved market as live.
+            logger.exception("market:resolved publish failed market=%s", market.id)
+
     return f"Settled market {market_id}: {winners_credited}/{len(positions)} positions credited"
 
 @shared_task(

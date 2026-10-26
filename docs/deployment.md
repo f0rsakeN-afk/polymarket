@@ -122,6 +122,53 @@ cd backend
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+### The frontend stack
+
+`frontend/docker-compose.prod.yml` runs **two** applications from **one** image:
+
+| Service | Port (internal) | What it is |
+|---|---|---|
+| `web` | 3000 | The storefront |
+| `admin` | 3001 | The operator tool |
+| `nginx` | 80 | Reverse proxy, routes both |
+
+One image because the build is the expensive part and the two apps are always
+released together. Two services because the runtime is scaled, restarted and taken
+down independently — an operator tool on a box that is out of memory should take
+the operator tool down, not the site. `admin` is `expose`d and not published, so
+the only thing that can reach it is nginx.
+
+**`ADMIN_SERVER_NAME` must be set** to the admin hostname (for example
+`admin.example.com`). It is what nginx matches on, and it defaults to `_` so an
+unset value leaves the storefront as the default vhost rather than breaking
+startup. The admin app's routes are `/users`, `/disputes`, `/markets`, `/treasury`,
+`/audit` and `/login` — not under an `/admin` prefix — which is why this is
+host-based routing and not a path.
+
+### `COOKIE_SAMESITE` — read this before deploying the admin app
+
+The auth cookies' `SameSite` is deployment topology, not an application setting:
+
+| Deployment | `COOKIE_SAMESITE` |
+|---|---|
+| One site (API and front ends on one hostname) | `lax` |
+| Admin on a separate hostname (`admin.example.com` vs `api.example.com`) | `none`, with `APP_ENV=production` |
+
+Two failure modes, both silent, both producing an operator who is permanently
+signed out with nothing in any log:
+
+- **`lax` across sites.** The browser never sends the cookie. Login returns 200,
+  `Set-Cookie` arrives, `/auth/me` 401s forever.
+- **`none` without HTTPS.** Browsers *discard* a `SameSite=None` cookie that is
+  not `Secure`. Same symptom, opposite cause.
+
+The API refuses to start on that second pair rather than warning about it, because
+a warning is not actionable against a symptom that looks like an unrelated bug.
+
+Why none of it reproduces locally: **SameSite ignores ports**, so `localhost:3000`,
+`:3001` and `:8000` are one site and `lax` is correct. The bug only exists once the
+hostnames differ.
+
 What CI *does* run on every push (`.github/workflows/ci.yml`, at the repo root • GitHub only
 picks workflows up from the root `.github/`, which is why they moved out of `backend/.github/`):
 
@@ -220,3 +267,65 @@ Ship logs to your aggregator (Datadog, Loki, ELK) via stdout → log shipper (fi
   rather than accepted (deny-by-default). Development fails open so a Redis restart doesn't break
   the dev loop. The blacklist *write* fails closed everywhere: a logout that can't be recorded is
   refused instead of silently succeeding.
+
+### If an image is built from packages nobody declared
+
+The builder stage copies the workspace install **after** the source, on purpose.
+The other order looks tidier and is a trap: `COPY apps/web/ ./apps/web/` merges
+the build context into a tree that already holds the installed `node_modules`, and
+where a developer's `node_modules` reaches the context the context wins.
+
+The tell is a `node_modules/.bin/next` symlink pointing at a version the image
+does not contain — the build then fails with `next: command not found`, or worse,
+succeeds and ships an image from whatever that machine had installed.
+
+`.dockerignore` is supposed to prevent this. Do not rely on it alone: the copy
+order is the actual control. Check with:
+
+```bash
+docker run --rm --entrypoint sh <image> -c 'readlink apps/web/node_modules/next'
+```
+
+### Regenerating `bun.lock`
+
+Two rules, both learned the hard way, and both with the same failure: the lockfile
+ends up bumped by a minor version of everything while the diff reads as incidental.
+
+1. **Never mount the repo read-write into a container that runs `bun install`.**
+   `docker run -v "$PWD":/app oven/bun bun install` resolves against whatever is
+   newest on the registry and writes `bun.lock` **and every `package.json`** back
+   into the host tree. Reverting only the lockfile leaves `package.json` demanding
+   `next@16.4.2` against a lockfile pinning `16.3.3`, and the next frozen install
+   fails — which looks like a stale lockfile rather than a dirty working tree.
+
+2. **Use the version the repo declares.** `package.json`'s `packageManager` is the
+   source of truth and CI installs exactly that. Bun versions disagree about
+   lockfile format, so resolving with a different one re-resolves every semver
+   range. To regenerate:
+
+   ```bash
+   # copy the tree, install in the copy, then copy the lockfile back
+   cp -r frontend /tmp/lockgen && cd /tmp/lockgen
+   docker run --rm -v "$PWD":/app oven/bun:1.3.14-slim bun install
+   ```
+
+   Then read the diff before committing it. A correct regeneration moves a handful
+   of lines; one that touches every `@next/swc-*` entry is a resolution, not a
+   repair.
+
+### Running the dev containers as your own user
+
+The dev image runs as the image's `bun` user (uid 1000), not root, so a dev server
+cannot write root-owned files into the repository. For the bind mount to be
+writable from inside the container, that uid has to match yours:
+
+```bash
+export DOCKER_UID=$(id -u) DOCKER_GID=$(id -g)
+cd frontend && docker compose -f docker-compose.dev.yml up
+```
+
+Put those two in your shell profile and they stop being a thing to remember. The
+default of `1000:1000` matches the official Node and Bun images, so most people
+never need to set them — but "most people" is not a property a build should depend
+on, and the failure is a permission error partway through a first compile, which
+reads as anything except a uid mismatch.

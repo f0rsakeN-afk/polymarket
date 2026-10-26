@@ -27,8 +27,26 @@ from locust import HttpUser, between, task
 from locust.contrib.fasthttp import FastHttpUser
 
 # ── Shared test user credentials ────────────────────────────────────────────────
+#
+# LOCUST_PASSWORD is required. There is deliberately no default.
+#
+# The alternative - a literal here - is a credential in every clone of this
+# repository, and unlike a demo password it is one you would plausibly point at
+# something real. A load test that cannot start because a variable is unset is a
+# five-second fix; a published credential is permanent, and the failure it causes
+# is silent and remote.
+#
+# The load harness registers its own throwaway user and ignores a 422, so the
+# only requirement is that the password satisfies the registration policy.
 _SHARED_EMAIL = "loadtest@example.com"
-_SHARED_PASSWORD = os.environ.get("LOCUST_PASSWORD", "TstPsX79!bQ")
+_SHARED_PASSWORD = os.environ.get("LOCUST_PASSWORD")
+if not _SHARED_PASSWORD:
+    raise RuntimeError(
+        "LOCUST_PASSWORD is not set.\n"
+        "Load tests authenticate against the real registration + login path, so "
+        "they need a password you choose:\n"
+        "    LOCUST_PASSWORD='choose-one' locust -f scripts/locustfile.py ..."
+    )
 _cached_token = None
 _cached_user_id = None
 _auth_lock = None  # threading.Lock set lazily

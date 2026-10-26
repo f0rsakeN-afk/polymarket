@@ -10,6 +10,29 @@
   }
 }
 
+/*
+ * One-shot flash for a price that just moved.
+ *
+ * Restarted by changing the element's `key`, so it plays once and reverts with no
+ * JS timer to keep in sync. The keyframes scale *opacity and weight* rather than
+ * just colour: colour is the channel users with colour-vision deficiency lose,
+ * and a grid of dense numbers needs a second, non-colour signal.
+ *
+ * Starts at full and settles back, rather than fading up from nothing - a price
+ * that "appears" reads as new data arriving, which is not what happened. The
+ * number was already there; what changed is its value.
+ */
+@keyframes tick-flash {
+  0% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* Shimmer utility for skeletons • hue 145 matches theme green */
 @layer utilities {
   .animate-shimmer {

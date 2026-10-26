@@ -1,13 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, Suspense } from "react"
+import { useCallback, Suspense, useMemo } from "react"
 import dynamic from "next/dynamic"
 import { useSearchParams } from "next/navigation"
 import TrendingCarousel from "@/components/home/trending-carousel"
 import { MarketList } from "@/components/markets/market-list"
 import { useMarkets } from "@/hooks/api/use-markets"
 import { useGlobalTrades } from "@/hooks/api/use-markets"
+import { useLiveTradeFeed } from "@/hooks/use-live-trade-feed"
 import { SkeletonTrendingCarousel, SkeletonTradeFeed } from "@/components/shared/skeletons"
 
 const LazyTradeFeed = dynamic(
@@ -16,6 +17,9 @@ const LazyTradeFeed = dynamic(
 )
 
 import type { MarketListResponse, TradesResponse } from "@/hooks/api/types/market"
+
+/** Matches the /trades page so the two tapes behave identically. */
+const HOME_FEED_MAX = 15
 
 export default function HomePageContent({
   initialMarketsPage,
@@ -33,9 +37,28 @@ export default function HomePageContent({
   const { data: marketsData, isLoading: marketsLoading, fetchNextPage: fetchMarketsNextPage, hasNextPage: marketsHasMore } = useMarkets({ q: query || undefined }, initialMarketsPage)
   const { data: closingSoonData, isLoading: closingSoonLoading, isError: closingSoonError } =
     useMarkets({ sort: "closing_soon" }, initialClosingPage)
-  const { data: tradesData } = useGlobalTrades(undefined, initialTradesPage)
+  const { data: tradesData, refetch: refetchTrades } = useGlobalTrades(undefined, initialTradesPage)
 
-  const recentTrades = tradesData?.trades.slice(0, 15) ?? []
+  // The tape was rendered from a server snapshot and then never updated - the
+  // one section of this page with no socket on it, sitting directly above a
+  // "View all" link to a page that *is* live. Same merge logic as /trades, so
+  // the two cannot drift.
+  const { wsTrades } = useLiveTradeFeed(tradesData?.trades, refetchTrades, HOME_FEED_MAX)
+
+  const recentTrades = useMemo(() => {
+    // Deduped at the merge rather than on arrival: a frame that arrives while
+    // the REST page is in flight is accepted, and the response then carries the
+    // same trade. This is the only place both sources are visible together.
+    const seen = new Set<string>()
+    const out = []
+    for (const t of [...wsTrades, ...(tradesData?.trades ?? [])]) {
+      if (seen.has(t.id)) continue
+      seen.add(t.id)
+      out.push(t)
+      if (out.length >= HOME_FEED_MAX) break
+    }
+    return out
+  }, [wsTrades, tradesData?.trades])
 
   const handleLoadMore = useCallback(() => {
     fetchMarketsNextPage()

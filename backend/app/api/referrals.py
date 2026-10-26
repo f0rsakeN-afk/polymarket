@@ -91,7 +91,12 @@ async def get_referral_stats(
         "referrals": [
             {
                 "id": str(r.id),
-                "referred_id": str(r.referred_id),
+                # NULL once the referred user is gone - the row survives so the
+                # referrer's paid earnings outlive both people, but there is no
+                # longer an id to point at. `str(None)` would ship the literal
+                # string "None" to the client, which is not an id and would not
+                # survive a round trip.
+                "referred_id": str(r.referred_id) if r.referred_id else None,
                 "status": r.status,
                 "reward_amount": str(r.reward_amount),
                 "created_at": r.created_at.isoformat(),

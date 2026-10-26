@@ -7,116 +7,82 @@
  * browser's. Every call must forward the incoming cookie explicitly and every
  * `Set-Cookie` the API returns must be replayed onto our own response, or the
  * rotated tokens never reach the browser.
+ *
+ * That mechanism now lives in `@workspace/api-client/session`, because the admin
+ * app needs the same thing and a second copy of cookie-replay logic is a second
+ * copy of the bug where `Headers.set` overwrites the access cookie with the
+ * refresh cookie. Only the *policy* below is app-specific — the storefront
+ * protects `/portfolio` and leaves the homepage public; the admin app protects
+ * everything but `/login`. Two apps, two honest disagreements, one implementation.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 // `config` is reserved below for Next's matcher • alias the app config.
 import { config as appConfig } from "@/lib/config";
+import {
+  ACCESS_COOKIE,
+  REFRESH_COOKIE,
+  applySecurityHeaders,
+  applySetCookies,
+  isPlausibleIdentity,
+  validateSessionCookies,
+} from "@workspace/api-client/session";
 
 const API_BASE = appConfig.apiUrl;
-const ACCESS_COOKIE = "access_token";
-const REFRESH_COOKIE = "refresh_token";
 
 const PUBLIC_PATHS = ["/", "/markets", "/trades", "/faq", "/docs", "/legal", "/support"];
-const PROTECTED_PATHS = ["/portfolio", "/orders", "/positions", "/transactions", "/wallet", "/settings"];
+
+/**
+ * Checked before the public fast-path, so the ordering is what makes this work:
+ * `/markets` is public, but `/markets/mine` and `/markets/new` are matched here
+ * first and never reach it. Listing only `/markets` in either array would leave
+ * both of them readable while signed out.
+ */
+const PROTECTED_PATHS = [
+  "/portfolio",
+  "/orders",
+  "/positions",
+  "/transactions",
+  "/wallet",
+  "/settings",
+  "/markets/mine",
+  "/markets/new",
+  // Was missing, and the only private page gated client-side only. Its data query
+  // is correctly `enabled: !!user`, so nothing leaked — but the *shell* rendered
+  // for a signed-out visitor, and a page that exists to show someone their
+  // notifications existing while signed out is a page that looks broken.
+  //
+  // Every other private route here is decided in the proxy before render. This one
+  // was the odd case out, which means the next person to add a private route would
+  // have had no local example to copy.
+  "/notifications",
+];
 const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"];
-
-/** Shape of GET /api/v1/auth/me → data */
-interface Identity {
-  id: string;
-  email: string;
-  username: string;
-  is_admin: boolean;
-}
-
-interface SessionCheck {
-  user: Identity | null;
-  /** Set-Cookie headers returned by the API that must reach the browser. */
-  setCookies: string[];
-}
 
 function getCookie(request: NextRequest, name: string): string | null {
   return request.cookies.get(name)?.value ?? null;
 }
 
-function readSetCookies(res: Response): string[] {
-  const headers = res.headers as Headers & { getSetCookie?: () => string[] };
-  if (typeof headers.getSetCookie === "function") return headers.getSetCookie();
-  const raw = headers.get("set-cookie");
-  return raw ? [raw] : [];
-}
-
-/** `Set-Cookie` must be appended one at a time • a single set overwrites. */
-function applySetCookies(response: NextResponse, setCookies: string[]) {
-  for (const cookie of setCookies) response.headers.append("set-cookie", cookie);
-}
-
-async function fetchMe(cookieHeader: string): Promise<Identity | null> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
-    headers: { Cookie: cookieHeader },
-    cache: "no-store",
-  });
-  if (!res.ok) return null;
-  const json = (await res.json()) as { success: boolean; data?: Identity };
-  return json.data ?? null;
-}
-
-async function validateSession(request: NextRequest): Promise<SessionCheck> {
-  const accessToken = getCookie(request, ACCESS_COOKIE);
-  if (accessToken) {
-    try {
-      const user = await fetchMe(`${ACCESS_COOKIE}=${accessToken}`);
-      if (user) return { user, setCookies: [] };
-    } catch {
-      // network error • fall through to refresh, then to "not logged in"
-    }
-  }
-
-  // Access token missing/expired: rotate via the refresh token.
-  const refreshToken = getCookie(request, REFRESH_COOKIE);
-  if (!refreshToken) return { user: null, setCookies: [] };
-
-  let refreshRes: Response;
-  try {
-    refreshRes = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { Cookie: `${REFRESH_COOKIE}=${refreshToken}` },
-      cache: "no-store",
-    });
-  } catch {
-    return { user: null, setCookies: [] };
-  }
-
-  const setCookies = readSetCookies(refreshRes);
-  if (!refreshRes.ok) return { user: null, setCookies };
-
-  const newAccess = setCookies
-    .map((c) => c.split(";")[0]?.trim())
-    .find((c) => c?.startsWith(`${ACCESS_COOKIE}=`));
-  if (!newAccess) return { user: null, setCookies };
-
-  try {
-    return { user: await fetchMe(newAccess), setCookies };
-  } catch {
-    return { user: null, setCookies };
-  }
-}
-
-function setSecurityHeaders(response: NextResponse) {
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("X-Frame-Options", "DENY");
-  response.headers.set("X-XSS-Protection", "1; mode=block");
-  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  if (process.env.NODE_ENV === "production") {
-    response.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  }
-}
-
-function nextResponse(setCookies: string[] = []): NextResponse {
+function nextResponse(setCookies: readonly string[] = []): NextResponse {
   const response = NextResponse.next();
   applySetCookies(response, setCookies);
-  setSecurityHeaders(response);
+  applySecurityHeaders(response.headers);
   return response;
+}
+
+async function validateSession(request: NextRequest) {
+  return validateSessionCookies({
+    apiBase: API_BASE,
+    accessToken: getCookie(request, ACCESS_COOKIE),
+    refreshToken: getCookie(request, REFRESH_COOKIE),
+    // Forwarded because the backend fingerprints refresh tokens by User-Agent
+    // and revokes on mismatch. This refresh runs in Node, whose `fetch` sends
+    // its own UA — so without this, the first refresh after the access token
+    // expires reads as a different device, the token is revoked, and the session
+    // is destroyed. That is what logged operators out of the admin app every
+    // fifteen minutes.
+    userAgent: request.headers.get("user-agent"),
+  });
 }
 
 function isProtected(pathname: string): boolean {
@@ -138,9 +104,7 @@ export async function proxy(request: NextRequest) {
       return redirect;
     }
     // Validate before setting • never trust a malformed backend payload.
-    const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
-    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email);
-    if (!isValidUuid || !isValidEmail) {
+    if (!isPlausibleIdentity(user)) {
       const redirect = NextResponse.redirect(new URL("/login", request.url));
       applySetCookies(redirect, setCookies);
       return redirect;

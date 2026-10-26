@@ -25,6 +25,7 @@ import {
   HomeIcon,
   TrendingUpIcon,
   ActivityIcon,
+  PlusIcon,
   HelpCircleIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
@@ -32,9 +33,11 @@ import { UserMenu } from "@/components/auth/user-menu"
 import { NotificationBell } from "@/components/notifications/notification-bell"
 import { SearchInput } from "@/components/shared/search-input"
 import { AppCommandMenu } from "@/components/shared/app-command-menu"
+import Image from "next/image"
 
 const navLinks: { href: string; label: string; icon: React.ReactNode }[] = [
   { href: "/markets", label: "Markets", icon: <TrendingUpIcon className="size-4" aria-hidden="true" /> },
+  { href: "/markets/new", label: "Propose", icon: <PlusIcon className="size-4" aria-hidden="true" /> },
   { href: "/trades", label: "Trades", icon: <ActivityIcon className="size-4" aria-hidden="true" /> },
 ]
 
@@ -198,7 +201,8 @@ export default function Header() {
             className="flex shrink-0 items-center gap-2 font-bold tracking-wide"
             aria-label="PredictX home"
           >
-            <PolygonIcon />
+            {/* <PolygonIcon /> */}
+            <Image src={'/logo.png'} alt="predictx logo" height={20} width={50} className="dark:invert"/>
             <span className="hidden min-[380px]:inline">PredictX</span>
           </Link>
 

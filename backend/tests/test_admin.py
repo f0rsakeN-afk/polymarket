@@ -97,7 +97,7 @@ async def test_get_user_not_found(client: AsyncClient, admin_user):
 async def test_ban_user_admin(client: AsyncClient, admin_user, test_user):
     """Admin can ban a user."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "banned"
 
@@ -106,7 +106,7 @@ async def test_ban_user_admin(client: AsyncClient, admin_user, test_user):
 async def test_ban_user_not_found(client: AsyncClient, admin_user):
     """Ban on non-existent user returns 404."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{uuid4()}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{uuid4()}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 404
 
 
@@ -122,7 +122,7 @@ async def test_unban_user_not_found(client: AsyncClient, admin_user):
 async def test_ban_admin_forbidden(client: AsyncClient, admin_user):
     """Admin cannot ban another admin."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{admin_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{admin_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 403
 
 
@@ -130,7 +130,7 @@ async def test_ban_admin_forbidden(client: AsyncClient, admin_user):
 async def test_ban_non_admin_forbidden(client: AsyncClient, test_user, admin_user):
     """Non-admin cannot ban users."""
     client.cookies.set("access_token", token_for(test_user.id))
-    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban")
+    resp = await client.patch(f"/api/v1/admin/users/{test_user.id}/ban", json={"reason": "test fixture ban"})
     assert resp.status_code == 403
 
 
@@ -201,17 +201,42 @@ async def test_list_audit_events_invalid_user_id(client: AsyncClient, admin_user
 
 @pytest.mark.asyncio
 async def test_distribute_protocol_fees_admin(client: AsyncClient, admin_user):
-    """Admin can distribute protocol fees."""
+    """Admin can distribute protocol fees, given step-up credentials."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.post("/api/v1/admin/distribute-protocol-fees")
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "Admin!Pass1"},
+    )
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_distribute_protocol_fees_requires_step_up(client: AsyncClient, admin_user):
+    """A bare admin session must not be enough to move money.
+
+    The session is a bearer token, so without step-up a stolen cookie is direct
+    access to the treasury. Covered in depth in `test_admin_audit.py`; asserted
+    here too because this is the file that tests the endpoint itself.
+    """
+    client.cookies.set("access_token", token_for(admin_user.id))
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "definitely-not-it"},
+    )
+    assert resp.status_code >= 400
 
 
 @pytest.mark.asyncio
 async def test_distribute_protocol_fees_non_admin_forbidden(client: AsyncClient, test_user):
     """Non-admin cannot distribute protocol fees."""
     client.cookies.set("access_token", token_for(test_user.id))
-    resp = await client.post("/api/v1/admin/distribute-protocol-fees")
+    # Credentials supplied so the 403 is about authorisation, not about a missing
+    # body - otherwise this test would still pass with step-up removed, which is
+    # exactly the regression it exists to catch.
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "whatever"},
+    )
     assert resp.status_code == 403
 
 
@@ -219,7 +244,10 @@ async def test_distribute_protocol_fees_non_admin_forbidden(client: AsyncClient,
 async def test_distribute_protocol_fees_empty(client: AsyncClient, admin_user):
     """Distributing when there are no fees returns empty result."""
     client.cookies.set("access_token", token_for(admin_user.id))
-    resp = await client.post("/api/v1/admin/distribute-protocol-fees")
+    resp = await client.post(
+        "/api/v1/admin/distribute-protocol-fees",
+        json={"password": "Admin!Pass1"},
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True

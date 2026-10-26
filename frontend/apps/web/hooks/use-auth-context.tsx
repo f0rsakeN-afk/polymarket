@@ -24,7 +24,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logoutMutation = useMutation({
     mutationFn: () => authApi.logout(),
     onSuccess: () => {
-      // Remove all auth-related queries; keep market/position/order caches intact
+      // Drop everything scoped to the signed-in user. Market data is public and
+      // safe to keep; orders and notifications are not - leaving them cached
+      // would let the next user of a shared browser read the previous user's.
       queryClient.removeQueries({ queryKey: queryKeys.me() })
       queryClient.removeQueries({ queryKey: queryKeys.positions() })
       queryClient.removeQueries({ queryKey: queryKeys.orders() })

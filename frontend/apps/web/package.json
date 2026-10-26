@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",
+    "@workspace/api-client": "workspace:*",
+    "@workspace/schemas": "workspace:*",
     "@workspace/ui": "workspace:*",
     "lucide-react": "^1.37.0",
     "next": "^16.3.3",
@@ -22,6 +24,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",

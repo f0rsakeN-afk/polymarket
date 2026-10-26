@@ -26,7 +26,50 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
 
     # CORS • comma-separated, must NOT contain wildcards when credentials=True
-    cors_origins: str = "http://localhost:3000"
+    # Comma-separated allowlist. Empty on purpose: this is configuration, not a
+    # default, and a default here would be a second copy of the origin list that
+    # drifts from `.env` without anything failing. `app.py` refuses to start on an
+    # empty value with an explicit message, which is the right failure - a loud
+    # one at boot rather than a silently-wrong CORS policy in a browser.
+    #
+    # Two origins are needed by default in development, because there are two
+    # front ends: `apps/web` on 3000 and `apps/admin` on 3001. See `.env.example`.
+    cors_origins: str = ""
+
+    # A second, wider origin allowlist used *only* by the CSRF origin check, and
+    # unioned with `cors_origins` there. It exists for integrations that are
+    # allowed to call the API from an origin the browser front ends do not use.
+    #
+    # It was previously read straight from `os.environ`, which meant it was not in
+    # `.env.example` and nobody knew it existed. An undocumented security setting
+    # is one that gets set once by accident and then never reviewed. A `*` here
+    # is deliberately **not** honoured as "allow everything" - see
+    # `app.api.origin_check.allowed_origins`.
+    allowed_origins: str = ""
+    # The storefront's public origin. The admin app redirects a non-admin here, so
+    # it must be set wherever the admin app is deployed on its own host.
+    site_url: str = ""
+
+    # ── Auth cookies ─────────────────────────────────────────────────────────
+    #
+    # `SameSite` for the session cookies. Configurable because the correct value is
+    # a property of *deployment topology*, not of the application: an API and its
+    # front end on one site need `lax`, and an API at `api.example.com` serving a
+    # front end at `example.com` cannot work at anything else.
+    #
+    # Default `lax`, which is right for single-site deployments and for local dev
+    # - and which is *silently* wrong everywhere else. `lax` means the browser
+    # withholds the cookie from `fetch()` calls to another site, so a cross-site
+    # admin app gets no session on any request, `/auth/me` 401s forever, and the
+    # only symptom is a permanently signed-out operator. No error, no redirect,
+    # nothing in any log: the browser simply does not send what was asked for.
+    #
+    # Set `none` for a cross-site deployment. It *requires* `Secure`, so the
+    # pairing is enforced in `set_auth_cookies` and by `app.py` at boot - see
+    # `COOKIE_SAMESITE`. Not "auto": guessing from `site_url` would be right
+    # until someone deploys the front end on a subdomain, at which point it is
+    # confidently wrong and nobody knows which branch it took.
+    cookie_samesite: str = "lax"
 
     # Database
     database_url: str = "postgresql+asyncpg://myuser:mypassword@localhost:5435/mydatabase"
@@ -44,6 +87,58 @@ class Settings(BaseSettings):
     redis_max_connections: int = 100
     celery_worker_redis_max_connections: int = 20
 
+    # ── Realtime publish queue ──────────────────────────────────────────────
+    #
+    # `redis_max_connections` is a cliff, not a queue: past it redis-py raises
+    # `MaxConnectionsError` instead of waiting for a connection to free up.
+    # Measured: 300 concurrent publishes -> exactly 100 succeeded, 200 raised.
+    #
+    # Publishers now hand frames to a bounded queue drained by a fixed writer
+    # pool, so each writer holds one connection regardless of burst size and the
+    # pool becomes a throughput knob rather than a correctness cliff.
+    #
+    # MEASURED, not guessed. `harness/bench_publish_queue.py` drains 20,000 real
+    # Redis publishes per configuration, three runs each, best-of:
+    #
+    #     1 writer    7,045 frames/s
+    #     2 writers  10,222  (1.45x)
+    #     4 writers  11,823  (1.68x)
+    #     8 writers  13,598  (1.93x)   <- configured, and the measured peak
+    #    16 writers   9,783  (regresses)
+    #    32 writers  11,323  (regresses)
+    #
+    # Two things worth stating plainly. Scaling stops at 8 and then *degrades*:
+    # more writers contend for the same Redis and measure slower, so raising
+    # this past 8 would cost throughput rather than buy it.
+    #
+    # And the 0.6ms figure that used to justify this number came from the
+    # fan-out phase, which measures in-process socket delivery and says nothing
+    # about a Redis round trip. The writer pool had never actually been observed
+    # publishing to Redis, and the existing burst phase enqueues no-op operations
+    # - so it measured the queue's plumbing and nothing else.
+    publish_writers: int = 8
+    # Overflow policy differs by delivery class, deliberately - see
+    # `app/websocket/publish_queue.py`. Prices drop-oldest (coalescing keeps the
+    # newest, which is what the client would have done anyway); critical frames
+    # are dropped *and* owed a resync, because they must never vanish silently.
+    # The depths below are read against the measured drain rate above, because a
+    # queue depth only means something next to how fast it empties. At ~13,600
+    # frames/s:
+    #
+    #     ephemeral 20,000 frames -> 1.5s of headroom
+    #     critical  10,000 frames -> 0.7s of headroom
+    #
+    # That is the honest size of the safety margin: not a large buffer, but enough
+    # to ride out a GC pause or a momentary Redis stall without coalescing a price
+    # or owing a resync. Anything longer than that and overflow is *by design* -
+    # ephemeral coalesces (which is what the client would have done anyway), and
+    # critical spills with a resync owed, which is why that alert exists.
+    #
+    # If these are ever raised, re-run the benchmark: the numbers above are the
+    # only reason to believe a larger depth buys anything.
+    publish_queue_ephemeral: int = 20_000
+    publish_queue_critical: int = 10_000
+
     # JWT
     jwt_secret: str = "change-me-in-production"
     secret_key: str = "change-me-in-production"
@@ -54,6 +149,20 @@ class Settings(BaseSettings):
     # bounds one token while renewing could otherwise go on forever; this is
     # the deadline no rotation can move (see app/api/auth.py).
     refresh_chain_max_seconds: int = 2592000  # 30 days from last login
+
+    # How long a *revoked* refresh token is still forgiven when it is presented
+    # again by the same device. See `POST /auth/refresh`.
+    #
+    # This exists because the storefront and the admin panel share one cookie jar
+    # — cookies are keyed by domain and path, not by port — so whichever app
+    # refreshes first rotates the token out from under the other, and the loser
+    # replays a revoked token on an ordinary page load. Without a window that is
+    # indistinguishable from a stolen token and logs the user out of every device.
+    #
+    # Deliberately short. It has to cover the seconds between two apps refreshing
+    # at once, and nothing else; a genuine thief replaying outside it gets the
+    # chain revoked, as they should.
+    refresh_reuse_grace_seconds: int = 30
 
     # Stripe
     stripe_secret_key: str = ""

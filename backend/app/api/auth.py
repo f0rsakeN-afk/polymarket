@@ -51,7 +51,7 @@ from app.schemas.auth import (
     VerifyMagicUrlRequest,
 )
 from app.services.audit_service import AuthAuditService
-from app.services.email_service import EmailService
+from app.services.email_service import EmailService, _redact_email
 from app.services.otp_service import OTPService
 from app.services.password_strength_service import PasswordStrengthService
 from app.services.rate_limit_service import RateLimitService
@@ -196,6 +196,19 @@ async def _issue_tokens(
     await _anchor_refresh_chain(token_hash, previous_token_hash, issued_at)
 
     return access_token, jti, refresh_token_id, token_record
+
+
+def _revoke_refresh(token: RefreshToken) -> None:
+    """Revoke a refresh token, stamping when — once.
+
+    `revoked_at` is what the reuse grace window is measured from, so it has to be
+    the moment the token was *first* invalidated. Overwriting it on a later
+    revocation would hand anyone holding a stolen token an endless window: replay
+    it, and the countdown starts again.
+    """
+    token.revoked = True
+    if token.revoked_at is None:
+        token.revoked_at = datetime.now(UTC)
 
 
 async def _revoke_all_refresh_tokens(db: AsyncSession, user_id: str, keep_token_hash: str | None = None):
@@ -506,7 +519,11 @@ async def set_password(data: SetPasswordRequest, request: Request, db: AsyncSess
 
 
 @router.post("/magic-link", summary="Request magic link code via email")
-async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db)):
+async def magic_link(
+    data: MagicLinkRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(User).where(User.email == data.email))
     user = result.scalar_one_or_none()
     if not user:
@@ -517,7 +534,16 @@ async def magic_link(data: MagicLinkRequest, db: AsyncSession = Depends(get_db))
 
     code = await OTPService.send_code(data.email, _OTP_MAGIC)
     EmailService.send_magic_code(data.email, code)
-    logger.info(f"Magic link code requested: {data.email}")
+    # DEBUG, not INFO, and the address is redacted.
+    #
+    # At INFO this put every requested login code's recipient into a log
+    # aggregator, and the email is also the account identifier. Whether someone
+    # asked for a code is an operational question nobody needs answered from a
+    # retained log; the audit table records sign-in events that actually mattered.
+    logger.debug(
+        "Magic link code requested",
+        extra={"email": _redact_email(data.email), "ip": _get_client_ip(request)},
+    )
     return success_response({"message": "Login code sent"}, message="Login code sent")
 
 
@@ -954,6 +980,18 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
         raise UnauthorizedError("Invalid email or password")
 
     if not user.is_active:
+        # A ban says why, and the user is entitled to know.
+        #
+        # "Account is inactive" is indistinguishable from a wrong password, a
+        # stale email or a bug, and a user who has been told nothing cannot
+        # appeal it. So the recorded reason comes back here — which is only
+        # possible because `ban_user` requires one.
+        #
+        # A deactivated account that was *deleted* rather than banned has no
+        # reason, and must not be described as banned: that would invent an
+        # accusation against someone whose account no longer exists.
+        if user.ban_reason and not user.is_deleted:
+            raise ForbiddenError(f"Account suspended: {user.ban_reason}")
         raise UnauthorizedError("Account is inactive")
 
     if not user.is_email_verified:
@@ -966,12 +1004,18 @@ async def login(data: LoginRequest, request: Request, response: Response, db: As
         if not data.totp_code:
             await RateLimitService.record_failure(data.email, ip)
             await AuthAuditService.log_login_fail(db, data.email, ip, ua, "2fa_code_missing")
-            raise UnauthorizedError("2FA code required")
+            # A distinct code, because "2FA code required" and "wrong password" are
+            # different states and a client cannot reliably tell them apart by
+            # matching an English sentence - which silently shows a non-2FA admin
+            # a code field after a mistyped password, or the reverse. The
+            # step-up endpoint already answers this way (`STEP_UP_2FA_REQUIRED`);
+            # login was the inconsistency.
+            raise UnauthorizedError("2FA code required", error_code="LOGIN_2FA_REQUIRED")
         secret = TOTPService.decrypt_secret(user.totp_secret_encrypted)
         if not TOTPService.verify_code(secret, data.totp_code):
             await RateLimitService.record_failure(data.email, ip)
             await AuthAuditService.log_login_fail(db, data.email, ip, ua, "wrong_2fa_code")
-            raise UnauthorizedError("Invalid 2FA code")
+            raise UnauthorizedError("Invalid 2FA code", error_code="LOGIN_2FA_INVALID")
 
     await RateLimitService.reset_friction(data.email, ip)
     access_token, jti, refresh_token, token_record = await _issue_tokens(response, str(user.id), db, ip, ua)
@@ -998,7 +1042,7 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
         )
         token_record = result.scalar_one_or_none()
         if token_record:
-            token_record.revoked = True
+            _revoke_refresh(token_record)
             # Also revoke the linked session
             session_result = await db.execute(
                 select(Session).where(Session.refresh_token_id == token_record.id)
@@ -1095,7 +1139,7 @@ async def revoke_session(session_id: str, request: Request, db: AsyncSession = D
     )
     rt = refresh_result.scalar_one_or_none()
     if rt:
-        rt.revoked = True
+        _revoke_refresh(rt)
 
     await db.commit()
 
@@ -1167,11 +1211,48 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     if not token_record:
         raise UnauthorizedError("Invalid or expired refresh token")
 
-    # Reuse detection: a revoked token presented again means it was stolen
-    # (the legitimate client rotated it away). Revoke everything.
+    # Reuse detection, with a grace window.
+    #
+    # A revoked token presented again is *usually* theft, and the response has to
+    # be to kill the chain. But "usually" is not "always", and this endpoint has
+    # no way to tell a stolen token from a client that refreshed twice.
+    #
+    # It happens routinely here. Cookies are keyed by domain and path and NOT by
+    # port, so the storefront (:3000) and the admin panel (:3001) share one
+    # `refresh_token`. Whichever refreshes first rotates it, and the other then
+    # presents the revoked one on an ordinary page load. Two tabs of the same app
+    # do the same thing. Before this, that logged a user out of every device.
+    #
+    # So: inside `refresh_reuse_grace_seconds`, and from the same device, it is
+    # the duplicate it looks like — issue a fresh pair and revoke nothing. Outside
+    # the window, or from another device, the chain dies exactly as before. The
+    # window is seconds long and exists to cover a race, not to keep a stolen
+    # token usable.
     if token_record.revoked:
-        await _revoke_chain(db, str(token_record.user_id), "Refresh token reuse detected")
-        raise UnauthorizedError("Invalid or expired refresh token")
+        now = datetime.now(UTC)
+
+        within_grace = (
+            token_record.revoked_at is not None
+            and now - token_record.revoked_at
+            <= timedelta(seconds=settings.refresh_reuse_grace_seconds)
+        )
+        same_device = (token_record.device_info or "") == (ua or "")
+
+        if within_grace and same_device:
+            # Note the distinction in the audit trail without alarming anyone: this
+            # is the line between "two pages refreshed at once" and "someone has
+            # your token", and being able to see which happened is the point of
+            # keeping it.
+            logger.info(
+                "Refresh token replayed within the %ss grace window (same device) "
+                "• treated as a duplicate, not theft",
+                settings.refresh_reuse_grace_seconds,
+            )
+        else:
+            await _revoke_chain(
+                db, str(token_record.user_id), "Refresh token reuse detected"
+            )
+            raise UnauthorizedError("Invalid or expired refresh token")
 
     # Absolute cap on the whole login CHAIN. Rotation hands the new token the
     # same deadline (_anchor_refresh_chain), so renewing cannot move this
@@ -1188,7 +1269,7 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
         raise UnauthorizedError("Session expired • please sign in again")
 
     if token_record.expires_at <= datetime.now(UTC):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Invalid or expired refresh token")
 
@@ -1203,24 +1284,23 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     # /auth/refresh answered 401 on every call and sessions silently died
     # after one access token. Nothing caught it because no test exercised the
     # endpoint; the Redis deadline above is the bound that actually matters.
-    from datetime import timedelta
     issued_at = token_record.expires_at - timedelta(seconds=settings.jwt_refresh_expire)
     if issued_at + timedelta(seconds=settings.refresh_chain_max_seconds) <= datetime.now(UTC):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Refresh token expired")
 
     # Bind token to user_agent/ip fingerprint for replay protection.
     stored_ua = token_record.device_info or ""
     if stored_ua != (ua or ""):
-        token_record.revoked = True
+        _revoke_refresh(token_record)
         await db.commit()
         raise UnauthorizedError("Device mismatch • please re-authenticate")
 
     # Rotate: revoke old token + old session, issue new token + new session
     # bound to the current ip/user-agent. The new token inherits this chain's
     # deadline • that inheritance is what makes the cap absolute.
-    token_record.revoked = True
+    _revoke_refresh(token_record)
     if token_record.current_session:
         token_record.current_session.revoked = True
     new_access, _jti, new_refresh, _new_record = await _issue_tokens(

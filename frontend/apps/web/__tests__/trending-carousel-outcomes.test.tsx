@@ -14,6 +14,10 @@ import type { MarketResponse } from "@/hooks/api/types/market";
 let socketHandler: ((data: unknown) => void) | null = null;
 
 vi.mock("@/hooks/use-market-socket", () => ({
+  // Values, not behaviour: the card's resync branch compares against these, so
+  // they must survive the mock.
+  WS_RESYNC: "__ws_resync__",
+  WS_GAP: "__ws_gap__",
   useMarketSocket: ({ onMessage }: { onMessage: (d: unknown) => void }) => {
     socketHandler = onMessage;
     return { status: "connected" };

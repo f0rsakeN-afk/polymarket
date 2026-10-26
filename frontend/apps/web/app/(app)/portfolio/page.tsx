@@ -9,6 +9,7 @@ import { useWallet } from "@/hooks/api/use-wallet"
 import { useCurrentUser } from "@/hooks/use-auth"
 import { queryKeys } from "@/lib/api/queryKeys"
 import { useUserSocket } from "@/hooks/use-user-socket"
+import { applyPrivateFeedResync } from "@/lib/ws-resync"
 import { SplitMergeForm } from "@/components/liquidity/split-merge-form"
 import {
   Card,
@@ -465,6 +466,8 @@ export default function PortfolioPage() {
 
   const handleWsMessage = useCallback(
     (msg: unknown) => {
+      // The socket reconnected; fills and balance changes may have been missed.
+      if (applyPrivateFeedResync(qc, msg)) return
       const message = msg as {
         type?: string
         title?: string
@@ -479,6 +482,12 @@ export default function PortfolioPage() {
           description: message.body ?? "",
         })
         qc.invalidateQueries({ queryKey: ["notifications"] })
+        // An order notification means money moved: a fill debits or credits, and
+        // a cancellation or expiry releases the locked remainder. Without this
+        // the toast confirms a trade the balance on screen does not show.
+        qc.invalidateQueries({ queryKey: queryKeys.wallet() })
+        qc.invalidateQueries({ queryKey: queryKeys.positions() })
+        qc.invalidateQueries({ queryKey: queryKeys.orders() })
         return
       }
       if (message.type === "alert:triggered") {
@@ -491,6 +500,12 @@ export default function PortfolioPage() {
       if (message.type === "order:fill" || message.type === "position:update") {
         qc.invalidateQueries({ queryKey: ["positions"] })
         qc.invalidateQueries({ queryKey: queryKeys.orders() })
+        // The wallet too. A fill moves real money - USDC spent or received, plus
+        // the locked remainder released on a partial - so leaving this query
+        // alone meant the balance on screen was the balance from *before* the
+        // trade the user just watched happen. Every other number on this page
+        // updated; the one they cared most about did not.
+        qc.invalidateQueries({ queryKey: queryKeys.wallet() })
       }
     },
     [qc]

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from conftest import drain_publishes
 
 from app.services.order_service import OrderService
 from app.websocket.manager import RedisPubSub
@@ -137,8 +138,17 @@ class TestOutcomePricesFromBook:
 
 
 class _FakePipeline:
+    """Models the pipeline the price publish actually issues.
+
+    `eval` is the sequenced publish: the real command runs a Lua script that
+    does INCR + splice + PUBLISH atomically, so the fake performs the same
+    `__SEQ__` substitution. Substituting here rather than ignoring it keeps the
+    payload these tests assert on byte-identical to what a subscriber receives.
+    """
+
     def __init__(self, sink):
         self._sink = sink
+        self._seq = 0
 
     def hset(self, *a, **k):
         return self
@@ -151,6 +161,12 @@ class _FakePipeline:
 
     def publish(self, channel, payload):
         self._sink.append(payload)
+
+    def eval(self, script, numkeys, *keys_and_args):
+        payload = keys_and_args[-1]
+        self._seq += 1
+        self._sink.append(payload.replace('"__SEQ__"', str(self._seq)))
+        return self
 
     async def execute(self):
         return None
@@ -174,6 +190,7 @@ async def _publish(**kwargs):
     bus._redis = _FakeRedis(published)
     with patch("app.websocket.manager.redis_cb.call", new=_call_op):
         await bus.publish_price_update("mkt-1", **kwargs)
+        await drain_publishes(bus)
     assert published, "nothing was published"
     return json.loads(published[0])
 

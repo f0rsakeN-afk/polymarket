@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 from sqlalchemy.exc import DataError, IntegrityError
 
+from app.api.account import router as account_router
 from app.api.admin import router as admin_router
 from app.api.alerts import router as alerts_router
 from app.api.auth import router as auth_router
@@ -25,6 +26,8 @@ from app.api.handlers import (
     integrity_error_handler,
     validation_exception_handler,
 )
+from app.api.health import mark_started
+from app.api.health import router as health_router
 from app.api.liquidity import router as liquidity_router
 from app.api.market_activity import router as market_activity_router
 from app.api.markets import router as markets_router
@@ -35,6 +38,7 @@ from app.api.middleware import (
 )
 from app.api.notifications import router as notifications_router
 from app.api.orders import router as orders_router
+from app.api.origin_check import OriginCheckMiddleware
 from app.api.positions import router as positions_router
 from app.api.referrals import router as referrals_router
 from app.api.split_merge import router as split_merge_router
@@ -46,6 +50,7 @@ from app.config import settings
 from app.database import _get_engine, _get_replica_engine
 from app.middleware.metrics import MetricsMiddleware, clean_multiproc_dir
 from app.middleware.request_id import RequestIDMiddleware
+from app.services.ops_signals import ops_loop
 from app.websocket.manager import manager, redis_pubsub
 from app.websocket.routes import router as ws_router
 
@@ -56,26 +61,69 @@ _APP_ENV = os.environ.get("APP_ENV", "development")
 
 
 def _configure_logging(app_env: str, log_level: str) -> None:
-    """Configure root logger based on environment and log level."""
+    """Configure root logger based on environment and log level.
+
+    ## Why `extra` is rendered here at all
+
+    A call site that writes `logger.info("Order filled", extra={"order_id": ...})`
+    is only useful if something renders those fields. Both formatters below used to
+    emit `message` and nothing else, so every `extra` in the codebase was silently
+    discarded — which makes converting an f-string into structured fields a change
+    that looks like an improvement and does nothing at all.
+
+    So the renderers come first. Anything attached with `extra=` becomes a top-level
+    field in production JSON and a `key=value` suffix in development, and the two
+    are consistent with each other so a query written against one works on the
+    other.
+    """
     level = getattr(logging, log_level.upper(), logging.INFO)
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+
+    # Attributes that are already rendered elsewhere, or that describe the emitter
+    # rather than the event. Emitting them again would duplicate every line and,
+    # for `msg`/`args`, produce the *unformatted* template alongside the message.
+    reserved = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+        "asctime",
+        "message",
+    }
+
+    def _extras(record: logging.LogRecord) -> dict:
+        return {k: v for k, v in record.__dict__.items() if k not in reserved}
+
     if app_env == "production":
         # Structured JSON in production • parseable by log aggregators (Datadog, Loki, ELK)
         class JSONFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
-                return json.dumps({
-                    "timestamp": record.created,
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "message": record.getMessage(),
-                }, default=str)
+                return json.dumps(
+                    {
+                        "timestamp": record.created,
+                        "level": record.levelname,
+                        "logger": record.name,
+                        "message": record.getMessage(),
+                        **_extras(record),
+                    },
+                    default=str,
+                )
+
         handler.setFormatter(JSONFormatter())
     else:
-        handler.setFormatter(formatter)
+        # `exc_info` is left to the formatter, which appends the traceback itself.
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        _base = handler.formatter
+
+        class DevFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                line = _base.format(record)
+                fields = _extras(record)
+                return f"{line}  {fields}" if fields else line
+
+        handler.setFormatter(DevFormatter())
+
     logging.basicConfig(level=level, handlers=[handler])
 
 
@@ -211,14 +259,42 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(manager.heartbeat_loop())
     logger.info("WebSocket heartbeat sweep started (30s)")
 
+    # Grid price aggregation: one timer per worker flushing every grid socket's
+    # buffered prices into a single combined frame. This is what keeps a list of
+    # thirty live markets at one frame per tick instead of thirty.
+    grid_task = asyncio.create_task(manager.grid_loop())
+    logger.info("WebSocket grid flush started (250ms)")
+
+    # Operational debt, refreshed on a timer: live worker count and how many
+    # markets are past close and unresolved.
+    #
+    # This is the signal that would have caught a dead worker pool. Markets close
+    # and settle in Celery, so a pool that stops leaves markets open indefinitely
+    # - no winner announced, positions live, escrow locked - while every socket
+    # stays connected and every page reports live. Counted and aged rather than
+    # merely reported, because "a backlog exists" and "the backlog is six hours
+    # old" call for different reactions.
+    #
+    # Started here rather than only in a worker because the *read* belongs with
+    # the process that serves /metrics: a gauge nobody scrapes is storage.
+    ops_task = asyncio.create_task(ops_loop())
+    logger.info("Operational debt refresh started (30s)")
+
+    # Everything is up. `/health/startup` reports success from here, so an
+    # orchestrator does not restart a container that is merely booting slowly.
+    mark_started()
+
     yield
 
     logger.info("Shutting down...")
     heartbeat_task.cancel()
-    try:
-        await heartbeat_task
-    except (asyncio.CancelledError, Exception):
-        pass
+    grid_task.cancel()
+    ops_task.cancel()
+    for task in (heartbeat_task, grid_task, ops_task):
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
     await redis_pubsub.close()
     await _get_engine().dispose()
     await _get_replica_engine().dispose()
@@ -238,12 +314,48 @@ app = FastAPI(
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 if not origins:
-    raise ValueError("CORS_ORIGINS cannot be empty • set explicit origins (e.g. CORS_ORIGINS=http://localhost:3000)")
+    raise ValueError(
+        "CORS_ORIGINS cannot be empty. It is configuration, not a default - set it "
+        "in .env (see .env.example) or the environment. It must list EVERY "
+        "front-end origin: apps/web on :3000 and apps/admin on :3001. A missing "
+        "origin does not degrade an app, it signs it out permanently - the "
+        "preflight fails, /auth/me never returns, and the only clue is a console "
+        "CORS error."
+    )
 if "*" in origins:
     raise ValueError(
         "CORS_ORIGINS cannot contain '*' when allow_credentials=True. "
         "Set explicit origins in CORS_ORIGINS (e.g. CORS_ORIGINS=http://localhost:3000)"
     )
+# ── Auth cookie policy ──────────────────────────────────────────────────────
+#
+# The one configuration pair that cannot fail visibly. A wrong CORS origin prints
+# to the console; a wrong SameSite prints nothing anywhere - the browser simply
+# withholds the cookie, `/auth/me` 401s, and an operator is signed out of a tool
+# that looks like it is working. So the invalid combinations are refused here,
+# where the process refuses to start and says why.
+_SAMESITE_VALUES = ("lax", "strict", "none")
+
+if settings.cookie_samesite.strip().lower() not in _SAMESITE_VALUES:
+    raise ValueError(
+        f"COOKIE_SAMESITE must be one of {', '.join(_SAMESITE_VALUES)} - got "
+        f"{settings.cookie_samesite!r}"
+    )
+
+if settings.cookie_samesite.strip().lower() == "none":
+    # Browsers discard a SameSite=None cookie that is not Secure. That is
+    # silent: login returns 200, Set-Cookie arrives, and the next request is
+    # anonymous. Refusing to boot is the only place this can still be caught.
+    if settings.app_env != "production":
+        raise ValueError(
+            "COOKIE_SAMESITE=none requires APP_ENV=production. Browsers discard a "
+            "SameSite=None cookie without Secure, which leaves every request "
+            "unauthenticated and produces no error to debug. Use COOKIE_SAMESITE=lax "
+            "for local development - on localhost the front end and the API are the "
+            "same site regardless of port, which is exactly why this is invisible in "
+            "development and fatal in production."
+        )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -257,6 +369,13 @@ app.add_middleware(
     max_age=600,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+# Registered here, which places it *inside* CORS: Starlette runs the
+# last-registered middleware outermost, and CORS went on first. That is the right
+# order — an unmatched origin's 403 is not readable by the rejected origin's
+# script, because CORSMiddleware withholds the headers, and that is the outcome we
+# want. Putting it outermost instead would mean it ran before request logging and
+# metrics, so a refused request left no trace.
+app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
@@ -289,68 +408,19 @@ app.include_router(flags_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(treasury_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(account_router, prefix="/api/v1")
 app.include_router(ws_router)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# Health has no prefix: `/health/ready` is already referenced by the compose
+# healthchecks and the nginx config, and those paths must not move.
+app.include_router(health_router)
 
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
     """Prometheus scrape endpoint (aggregate across workers in multiprocess mode)."""
     from app.middleware.metrics import metrics_response
+
     return metrics_response()
-
-
-@app.get("/health/ready")
-async def health_ready():
-    """Readiness probe • verifies DB and Redis connectivity."""
-    import time
-
-    checks = {}
-    unhealthy = False
-
-    # Check DB
-    try:
-        from sqlalchemy import text
-        t0 = time.perf_counter()
-        async with _get_engine().begin() as conn:
-            await conn.execute(text("SELECT 1"))
-        latency_ms = (time.perf_counter() - t0) * 1000
-        checks["db"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
-    except Exception as e:
-        checks["db"] = {"status": "error", "latency_ms": None}
-        if settings.app_env != "production":
-            checks["db"]["error"] = str(e)  # show in dev/staging for debugging
-        unhealthy = True
-
-    # Check Redis
-    try:
-        from app.redis import get_redis, redis_cb
-        t0 = time.perf_counter()
-        r = await get_redis()
-        await redis_cb.call(lambda: r.ping())
-        latency_ms = (time.perf_counter() - t0) * 1000
-        checks["redis"] = {"status": "ok", "latency_ms": round(latency_ms, 2)}
-    except Exception as e:
-        checks["redis"] = {"status": "error", "latency_ms": None}
-        if settings.app_env != "production":
-            checks["redis"]["error"] = str(e)  # show in dev/staging for debugging
-        unhealthy = True
-
-    from fastapi.responses import JSONResponse
-
-    status_code = 200 if not unhealthy else 503
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "status": "ok" if not unhealthy else "degraded",
-            "checks": checks,
-            "version": app.version,
-        },
-    )
 
 
 @app.get("/")

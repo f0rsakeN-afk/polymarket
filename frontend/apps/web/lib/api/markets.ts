@@ -75,8 +75,19 @@ export function createMarket(data: {
   question: string
   description?: string
   category?: string
+  subcategory?: string
+  image_url?: string
   slug: string
   closes_at: string
+  /**
+   * How the market settles, and against what.
+   *
+   * Optional on the request but carried in the type, because it is the field
+   * most worth collecting: a market with no stated resolution criteria can only
+   * be settled by guess or by dispute, and both cost every participant.
+   */
+  resolution_criteria?: string
+  resolution_source?: string
   initial_liquidity?: number
   initial_probability?: number
   outcomes_create?: { name: string; outcome_index: number }[]
@@ -85,6 +96,32 @@ export function createMarket(data: {
     "/api/v1/markets/",
     data
   )
+}
+
+/**
+ * Every market the signed-in user submitted, in every moderation state.
+ *
+ * Separate from `listMarkets` because the public catalogue deliberately hides
+ * unpublished statuses — and hides them from *their own author*, which is why
+ * submitting a market used to be a write-only operation.
+ */
+export function listMyMarkets(params: {
+  status?: string
+  page?: number
+  pageSize?: number
+} = {}) {
+  const qs = new URLSearchParams()
+  if (params.status) qs.set("status", params.status)
+  if (params.page) qs.set("page", String(params.page))
+  if (params.pageSize) qs.set("page_size", String(params.pageSize))
+  const suffix = qs.toString() ? `?${qs}` : ""
+  return api.get<{
+    data: MarketResponse[]
+    total: number
+    page: number
+    page_size: number
+    has_more: boolean
+  }>(`/api/v1/markets/mine${suffix}`)
 }
 
 // Global trade feed lives in `lib/api/trades.ts` (listTrades).

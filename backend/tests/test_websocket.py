@@ -15,11 +15,18 @@ from starlette.testclient import TestClient
 def ws_client():
     """Synchronous WS client using starlette.testclient (deprecated with httpx but works)."""
     from app.app import app
-    # Mock redis_pubsub at module level before the client connects
+    # Mock redis_pubsub at module level before the client connects.
+    # The unsubscribe halves matter as much as the subscribe halves: every
+    # endpoint releases its channels on disconnect, and a bare MagicMock is not
+    # awaitable, so an unstubbed release fails the test with a TypeError that
+    # looks nothing like the routing problem it is actually reporting.
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_market = AsyncMock()
+        mock_pubsub.unsubscribe_market = AsyncMock()
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         mock_pubsub.subscribe_user = AsyncMock()
+        mock_pubsub.unsubscribe_user = AsyncMock()
         yield TestClient(app)
 
 
@@ -84,6 +91,7 @@ def test_global_trades_websocket_is_public(ws_client):
     """
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_global_trades = AsyncMock()
+        mock_pubsub.unsubscribe_global_trades = AsyncMock()
         with ws_client.websocket_connect("/ws/trades") as ws:
             ws.send_json({"type": "ping"})
             assert ws.receive_json()["type"] == "pong"
@@ -122,6 +130,7 @@ def test_user_notifications_websocket_validtoken_for(ws_client, test_user):
     token = token_for(test_user.id)
     with patch("app.websocket.routes.redis_pubsub") as mock_pubsub:
         mock_pubsub.subscribe_user = AsyncMock()
+        mock_pubsub.unsubscribe_user = AsyncMock()
         with ws_client.websocket_connect(
             f"/ws/notifications/{test_user.id}?token={token}"
         ) as ws:
@@ -281,6 +290,11 @@ def test_heartbeat_leaves_a_healthy_socket_alone():
         "00000000-0000-0000-0000-000000000002"
     }
     mgr._market_subs["00000000-0000-0000-0000-000000000002"].add(sock)  # type: ignore[arg-type]
+    # Liveness lease. A socket with no `last_seen` is one the manager never
+    # finished registering, and the sweep treats it as dead on purpose - it has
+    # no owner to renew it. `connect()` always stamps this, so a healthy socket
+    # always has one.
+    mgr._ws_last_seen[sock] = time.monotonic()  # type: ignore[index]
 
     async def fake_disconnect(ws, redis_pubsub_ref=None, cause="client"):
         reaped.append(ws)
@@ -334,6 +348,10 @@ def test_heartbeat_sweeps_notification_sockets_too():
     ws = Wedged()  # type: ignore[arg-type]
     user_manager._user_socks["u1"] = {ws}  # type: ignore[arg-type]
     user_manager._ws_to_user[ws] = "u1"  # type: ignore[index]
+    # Fresh liveness lease, so this socket is reaped because the *ping* wedges,
+    # not because it was never registered. Without this the test would still
+    # pass while proving nothing about wedge detection.
+    user_manager._ws_last_seen[ws] = time.monotonic()  # type: ignore[index]
     user_manager.SEND_TIMEOUT_S = 0.05
 
     async def fake_disconnect(sock, user_id, cause="client"):
@@ -355,6 +373,7 @@ def test_heartbeat_sweeps_notification_sockets_too():
     # Leave the shared singleton clean for the next test.
     user_manager._user_socks.clear()
     user_manager._ws_to_user.clear()
+    user_manager._ws_last_seen.clear()
     user_manager.SEND_TIMEOUT_S = 2.0
 
 

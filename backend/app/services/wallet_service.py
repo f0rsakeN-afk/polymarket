@@ -20,6 +20,42 @@ logger = logging.getLogger("PredictX")
 class WalletService:
 
     @staticmethod
+    async def get_or_create_wallet(db: AsyncSession, user_id) -> Wallet:
+        """Return the user's wallet, provisioning one if it is missing.
+
+        Signup normally creates this row, so reaching the create branch means the
+        invariant broke somewhere upstream. Treating that as fatal strands the
+        user - they cannot deposit, cannot see a balance, and cannot tell whether
+        the problem is their account or the application. Repairing it costs one
+        row and makes the endpoint self-healing.
+
+        The `user_id` column is unique, so two concurrent first-reads can both
+        decide to create and one will lose on the unique constraint. That loser
+        re-reads rather than propagating an `IntegrityError`: the losing request
+        wants the same wallet the winner just created, so there is nothing to
+        report. Without the re-read this would be a 500 on a wallet page load -
+        exactly the kind of failure that surfaces as a support ticket instead of
+        being handled.
+        """
+        result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
+        wallet = result.scalar_one_or_none()
+        if wallet:
+            return wallet
+
+        wallet = Wallet(user_id=user_id, balance=0, locked_balance=0, currency="USDC")
+        db.add(wallet)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(select(Wallet).where(Wallet.user_id == user_id))
+            wallet = result.scalar_one_or_none()
+            if wallet is None:
+                raise
+        await db.refresh(wallet)
+        return wallet
+
+    @staticmethod
     async def withdraw(
         db: AsyncSession,
         user: User,
@@ -77,7 +113,10 @@ class WalletService:
             await db.rollback()
             raise IdempotencyError("Withdrawal already processed")
 
-        logger.info(f"Withdrawal: user={user.id} amount={float(amount)}")
+        logger.info(
+            "Withdrawal requested",
+            extra={"user_id": str(user.id), "amount": str(amount)},
+        )
 
         return {
             "withdrawal_id": str(tx.id),
@@ -117,7 +156,10 @@ class WalletService:
             if blockchain_tx_hash:
                 # Keep reference_id (idempotency key) immutable • store on-chain hash in extra_data
                 tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
-            logger.info(f"Withdrawal confirmed: id={withdrawal_id} tx={blockchain_tx_hash}")
+            logger.info(
+                "Withdrawal confirmed",
+                extra={"withdrawal_id": str(withdrawal_id), "tx": blockchain_tx_hash},
+            )
         else:
             # Reject: reverse the balance that was debited at submission
             wallet_result = await db.execute(
@@ -129,7 +171,10 @@ class WalletService:
             tx.status = "failed"
             if blockchain_tx_hash:
                 tx.extra_data = {**(tx.extra_data or {}), "blockchain_tx_hash": blockchain_tx_hash}
-            logger.warning(f"Withdrawal rejected: id={withdrawal_id} tx={blockchain_tx_hash}")
+            logger.warning(
+                "Withdrawal rejected",
+                extra={"withdrawal_id": str(withdrawal_id), "tx": blockchain_tx_hash},
+            )
 
         await db.commit()
         return {"withdrawal_id": str(tx.id), "status": tx.status}

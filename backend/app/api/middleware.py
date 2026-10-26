@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -145,8 +146,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         duration_ms = (time.perf_counter() - start) * 1000
 
         log_data = {
+            # Removed: `"trace_id"`, which was a byte-for-byte copy of this line's
+            # own `request_id`. No W3C trace context is parsed or propagated
+            # anywhere in this service, so there is no second identifier — and a
+            # field named `trace_id` that duplicates `request_id` is worse than
+            # an absent one: someone searching logs for `trace_id` finds a value
+            # and concludes tracing is wired.
+            #
+            # If real distributed tracing is added later it should arrive as
+            # `traceparent`, honoured on the way in and emitted on the way out,
+            # and be joined to `request_id` rather than renamed as one.
             "request_id": getattr(request.state, "request_id", None),
-            "trace_id": getattr(request.state, "request_id", None),
             "user_id": getattr(request.state, "user_id", None),
             "method": method,
             "path": path,
@@ -163,44 +173,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, enabled: bool = True):
         super().__init__(app)
         self.enabled = enabled
-        # Build allowed origins once at init: explicit ALLOWED_ORIGINS env
-        # (the security-critical allowlist) plus the CORS_ORIGINS the API
-        # itself advertises, so a request from our own front end can never be
-        # rejected by this check just because the two settings were edited
-        # independently.
-        self._allowed_origins = set(
-            o.strip().lower() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
-        ) | set(o.strip().lower() for o in settings.cors_origins if o.strip())
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # No origin check here any more. It used to sit above this guard, which
+        # made a CSRF defence depend on a rate-limiting feature flag: with
+        # `RATE_LIMIT_ENABLED=false` — what the test suite runs, and a thing a
+        # deployment can set — cross-origin state changes were simply not checked.
+        # It now lives in `app.api.origin_check.OriginCheckMiddleware`, which no
+        # flag can switch off.
         if not self.enabled:
             return await call_next(request)
-
-        # ── Origin validation (all environments) ────────────────────────────
-        # Browsers attach `Origin` to cross-origin and same-origin state-changing
-        # requests; enforcing the allowlist everywhere means a staging box or a
-        # local run is protected by the same rule as production, and an attacker
-        # can't rely on an environment being set to "development" to slip past it.
-        # localhost/127.0.0.1 are always allowed for local development.
-        # Non-browser clients (curl, server-to-server) send no Origin and are
-        # unaffected • they are handled by SameSite + the JSON content-type rule.
-        origin = request.headers.get("origin")
-        if origin:
-            is_allowed = False
-            if not self._allowed_origins:
-                # No ALLOWED_ORIGINS configured • deny all cross-origin requests
-                is_allowed = False
-            elif "*" in self._allowed_origins:
-                is_allowed = True
-            else:
-                is_allowed = origin.lower() in self._allowed_origins
-            if not is_allowed and not origin.startswith("http://localhost") and not origin.startswith("http://127.0.0.1"):
-                from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    status_code=403,
-                    content={"error_code": "ORIGIN_NOT_ALLOWED", "message": "CORS origin not permitted"},
-                    headers={**SECURITY_HEADERS, **{"Access-Control-Allow-Origin": "none"}},
-                )
 
         path = request.url.path
         method = request.method
@@ -225,7 +207,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
 
         # Skip rate limiting for health/read-only endpoints
-        if method == "GET" or path in ("/health", "/health/ready", "/", "/docs", "/openapi.json", "/redoc"):
+        #
+        # OPTIONS is included for CORS preflight, and that exclusion is load-
+        # bearing rather than cosmetic.
+        #
+        # A browser attaches a preflight to every cross-origin call that isn't a
+        # simple request - which, for a JSON API, is all of them. The user never
+        # issued it, cannot avoid it, and it says nothing about intent: it is
+        # cacheable, idempotent, and generated by the browser before the real
+        # request is even attempted.
+        #
+        # Counting them means a page making N calls spends 2N budget, and a
+        # genuine burst of normal browsing can exhaust a client's allowance and
+        # return 429 on the *preflight* - so the actual request the user wanted
+        # never leaves the browser at all. The symptom is a page that silently
+        # stops updating with no error on the client and no obvious cause on the
+        # server: every failing request is an OPTIONS nobody meant to send.
+        #
+        # Preflights are also the cheapest requests the API serves, so spending
+        # abuse budget on them protects nothing and costs correctness.
+        # Prefixed, not an exact-match list. The health surface has grown a
+        # `/health/live`, `/health/startup` and `/health/details`, and an exact
+        # list meant every new probe path silently fell *into* rate limiting -
+        # so an orchestrator polling liveness would eventually get 429 and restart
+        # a perfectly healthy container. The failure is invisible until it happens
+        # and looks exactly like an application problem.
+        #
+        # `/health*` is exempt as a prefix: probes are infrastructure talking to
+        # the process, not a user, and are exactly the traffic that must never be
+        # throttled - least of all during the incident the limiter is reacting to.
+        if method in ("GET", "OPTIONS") or path.startswith("/health") or path in (
+            "/", "/docs", "/openapi.json", "/redoc"
+        ):
             return await call_next(request)
 
         ip = _get_client_ip(request)
@@ -244,7 +257,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         result = await RateLimitService.check(limit_type, identifier, ip)
 
         if not result.allowed:
-            from fastapi.responses import JSONResponse
 
             # Match the standard error envelope used everywhere else
             # ({success:false, error, error_code, details?}) so clients only

@@ -13,6 +13,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from conftest import drain_publishes
 
 from app.services.market_service import MarketService
 from app.services.order_service import OrderService
@@ -105,6 +106,7 @@ class _FakePipeline:
 
     def __init__(self, sink):
         self._sink = sink
+        self._seq = 0
 
     def hset(self, *args, **kwargs):
         return self
@@ -117,6 +119,17 @@ class _FakePipeline:
 
     def publish(self, channel, payload):
         self._sink.append(payload)
+
+    def eval(self, script, numkeys, *keys_and_args):
+        """The sequenced publish (INCR + splice + PUBLISH in one Lua step).
+
+        Substitutes `__SEQ__` the way the server-side script does, so the frame
+        these tests parse is the frame a subscriber would actually receive.
+        """
+        payload = keys_and_args[-1]
+        self._seq += 1
+        self._sink.append(payload.replace('"__SEQ__"', str(self._seq)))
+        return self
 
     async def execute(self):
         return None
@@ -158,6 +171,7 @@ async def _publish_price_update(market_id, yes_price, no_price, volume):
 
     with patch("app.websocket.manager.redis_cb.call", new=_call_op):
         await bus.publish_price_update(market_id, yes_price, no_price, volume)
+        await drain_publishes(bus)
 
     assert published, "nothing was published"
     return json.loads(published[0])
