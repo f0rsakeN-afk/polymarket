@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.comment_vote import CommentVote
 from app.schemas.comment import CommentCreate, CommentResponse, CommentVote
 from app.websocket.manager import redis_pubsub
+from app.services.rate_limit_service import RateLimitService, RateLimitResult
 
 logger = logging.getLogger("PredictX")
 router = APIRouter(prefix="/markets", tags=["comments"])
@@ -291,6 +292,18 @@ async def vote_on_comment(
 ):
     user = await get_current_user(request, db)
 
+    # --- Rate limiting ---
+    client_ip = request.client.host if request.client else None
+    rl_result: RateLimitResult
+    rl_result, _ = await RateLimitService.check_with_friction(
+        identifier=user.email or user.username or str(user.id),
+        ip=client_ip,
+        limit_type=None,  # ACCOUNT_AUTH is handled inside check_with_friction
+    )
+    if not rl_result.allowed:
+        return _rate_limit_error(rl_result.retry_after)
+    # --------------------
+
     market_result = await db.execute(select(Market).where(Market.slug == slug))
     market = market_result.scalar_one_or_none()
     if not market:
@@ -350,3 +363,17 @@ async def vote_on_comment(
         "is_downvote": vote_type == -1,
         "has_voted": True,
     }, message="Vote recorded")
+
+
+def _rate_limit_error(retry_after: int | None) -> Exception:
+    """Helper to raise a rate limit error response."""
+    from fastapi import HTTPException
+    from app.api.exceptions import ErrorCode
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "error": "rate_limit_exceeded",
+            "message": "Too many vote attempts. Please wait before voting again.",
+            "retry_after": retry_after,
+        }
+    )
