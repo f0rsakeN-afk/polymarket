@@ -298,6 +298,42 @@ function MarketDetail({ slug, onTrade }: MarketDetailProps) {
     if (msg.type === "comment:deleted") {
       queryClient.invalidateQueries({ queryKey: ["comments", slug] })
     }
+    if (msg.type === "comment:vote") {
+      // Handle realtime vote update from another tab/user
+      const { comment_id, user_id, username, vote_type } = msg as {
+        comment_id: string
+        user_id: string
+        username: string
+        vote_type: number
+      }
+      // Update local cache with the voted user's state
+      queryClient.setQueryData(
+        ["comments", slug],
+        (prev: any) => {
+          if (!prev?.comments) return prev
+          return prev.comments.map((c: any) => {
+            if (c.id === comment_id) {
+              // If this comment is by the current user, always show their own vote
+              if (c.user_id === user_id) {
+                // Current user's own comment - show neutral (no up/down vote from self)
+                return {
+                  ...c,
+                  user_vote_type: 0,
+                  user_has_voted: false,
+                }
+              }
+              // Another user's vote - update the cached state
+              return {
+                ...c,
+                user_vote_type: vote_type,
+                user_has_voted: true,
+              }
+            }
+            return c
+          })
+        }
+      )
+    }
 
     // The socket proved it dropped frames (a jump in the server's per-market
     // sequence number), or it just reconnected after a gap it could not measure.
