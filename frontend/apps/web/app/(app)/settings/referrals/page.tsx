@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useSearchParams, useRouter } from "react"
 import { useReferralCode, useReferralStats } from "@/hooks/api/use-referrals"
 import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -19,8 +19,7 @@ import { Copy, Check, Gift, Users, Coins } from "lucide-react"
 import { sileo } from "sileo"
 import { cn } from "@workspace/ui/lib/utils"
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function formatDateShort(dateStr: string): string {
   return new Intl.DateTimeFormat("en", {
     dateStyle: "medium",
@@ -54,7 +53,7 @@ function StatusBadge({ status }: { status: ReferralStatus }) {
 // ── Stat Card ──────────────────────────────────────────────────────────────────
 
 function StatCard({
-  icon: Icon,
+  icon,
   label,
   value,
   sub,
@@ -112,7 +111,7 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
             <button
               onClick={copyCode}
               className={cn(
-                "size-8 rounded-md flex items-center justify-center transition-all",
+                "size-8 rounded-md flex items-center justify-between transition-all",
                 codeCopied
                   ? "bg-emerald-100 text-green-700 dark:bg-emerald-900 dark:text-emerald-300"
                   : "bg-accent text-muted-foreground hover:bg-accent/80",
@@ -128,10 +127,13 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
           <div className="flex-1 rounded-lg bg-muted border px-3 py-2 flex items-center overflow-hidden">
             <span className="text-xs font-mono text-muted-foreground truncate">{link}</span>
           </div>
-          <Button size="sm" onClick={copyLink} className="shrink-0">
+          <button
+            onClick={copyLink}
+            className="shrink-0"
+          >
             {linkCopied ? <Check className="size-4 mr-1" /> : <Copy className="size-4 mr-1" />}
             {linkCopied ? "Copied" : "Copy Link"}
-          </Button>
+          </button>
         </div>
 
         <p className="text-xs text-muted-foreground">
@@ -142,7 +144,7 @@ function CodeDisplay({ code, link }: { code: string; link: string }) {
   )
 }
 
-// ── Referrals Table ────────────────────────────────────────────────────────────
+// ── Referrals Table ───────────────────────────────────────────────────────────
 
 function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
   if (referrals.length === 0) {
@@ -151,7 +153,7 @@ function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
         <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
           No referrals yet • share your code to get started!
         </CardContent>
-      </Card>
+      )
     )
   }
 
@@ -208,15 +210,29 @@ function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
   )
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ReferralsPage() {
   const { data: codeData, isLoading: codeLoading } = useReferralCode()
   const { data: statsData } = useReferralStats()
+  const searchParams = useSearchParams()
+  const refParam = searchParams.get("ref") ?? undefined
+  const utmParam = searchParams.get("utm_source") ?? undefined
+  const redirectParam = searchParams.get("redirect") ?? undefined
 
   const referralCode = codeData?.referral_code ?? null
   const origin = typeof window !== "undefined" ? window.location.origin : ""
-  const referralLink = referralCode ? `${origin}/register?ref=${referralCode}` : ""
+
+  // Build referral link with UTM parameters
+  const referralLink = referralCode
+    ? `${origin}/register?ref=${referralCode}&utm_source=website&utm_medium=referral&utm_campaign=referral_program`
+    : ""
+
+  // If there's a ref param in URL, extract the code
+  const urlReferralCode = refParam || undefined
+
+  // If there's a redirect param, use it after auth
+  const redirectTo = redirectParam || "/markets"
 
   const stats = statsData ?? null
   const isAnyLoading = codeLoading
@@ -260,40 +276,6 @@ export default function ReferralsPage() {
               ))}
             </div>
           </div>
-          {/* Table skeleton */}
-          <Card>
-            <div className="overflow-auto" style={{ maxHeight: "600px", minHeight: "200px" }}>
-              <Table noWrapper className="w-full" style={{ tableLayout: "fixed" }}>
-                <colgroup>
-                  <col className="w-[35%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[20%]" />
-                  <col className="w-[15%]" />
-                </colgroup>
-                <TableHeader className="sticky top-0 z-20 bg-muted">
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead>Referred User</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Reward</TableHead>
-                    <TableHead>Invited</TableHead>
-                    <TableHead>Completed</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {[1, 2, 3].map((i) => (
-                    <TableRow key={i} className="hover:bg-transparent">
-                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-                      <TableCell><Skeleton className="h-3.5 w-12" /></TableCell>
-                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
         </div>
       ) : (
         <>
@@ -333,9 +315,55 @@ export default function ReferralsPage() {
             </div>
           </div>
 
+          {/* Code + Link Section */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              {referralCode ? (
+                <>
+                  <CodeDisplay code={referralCode} link={referralLink} />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Share this link with friends • friends get bonus credits on signup and you earn when they complete their first trade
+                  </p>
+                </>
+              ) : (
+                <Card className="overflow-hidden pt-0">
+                  <CardContent className="pt-6 text-sm text-muted-foreground">
+                    No referral code available
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground mb-2">
+                Your referral link:
+              </p>
+              <CodeDisplay code={referralCode} link={referralLink} />
+            </div>
+          </div>
+
+          {/* Traffic Source Info */}
+          {utmParam && (
+            <div className="mt-4 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
+              <p className="font-medium">Traffic source detected:</p>
+              <p className="mt-1">{utmParam}</p>
+            </div>
+          )}
+
+          {/* Redirect Notice */}
+          {redirectParam && (
+            <div className="mt-4 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
+              <p className="font-medium">Redirect after signup:</p>
+              <p className="mt-1">{redirectParam}</p>
+            </div>
+          )}
+
           {/* Referral History */}
           <div>
             <h2 className="text-sm font-semibold text-foreground mb-3">Referral History</h2>
+            {/* Extract referred IDs from URL params if present */}
+            {refParam && <p className="text-xs text-muted-foreground mb-2">
+              Visitor came via referral code: {refParam}
+            </p>}
             <ReferralsTable referrals={(stats?.referrals as ReferralItem[]) ?? []} />
           </div>
         </>

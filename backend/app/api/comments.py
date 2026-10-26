@@ -14,8 +14,10 @@ from app.models.user import User
 from app.models.comment_vote import CommentVote
 from app.schemas.comment import CommentCreate, CommentResponse, CommentVote
 from app.websocket.manager import redis_pubsub
+from app.services.rate_limit_service import RateLimitService, RateLimitResult, LimitType
 
 logger = logging.getLogger("PredictX")
+
 router = APIRouter(prefix="/markets", tags=["comments"])
 
 MAX_DEPTH = 3
@@ -290,6 +292,18 @@ async def vote_on_comment(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
+
+    # --- Rate limiting ---
+    client_ip = request.client.host if request.client else None
+    rl_result: RateLimitResult
+    rl_result, _ = await RateLimitService.check_with_friction(
+        identifier=user.email or user.username or str(user.id),
+        ip=client_ip,
+        limit_type=None,  # ACCOUNT_AUTH is handled inside check_with_friction
+    )
+    if not rl_result.allowed:
+        return _rate_limit_error(rl_result.retry_after)
+    # --------------------
 
     market_result = await db.execute(select(Market).where(Market.slug == slug))
     market = market_result.scalar_one_or_none()
