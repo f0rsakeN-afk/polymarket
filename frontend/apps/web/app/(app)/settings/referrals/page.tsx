@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useState, useSearchParams, useRouter } from "react"
+import { useCallback, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { useReferralCode, useReferralStats } from "@/hooks/api/use-referrals"
 import { SettingsBreadcrumb } from "@/components/settings/settings-breadcrumb"
 import { Card, CardContent } from "@workspace/ui/components/card"
@@ -53,7 +54,7 @@ function StatusBadge({ status }: { status: ReferralStatus }) {
 // ── Stat Card ──────────────────────────────────────────────────────────────────
 
 function StatCard({
-  icon,
+  icon: Icon,
   label,
   value,
   sub,
@@ -153,7 +154,7 @@ function ReferralsTable({ referrals }: { referrals: ReferralItem[] }) {
         <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
           No referrals yet • share your code to get started!
         </CardContent>
-      )
+      </Card>
     )
   }
 

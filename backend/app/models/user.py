@@ -88,6 +88,11 @@ class RefreshToken(Base, UUIDMixin):
     # inside it as the duplicate it almost always is.
     revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
+    # User agent at issuance, bound at login and re-checked on every refresh.
+    # A token presented from a different user agent is treated as replay even
+    # inside the grace window — same evidence, stricter line.
+    device_info = Column(Text, nullable=True)
+
     current_session = relationship("Session", back_populates="refresh_token", overlaps="sessions")
 
 
